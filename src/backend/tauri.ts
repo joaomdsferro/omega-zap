@@ -1,8 +1,9 @@
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AccountId } from "../accounts/accounts";
 import { COMMAND_PREFIX } from "../accounts/useAccount";
 import { hueFor, initialsFor } from "../lib/avatar";
+import { fileUrl } from "../lib/files";
 import type {
   Attachment,
   BackendEvent,
@@ -80,7 +81,7 @@ function toChat(raw: RawChat, account: AccountId): Chat {
     name: raw.name,
     initials: initialsFor(raw.name),
     avatarHue: hueFor(raw.id),
-    avatarUrl: raw.avatar ? convertFileSrc(raw.avatar, "avatar") : undefined,
+    avatarUrl: raw.avatar ? fileUrl(raw.avatar, "avatar") : undefined,
     lastMessage: raw.lastMessage,
     lastAt: new Date(raw.lastAt).toISOString(),
     lastFromMe: raw.lastFromMe,
@@ -149,7 +150,7 @@ export class TauriBackend implements ChatBackend {
   constructor(readonly account: AccountId) {
     this.prefix = COMMAND_PREFIX[account];
     this.mediaUrl = async (chatId, messageId, index = 0) =>
-      convertFileSrc(await invoke<string>(`${this.prefix}_fetch_media`, { chatId, messageId, index }), "media");
+      fileUrl(await invoke<string>(`${this.prefix}_fetch_media`, { chatId, messageId, index }), "media");
     if (account === "signal") {
       this.openMedia = async (chatId, messageId, index) => {
         await invoke("signal_open_media", { chatId, messageId, index });
@@ -157,7 +158,7 @@ export class TauriBackend implements ChatBackend {
     }
     if (account === "whatsapp") {
       this.linkThumbnailUrl = async (chatId, messageId) =>
-        convertFileSrc(await invoke<string>("wa_link_thumbnail", { chatId, messageId }), "media");
+        fileUrl(await invoke<string>("wa_link_thumbnail", { chatId, messageId }), "media");
       this.lookupNumber = (phone) => invoke<string | null>("wa_lookup_number", { phone });
     }
   }
@@ -221,7 +222,7 @@ export class TauriBackend implements ChatBackend {
       name: c.name,
       initials: initialsFor(c.name),
       avatarHue: hueFor(c.id),
-      avatarUrl: c.avatar ? convertFileSrc(c.avatar, "avatar") : undefined,
+      avatarUrl: c.avatar ? fileUrl(c.avatar, "avatar") : undefined,
       phone: c.phone ?? undefined,
       isMe: c.isMe,
     }));

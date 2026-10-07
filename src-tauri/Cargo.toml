@@ -18,8 +18,9 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # WhatsApp Web protocol. The crates.io 0.7.0 release enables `simd`, which needs
-# nightly Rust; this commit on main builds on stable.
-whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "a214b14c45b83729ec24c7f8b562d751920456de", default-features = false, features = ["sqlite-storage", "sqlite-storage-bundled", "tokio-transport", "tokio-runtime", "ureq-client", "tokio-native"] }
+# nightly Rust. A fork of upstream a214b14 (which builds on stable) that also
+# recovers app-state collections whose snapshot MAC never validates.
+whatsapp-rust = { git = "https://github.com/joaomdsferro/whatsapp-rust", rev = "e5c2e77d4f4871b21d9ee99ed3fe05c0b7309a16", default-features = false, features = ["sqlite-storage", "sqlite-storage-bundled", "tokio-transport", "tokio-runtime", "ureq-client", "tokio-native"] }
 tokio = { version = "1", features = ["time", "process", "io-util", "sync"] }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 log = "0.4"

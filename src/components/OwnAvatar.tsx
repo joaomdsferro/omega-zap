@@ -1,7 +1,7 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { ACCOUNTS } from "../accounts/accounts";
 import type { Account } from "../accounts/useAccount";
 import { hueFor, initialsFor } from "../lib/avatar";
+import { fileUrl } from "../lib/files";
 import { AccountBadge } from "./AccountBadge";
 import { Avatar } from "./Avatar";
 
@@ -22,7 +22,7 @@ export function OwnAvatar({ account, size, badge }: OwnAvatarProps) {
         name={name}
         initials={initialsFor(name)}
         hue={hueFor(account.id)}
-        src={me?.avatar ? convertFileSrc(me.avatar, "avatar") : undefined}
+        src={me?.avatar ? fileUrl(me.avatar, "avatar") : undefined}
         size={size}
       />
       {badge ? (

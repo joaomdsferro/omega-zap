@@ -212,7 +212,12 @@ impl WaManager {
                 log::warn!("whatsapp: could not remove {}: {e}", downloads.display());
             }
         }
-        *lock(&self.store) = ChatStore::default();
+        // A new link replays app state while history is still arriving, so
+        // ask for it again once connected.
+        let mut store = ChatStore::default();
+        store.set_chat_state_synced(false);
+        store.set_lists_synced(false);
+        *lock(&self.store) = store;
         self.save_dirty.store(false, Ordering::Release);
         self.chats_dirty.store(true, Ordering::Release);
     }
@@ -801,22 +806,41 @@ impl WaManager {
         let mgr = self.clone();
         tauri::async_runtime::spawn(async move {
             let resync = client.resync_app_state(patches, AppStateResyncMode::Snapshot);
-            match tokio::time::timeout(Duration::from_secs(120), resync).await {
-                Ok(Ok(report)) if report.all_synced() => {
-                    if mgr.generation.load(Ordering::SeqCst) == generation {
-                        let mut store = lock(&mgr.store);
-                        store.set_chat_state_synced(true);
-                        store.set_lists_synced(true);
-                        drop(store);
-                        mgr.mark_dirty();
-                    }
+            let done = match tokio::time::timeout(Duration::from_secs(120), resync).await {
+                Ok(Ok(report)) if report.all_synced() => true,
+                Ok(Ok(report)) => {
+                    log::warn!("whatsapp: chat state still stale: {:?}", report.unsynced().collect::<Vec<_>>());
+                    false
                 }
-                Ok(Ok(report)) => log::warn!(
-                    "whatsapp: chat state still stale: {:?}",
-                    report.unsynced().collect::<Vec<_>>()
-                ),
-                Ok(Err(e)) => log::warn!("whatsapp: chat state sync failed: {e}"),
-                Err(_) => log::warn!("whatsapp: chat state sync timed out"),
+                // The phone is asked to rebuild that collection in the
+                // background. Asking again on every start would only download
+                // every snapshot again and fail the same way.
+                Ok(Err(whatsapp_rust::AppStateError::Internal(e)))
+                    if e.chain().any(|cause| {
+                        matches!(
+                            cause.downcast_ref::<whatsapp_rust::wacore::appstate::AppStateError>(),
+                            Some(whatsapp_rust::wacore::appstate::AppStateError::SnapshotMACMismatch)
+                        )
+                    }) =>
+                {
+                    log::warn!("whatsapp: a chat state snapshot does not validate; left to the phone's recovery");
+                    true
+                }
+                Ok(Err(e)) => {
+                    log::warn!("whatsapp: chat state sync failed: {e}");
+                    false
+                }
+                Err(_) => {
+                    log::warn!("whatsapp: chat state sync timed out");
+                    false
+                }
+            };
+            if done && mgr.generation.load(Ordering::SeqCst) == generation {
+                let mut store = lock(&mgr.store);
+                store.set_chat_state_synced(true);
+                store.set_lists_synced(true);
+                drop(store);
+                mgr.mark_dirty();
             }
         });
     }
@@ -1233,6 +1257,8 @@ impl WaManager {
                         log::warn!("whatsapp: history sync chunk skipped: {e}");
                     }
                     mgr.mark_dirty();
+                    // History brings chats the first pass did not know about.
+                    mgr.sync_avatars(generation, client);
                 });
             }
             _ => {}

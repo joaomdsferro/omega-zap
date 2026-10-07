@@ -47,8 +47,65 @@ fn media_response(
     }
 }
 
+/// Prints warnings and errors to stderr. `OMEGA_ZAP_LOG` raises it, for
+/// everything (`debug`) or per target (`warn,AppState=debug`).
+struct StderrLogger {
+    default: log::LevelFilter,
+    targets: Vec<(String, log::LevelFilter)>,
+}
+
+impl StderrLogger {
+    fn from_env() -> Self {
+        let mut logger = Self { default: log::LevelFilter::Warn, targets: Vec::new() };
+        for part in std::env::var("OMEGA_ZAP_LOG").unwrap_or_default().split(',') {
+            match part.trim().split_once('=') {
+                Some((target, level)) => {
+                    if let Ok(level) = level.parse() {
+                        logger.targets.push((target.to_string(), level));
+                    }
+                }
+                None => {
+                    if let Ok(level) = part.trim().parse() {
+                        logger.default = level;
+                    }
+                }
+            }
+        }
+        logger
+    }
+
+    fn max(&self) -> log::LevelFilter {
+        self.targets.iter().map(|(_, level)| *level).fold(self.default, Ord::max)
+    }
+}
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        let level = self
+            .targets
+            .iter()
+            .find(|(target, _)| metadata.target().starts_with(target.as_str()))
+            .map_or(self.default, |(_, level)| *level);
+        metadata.level() <= level
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("[{} {}] {}", record.level(), record.target(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let logger = StderrLogger::from_env();
+    let max = logger.max();
+    if log::set_logger(Box::leak(Box::new(logger))).is_ok() {
+        log::set_max_level(max);
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(notify::Shown::default())

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -479,6 +479,9 @@ pub struct ChatStore {
     /// state. Caches written before they were handled load as `false`.
     #[serde(default)]
     lists_synced: bool,
+    /// Messages starred in app state before they arrived.
+    #[serde(default)]
+    pending_stars: HashSet<String>,
 }
 
 impl Default for ChatStore {
@@ -498,6 +501,7 @@ impl Default for ChatStore {
             favorites: Vec::new(),
             lists: Vec::new(),
             lists_synced: true,
+            pending_stars: HashSet::new(),
         }
     }
 }
@@ -688,6 +692,7 @@ impl ChatStore {
             return None;
         }
         let mut message = incoming.message;
+        message.starred |= self.pending_stars.remove(&message.id);
         message.author_jid = incoming.sender.as_deref().map(|s| self.canonical(s));
         message.wire = (!message.from_me
             && (incoming.chat != chat_id || incoming.sender != message.author_jid))
@@ -901,7 +906,15 @@ impl ChatStore {
     /// Sets a message's star. Returns the message when it is known.
     pub fn set_starred(&mut self, chat: &str, id: &str, starred: bool) -> Option<MessageDto> {
         let chat_id = self.canonical(chat);
-        let message = self.chats.get_mut(&chat_id)?.messages.iter_mut().find(|m| m.id == id)?;
+        let found = self.chats.get_mut(&chat_id).and_then(|c| c.messages.iter_mut().find(|m| m.id == id));
+        let Some(message) = found else {
+            if starred {
+                self.pending_stars.insert(id.to_string());
+            } else {
+                self.pending_stars.remove(id);
+            }
+            return None;
+        };
         message.starred = starred;
         let message = message.clone();
         Some(self.to_dto(&chat_id, &message))
@@ -1815,6 +1828,14 @@ mod tests {
         store.set_avatar("maya", Some("p".into()));
         assert!(!store.retry_missing_avatar("maya"));
         assert!(!store.retry_missing_avatar("nobody"));
+    }
+
+    #[test]
+    fn a_star_before_its_message_is_kept() {
+        let mut store = ChatStore::default();
+        assert!(store.set_starred("a@s.whatsapp.net", "m1", true).is_none());
+        store.ingest(incoming("a@s.whatsapp.net", "m1", 1, false), false);
+        assert_eq!(store.starred().len(), 1);
     }
 
     #[test]
