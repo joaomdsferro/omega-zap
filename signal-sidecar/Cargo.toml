@@ -1,0 +1,36 @@
+[package]
+name = "omega-zap-signal"
+version = "0.0.1"
+description = "Signal bridge for Omega Zap: links as a secondary device and speaks JSON lines on stdio"
+edition = "2024"
+# presage and libsignal are AGPL-3.0, so this binary is too. It is a separate
+# program: Omega Zap only starts it and exchanges JSON with it.
+license = "AGPL-3.0-only"
+
+# Kept out of the app's crate graph on purpose: presage and whatsapp-rust need
+# different versions of libsqlite3-sys, and only one can be linked per binary.
+[workspace]
+
+[dependencies]
+presage = { git = "https://github.com/whisperfish/presage", rev = "33dd1491130793390e356e15a5711f1e6ca14fdb" }
+presage-store-sqlite = { git = "https://github.com/whisperfish/presage", rev = "33dd1491130793390e356e15a5711f1e6ca14fdb" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "time"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+# History transfer at link time: reading the archive the phone uploads.
+libsignal-message-backup = { git = "https://github.com/signalapp/libsignal", tag = "v0.99.0", features = ["test-util"] }
+protobuf = "3.7"
+reqwest = { version = "0.13", default-features = false }
+rand = "0.9"
+base64 = "0.22"
+
+[patch.crates-io]
+libsqlite3-sys = { version = "0.36.0", git = "https://github.com/whisperfish/rusqlite", rev = "2a42b3354c9194700d08aa070f70a131a470e7dc" }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true

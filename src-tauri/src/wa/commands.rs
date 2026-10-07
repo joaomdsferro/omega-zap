@@ -1,0 +1,142 @@
+use std::sync::Arc;
+
+use tauri::State;
+
+use super::store::{ContactDto, ListDto, MessageDto, StarredDto};
+use super::{ChatSummary, WaManager};
+use crate::account::AccountStatus as WaStatus;
+
+type Mgr<'a> = State<'a, Arc<WaManager>>;
+
+#[tauri::command]
+pub fn wa_status(mgr: Mgr<'_>) -> WaStatus {
+    mgr.status()
+}
+
+#[tauri::command]
+pub async fn wa_start_linking(mgr: Mgr<'_>) -> Result<(), String> {
+    mgr.inner().clone().start_linking().await
+}
+
+#[tauri::command]
+pub async fn wa_cancel_linking(mgr: Mgr<'_>) -> Result<(), String> {
+    mgr.inner().clone().cancel_linking().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn wa_reconnect(mgr: Mgr<'_>) -> Result<(), String> {
+    mgr.inner().clone().reconnect().await
+}
+
+#[tauri::command]
+pub async fn wa_logout(mgr: Mgr<'_>) -> Result<(), String> {
+    mgr.inner().clone().logout().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn wa_list_chats(mgr: Mgr<'_>) -> Vec<ChatSummary> {
+    mgr.list_chats()
+}
+
+#[tauri::command]
+pub fn wa_get_messages(mgr: Mgr<'_>, chat_id: String) -> Vec<MessageDto> {
+    mgr.messages(&chat_id)
+}
+
+#[tauri::command]
+pub fn wa_mark_read(mgr: Mgr<'_>, chat_id: String) {
+    mgr.mark_read(&chat_id);
+}
+
+#[tauri::command]
+pub async fn wa_send_text(
+    mgr: Mgr<'_>,
+    chat_id: String,
+    text: String,
+    reply_to: Option<String>,
+) -> Result<MessageDto, String> {
+    mgr.send_text(&chat_id, &text, reply_to.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn wa_delete_message(
+    mgr: Mgr<'_>,
+    chat_id: String,
+    message_id: String,
+    for_everyone: bool,
+) -> Result<Option<MessageDto>, String> {
+    mgr.delete_message(&chat_id, &message_id, for_everyone).await
+}
+
+#[tauri::command]
+pub async fn wa_fetch_media(mgr: Mgr<'_>, chat_id: String, message_id: String) -> Result<String, String> {
+    mgr.fetch_media(&chat_id, &message_id).await
+}
+
+#[tauri::command]
+pub async fn wa_link_thumbnail(mgr: Mgr<'_>, chat_id: String, message_id: String) -> Result<String, String> {
+    mgr.link_thumbnail(&chat_id, &message_id).await
+}
+
+#[tauri::command]
+pub async fn wa_react(
+    mgr: Mgr<'_>,
+    chat_id: String,
+    message_id: String,
+    emoji: String,
+) -> Result<MessageDto, String> {
+    mgr.react(&chat_id, &message_id, &emoji).await
+}
+
+#[tauri::command]
+pub fn wa_lists(mgr: Mgr<'_>) -> Vec<ListDto> {
+    mgr.lists()
+}
+
+#[tauri::command]
+pub async fn wa_set_favorite(mgr: Mgr<'_>, chat_id: String, favorite: bool) -> Result<(), String> {
+    mgr.set_favorite(&chat_id, favorite).await
+}
+
+#[tauri::command]
+pub async fn wa_save_list(
+    mgr: Mgr<'_>,
+    id: Option<String>,
+    name: String,
+    add: Vec<String>,
+    remove: Vec<String>,
+) -> Result<String, String> {
+    mgr.save_list(id, &name, &add, &remove).await
+}
+
+#[tauri::command]
+pub async fn wa_delete_list(mgr: Mgr<'_>, id: String) -> Result<(), String> {
+    mgr.delete_list(&id).await
+}
+
+#[tauri::command]
+pub async fn wa_set_starred(
+    mgr: Mgr<'_>,
+    chat_id: String,
+    message_id: String,
+    starred: bool,
+) -> Result<MessageDto, String> {
+    mgr.set_starred(&chat_id, &message_id, starred).await
+}
+
+#[tauri::command]
+pub fn wa_starred(mgr: Mgr<'_>) -> Vec<StarredDto> {
+    mgr.starred()
+}
+
+#[tauri::command]
+pub fn wa_contacts(mgr: Mgr<'_>) -> Vec<ContactDto> {
+    mgr.contacts()
+}
+
+#[tauri::command]
+pub async fn wa_lookup_number(mgr: Mgr<'_>, phone: String) -> Result<Option<String>, String> {
+    mgr.lookup_number(&phone).await
+}

@@ -1,0 +1,3 @@
+# Supply-chain policy: only install versions published >= 2 days ago.
+minimumReleaseAge: 2880 # minutes
+minimumReleaseAgeStrict: true

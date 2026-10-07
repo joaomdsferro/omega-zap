@@ -1,0 +1,35 @@
+[package]
+name = "omega-zap"
+version = "0.0.1"
+description = "A fast, native WhatsApp companion with a modern UI"
+authors = ["you"]
+edition = "2024"
+
+[lib]
+name = "omega_zap_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# WhatsApp Web protocol. The crates.io 0.7.0 release enables `simd`, which needs
+# nightly Rust; this commit on main builds on stable.
+whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "a214b14c45b83729ec24c7f8b562d751920456de", default-features = false, features = ["sqlite-storage", "sqlite-storage-bundled", "tokio-transport", "tokio-runtime", "ureq-client", "tokio-native"] }
+tokio = { version = "1", features = ["time", "process", "io-util", "sync"] }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+log = "0.4"
+base64 = "0.22"
+ureq = "3"
+notify-rust = "4.18"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

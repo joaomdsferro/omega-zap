@@ -1,0 +1,391 @@
+@import "tailwindcss";
+@import "@fontsource/syne/700.css";
+@import "@fontsource/syne/800.css";
+@import "@fontsource/source-sans-3/400.css";
+@import "@fontsource/source-sans-3/500.css";
+@import "@fontsource/source-sans-3/600.css";
+@import "@fontsource/source-sans-3/700.css";
+
+@theme {
+  --font-display: var(--font-brand);
+  --font-body: var(--font-ui);
+}
+
+/*
+ * Semantic colours. Components only read these variables; each theme below
+ * fills them in. The WhatsApp themes follow WhatsApp Web's palette.
+ */
+:root,
+:root[data-theme="whatsapp-light"] {
+  color-scheme: light;
+  --font-ui: "Segoe UI", "Helvetica Neue", Helvetica, "Lucida Grande", Arial, Ubuntu,
+    Cantarell, "Fira Sans", sans-serif;
+  --font-brand: var(--font-ui);
+
+  /* Network colours: the same in every theme, so a chat's origin reads the same. */
+  --brand-whatsapp: #25d366;
+  --brand-signal: #3a76f0;
+
+  --rail-bg: #f0f2f5;
+  --rail-active: #d9dbdf;
+  --panel-bg: #ffffff;
+  --panel-header-bg: #f0f2f5;
+  --search-bg: #f0f2f5;
+  --hover-bg: #f5f6f6;
+  --selected-bg: #f0f2f5;
+  --divider: #e9edef;
+  --text-primary: #111b21;
+  --text-secondary: #667781;
+  --icon: #54656f;
+  --accent: #00a884;
+  --accent-strong: #008069;
+  --on-accent: #ffffff;
+  --badge-bg: #25d366;
+  --badge-text: #ffffff;
+  --chip-bg: #f0f2f5;
+  --chip-text: #54656f;
+  --chip-active-bg: #d9fdd3;
+  --chip-active-text: #008069;
+  --chat-bg: #efeae2;
+  --doodle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' fill='none' stroke='%23000' stroke-opacity='.06' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 30h26a6 6 0 0 1 6 6v14a6 6 0 0 1-6 6H34l-8 6v-6h-4a6 6 0 0 1-6-6V36a6 6 0 0 1 6-6z'/%3E%3Cpath d='M118 22l4 9 10 1-7 7 2 10-9-5-9 5 2-10-7-7 10-1z'/%3E%3Ccircle cx='150' cy='112' r='12'/%3E%3Cpath d='M78 92l-6 14h10l-6 14'/%3E%3Cpath d='M30 132c0-6 5-10 10-10s10 4 10 10c0 8-10 14-10 14s-10-6-10-14z'/%3E%3Crect x='96' y='140' width='24' height='18' rx='4'/%3E%3Ccircle cx='108' cy='149' r='4'/%3E%3Cpath d='M150 60c6 0 10 4 10 10'/%3E%3Cpath d='M70 20h8M74 16v8'/%3E%3C/svg%3E");
+  --bubble-in: #ffffff;
+  --bubble-out: #d9fdd3;
+  --bubble-meta: #667781;
+  --bubble-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+  --quote-bg: rgba(11, 20, 26, 0.05);
+  --day-chip-bg: #ffffff;
+  --day-chip-text: #54656f;
+  --composer-bg: #f0f2f5;
+  --composer-input-bg: #ffffff;
+  --empty-bg: #f0f2f5;
+  --tick-read: #53bdeb;
+  --banner-bg: #fff4c2;
+  --banner-text: #3b4a54;
+  --danger: #ea0038;
+  --scrollbar: rgba(11, 20, 26, 0.2);
+  --focus-ring: #00a884;
+  --overlay: rgba(11, 20, 26, 0.85);
+  --menu-bg: #ffffff;
+}
+
+:root[data-theme="whatsapp-dark"] {
+  color-scheme: dark;
+  --rail-bg: #202c33;
+  --rail-active: #374248;
+  --panel-bg: #111b21;
+  --panel-header-bg: #202c33;
+  --search-bg: #202c33;
+  --hover-bg: #202c33;
+  --selected-bg: #2a3942;
+  --divider: #222d34;
+  --text-primary: #e9edef;
+  --text-secondary: #8696a0;
+  --icon: #aebac1;
+  --accent: #00a884;
+  --accent-strong: #00a884;
+  --on-accent: #111b21;
+  --badge-bg: #00a884;
+  --badge-text: #111b21;
+  --chip-bg: #202c33;
+  --chip-text: #8696a0;
+  --chip-active-bg: #0a332c;
+  --chip-active-text: #00a884;
+  --chat-bg: #0b141a;
+  --doodle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' fill='none' stroke='%23fff' stroke-opacity='.04' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 30h26a6 6 0 0 1 6 6v14a6 6 0 0 1-6 6H34l-8 6v-6h-4a6 6 0 0 1-6-6V36a6 6 0 0 1 6-6z'/%3E%3Cpath d='M118 22l4 9 10 1-7 7 2 10-9-5-9 5 2-10-7-7 10-1z'/%3E%3Ccircle cx='150' cy='112' r='12'/%3E%3Cpath d='M78 92l-6 14h10l-6 14'/%3E%3Cpath d='M30 132c0-6 5-10 10-10s10 4 10 10c0 8-10 14-10 14s-10-6-10-14z'/%3E%3Crect x='96' y='140' width='24' height='18' rx='4'/%3E%3Ccircle cx='108' cy='149' r='4'/%3E%3Cpath d='M150 60c6 0 10 4 10 10'/%3E%3Cpath d='M70 20h8M74 16v8'/%3E%3C/svg%3E");
+  --bubble-in: #202c33;
+  --bubble-out: #005c4b;
+  --bubble-meta: rgba(233, 237, 239, 0.6);
+  --bubble-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+  --quote-bg: rgba(0, 0, 0, 0.18);
+  --day-chip-bg: #182229;
+  --day-chip-text: #8696a0;
+  --composer-bg: #202c33;
+  --composer-input-bg: #2a3942;
+  --empty-bg: #222e35;
+  --tick-read: #53bdeb;
+  --banner-bg: #182229;
+  --banner-text: #d1d7db;
+  --danger: #f15c6d;
+  --scrollbar: rgba(255, 255, 255, 0.16);
+  --focus-ring: #00a884;
+  --overlay: rgba(11, 20, 26, 0.9);
+  --menu-bg: #233138;
+}
+
+:root[data-theme="omegazap-dark"] {
+  color-scheme: dark;
+  --font-ui: "Source Sans 3", ui-sans-serif, system-ui, sans-serif;
+  --font-brand: "Syne", ui-sans-serif, system-ui, sans-serif;
+  --rail-bg: #0b1210;
+  --rail-active: #1a3d36;
+  --panel-bg: #0f1714;
+  --panel-header-bg: #111a17;
+  --search-bg: #16201c;
+  --hover-bg: #16201c;
+  --selected-bg: rgba(45, 212, 168, 0.14);
+  --divider: #1f2c27;
+  --text-primary: #eef6f1;
+  --text-secondary: #8aa396;
+  --icon: #b7c9c0;
+  --accent: #2dd4a8;
+  --accent-strong: #2dd4a8;
+  --on-accent: #0b1210;
+  --badge-bg: #2dd4a8;
+  --badge-text: #0b1210;
+  --chip-bg: #16201c;
+  --chip-text: #8aa396;
+  --chip-active-bg: rgba(45, 212, 168, 0.16);
+  --chip-active-text: #2dd4a8;
+  --chat-bg: #0b1210;
+  --doodle: radial-gradient(ellipse 80% 60% at 20% 10%, rgba(45, 212, 168, 0.07), transparent 55%),
+    radial-gradient(ellipse 70% 50% at 90% 80%, rgba(26, 62, 54, 0.45), transparent 50%);
+  --bubble-in: #16201c;
+  --bubble-out: #1a3d36;
+  --bubble-meta: #8aa396;
+  --bubble-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
+  --quote-bg: rgba(0, 0, 0, 0.2);
+  --day-chip-bg: #111a17;
+  --day-chip-text: #8aa396;
+  --composer-bg: #0f1714;
+  --composer-input-bg: #16201c;
+  --empty-bg: #0f1714;
+  --tick-read: #7dd3fc;
+  --banner-bg: #16201c;
+  --banner-text: #b7c9c0;
+  --danger: #f07178;
+  --scrollbar: rgba(138, 163, 150, 0.35);
+  --focus-ring: #2dd4a8;
+  --overlay: rgba(11, 18, 16, 0.9);
+  --menu-bg: #16201c;
+}
+
+:root[data-theme="omegazap-light"] {
+  color-scheme: light;
+  --font-ui: "Source Sans 3", ui-sans-serif, system-ui, sans-serif;
+  --font-brand: "Syne", ui-sans-serif, system-ui, sans-serif;
+  --rail-bg: #e8f0ec;
+  --rail-active: #c8ebe0;
+  --panel-bg: #ffffff;
+  --panel-header-bg: #f3f7f5;
+  --search-bg: #e8f0ec;
+  --hover-bg: #f3f7f5;
+  --selected-bg: #e1f1ea;
+  --divider: #dbe6e0;
+  --text-primary: #13201b;
+  --text-secondary: #5f746a;
+  --icon: #3a4f46;
+  --accent: #0f9f7a;
+  --accent-strong: #0b7a5e;
+  --on-accent: #ffffff;
+  --badge-bg: #0f9f7a;
+  --badge-text: #ffffff;
+  --chip-bg: #e8f0ec;
+  --chip-text: #3a4f46;
+  --chip-active-bg: #c8ebe0;
+  --chip-active-text: #0b7a5e;
+  --chat-bg: #eef5f1;
+  --doodle: radial-gradient(ellipse 80% 60% at 15% 0%, rgba(15, 159, 122, 0.1), transparent 55%);
+  --bubble-in: #ffffff;
+  --bubble-out: #c8ebe0;
+  --bubble-meta: #5f746a;
+  --bubble-shadow: 0 1px 0.5px rgba(19, 32, 27, 0.12);
+  --quote-bg: rgba(19, 32, 27, 0.05);
+  --day-chip-bg: #ffffff;
+  --day-chip-text: #5f746a;
+  --composer-bg: #f3f7f5;
+  --composer-input-bg: #ffffff;
+  --empty-bg: #f3f7f5;
+  --tick-read: #0369a1;
+  --banner-bg: #fff4c2;
+  --banner-text: #3a4f46;
+  --danger: #d4344a;
+  --scrollbar: rgba(19, 32, 27, 0.2);
+  --focus-ring: #0f9f7a;
+  --overlay: rgba(19, 32, 27, 0.85);
+  --menu-bg: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-ui);
+  background: var(--panel-bg);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* Tailwind's preflight leaves buttons on the default arrow; anything clickable gets the hand. */
+@layer base {
+  button,
+  a[href],
+  select,
+  summary,
+  label[for],
+  [role="button"],
+  [role="option"],
+  [role="radio"],
+  [role="tab"],
+  [role="switch"],
+  [role="checkbox"],
+  [role="menuitem"],
+  [role="menuitemcheckbox"],
+  input:is([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="file"]) {
+    cursor: pointer;
+  }
+
+  :is(button, select, input):disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-wallpaper {
+  background-color: var(--chat-bg);
+  background-image: var(--doodle);
+  background-size: 180px 180px;
+}
+
+:root[data-theme^="omegazap"] .chat-wallpaper {
+  background-size: cover;
+}
+
+/* WhatsApp themes use the grey silhouette avatar; Omega Zap themes use initials. */
+:root[data-theme^="whatsapp"] .avatar-initials,
+:root:not([data-theme]) .avatar-initials {
+  display: none;
+}
+
+:root[data-theme^="omegazap"] .avatar-silhouette {
+  display: none;
+}
+
+.resizing,
+.resizing * {
+  cursor: col-resize !important;
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+/* No hover hit-testing or hover restyles under the cursor mid-drag. */
+.resizing aside,
+.resizing main {
+  pointer-events: none;
+}
+
+@keyframes fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes toast {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -4px);
+  }
+  12%,
+  80% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, 0);
+  }
+}
+
+@keyframes message-flash {
+  0%,
+  60% {
+    background-color: color-mix(in oklab, var(--accent) 22%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.message-flash {
+  animation: message-flash 1600ms ease-out both;
+}
+
+/* Scrolls sideways without a visible bar, like the filter chips. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes reaction-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fade-rise {
+  animation: fade-rise 160ms ease both;
+}
+
+.reaction-pop {
+  animation: reaction-pop 140ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+
+.animate-toast {
+  animation: toast 1400ms ease both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-rise,
+  .reaction-pop,
+  .message-flash,
+  .animate-toast {
+    animation-duration: 1ms;
+  }
+}
