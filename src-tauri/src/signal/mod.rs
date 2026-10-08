@@ -850,6 +850,8 @@ impl SignalManager {
             mime => mime,
         };
         let (kind, msg_kind, label) = match mime.split('/').next().unwrap_or_default() {
+            // A drawing, not a picture Signal's apps show: it goes as a file.
+            "image" if mime == "image/svg+xml" => ("file", MsgKind::Media, file.name.clone()),
             "image" => ("image", MsgKind::Image, "Photo".to_string()),
             "video" => ("video", MsgKind::Media, "Video".to_string()),
             "audio" => ("audio", MsgKind::Media, "Audio".to_string()),

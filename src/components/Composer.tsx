@@ -19,8 +19,18 @@ interface ComposerProps {
   onRemoveFile?: (index: number) => void;
 }
 
+function Spinner({ size }: { size: number }) {
+  return (
+    <span
+      aria-hidden
+      className="block animate-spin rounded-full border-2 border-current border-t-transparent"
+      style={{ width: size, height: size }}
+    />
+  );
+}
+
 /** A file waiting to be sent: its picture when it is one, otherwise its name. */
-function PendingFile({ file, onRemove }: { file: File; onRemove?: () => void }) {
+function PendingFile({ file, state, onRemove }: { file: File; state?: "sending" | "waiting"; onRemove?: () => void }) {
   const [preview, setPreview] = useState<string | null>(null);
   useEffect(() => {
     if (!file.type.startsWith("image/")) return;
@@ -29,7 +39,13 @@ function PendingFile({ file, onRemove }: { file: File; onRemove?: () => void }) 
     return () => URL.revokeObjectURL(url);
   }, [file]);
   return (
-    <li className="relative flex h-16 max-w-56 shrink-0 items-center gap-2 overflow-hidden rounded-md bg-(--composer-input-bg) pr-8">
+    <li
+      aria-busy={state === "sending"}
+      className={[
+        "relative flex h-16 max-w-56 shrink-0 items-center gap-2 overflow-hidden rounded-md bg-(--composer-input-bg) pr-8",
+        state === "waiting" ? "opacity-50" : "",
+      ].join(" ")}
+    >
       {preview ? (
         <img src={preview} alt="" className="h-16 w-16 shrink-0 object-cover" />
       ) : (
@@ -37,8 +53,15 @@ function PendingFile({ file, onRemove }: { file: File; onRemove?: () => void }) 
       )}
       <span className="min-w-0">
         <span className="block truncate text-[13px] text-(--text-primary)">{file.name}</span>
-        <span className="block text-[12px] text-(--text-secondary)">{formatFileSize(file.size)}</span>
+        <span className="block text-[12px] text-(--text-secondary)">
+          {state === "sending" ? "Sending…" : state === "waiting" ? "Waiting…" : formatFileSize(file.size)}
+        </span>
       </span>
+      {state === "sending" ? (
+        <span className="absolute top-1.5 right-1.5 text-(--accent)">
+          <Spinner size={16} />
+        </span>
+      ) : null}
       {onRemove ? (
         <button
           type="button"
@@ -140,6 +163,7 @@ export function Composer({ chatId, disabled, disabledReason, replyTo, onCancelRe
             <PendingFile
               key={`${file.name}-${file.size}-${file.lastModified}-${index}`}
               file={file}
+              state={sending ? (index === 0 ? "sending" : "waiting") : undefined}
               onRemove={sending ? undefined : () => onRemoveFile?.(index)}
             />
           ))}
@@ -190,9 +214,9 @@ export function Composer({ chatId, disabled, disabledReason, replyTo, onCancelRe
             type="submit"
             disabled={disabled || sending}
             className="mb-0.75 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-(--icon) transition-colors hover:text-(--accent) disabled:opacity-50"
-            aria-label="Send"
+            aria-label={sending ? "Sending" : "Send"}
           >
-            <SendIcon size={24} />
+            {sending ? <Spinner size={20} /> : <SendIcon size={24} />}
           </button>
         ) : (
           <button

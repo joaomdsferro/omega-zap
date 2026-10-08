@@ -342,7 +342,7 @@ function Shell() {
 
   const clearFocus = useCallback(() => setFocusMessage(null), []);
 
-  async function handleSend(text: string, files: File[], replyTo?: string) {
+  async function handleSend(text: string, files: File[], replyTo?: string, onFileSent?: () => void) {
     const backend = selectedBackend;
     const chatId = selectedId;
     if (!backend || !chatId) return;
@@ -365,6 +365,7 @@ function Shell() {
           first ? replyTo : undefined,
         );
         setMessages((prev) => upsert(prev, message));
+        onFileSent?.();
       }
       if (captionless && text) {
         const message = await backend.sendText(chatId, text);

@@ -21,7 +21,7 @@ interface ChatViewProps {
   canSend: boolean;
   cannotSendReason?: string;
   /** Sends a text, or files with the text as their caption, quoting the message `replyTo` when given. */
-  onSend: (text: string, files: File[], replyTo?: string) => Promise<void>;
+  onSend: (text: string, files: File[], replyTo?: string, onFileSent?: () => void) => Promise<void>;
   /** Files can be sent in this chat. */
   canAttach?: boolean;
   /** Where to load a message's attachment from, when the account can fetch it. */
@@ -102,7 +102,9 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
   const replyTarget = replyingTo && messages.find((m) => m.id === replyingTo.id && !m.deleted);
 
   async function send(text: string, files: File[]) {
-    await onSend(text, files, replyTarget?.id);
+    // Each file leaves the tray as it is sent, so a failure leaves only the
+    // ones still to send.
+    await onSend(text, files, replyTarget?.id, () => setPending((prev) => prev.slice(1)));
     setReplyingTo(null);
     setPending([]);
   }
@@ -114,8 +116,11 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
     if (files.length) setPending((prev) => [...prev, ...files]);
   }
 
+  // File managers on Linux may offer the files only as a list of their
+  // addresses until the drop, so that counts too.
   function carriesFiles(event: ReactDragEvent) {
-    return attaching && event.dataTransfer.types.includes("Files");
+    const types = event.dataTransfer.types;
+    return attaching && (types.includes("Files") || types.includes("text/uri-list"));
   }
 
   // Jumping to a message: it goes to the middle of the view and lights up.
