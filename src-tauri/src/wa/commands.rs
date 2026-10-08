@@ -61,6 +61,12 @@ pub async fn wa_send_text(
 }
 
 #[tauri::command]
+pub async fn wa_send_file(mgr: Mgr<'_>, request: tauri::ipc::Request<'_>) -> Result<MessageDto, String> {
+    let (file, bytes) = crate::account::outgoing_file(&request)?;
+    mgr.send_file(file, bytes).await
+}
+
+#[tauri::command]
 pub async fn wa_delete_message(
     mgr: Mgr<'_>,
     chat_id: String,

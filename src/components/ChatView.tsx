@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { DragEvent as ReactDragEvent } from "react";
 import type { Chat, Message } from "../backend";
 import { formatDayLabel, sameDay } from "../lib/format";
 import { AccountBadge } from "./AccountBadge";
@@ -19,8 +20,10 @@ interface ChatViewProps {
   showAccount?: boolean;
   canSend: boolean;
   cannotSendReason?: string;
-  /** Sends a text, quoting the message `replyTo` when given. */
-  onSend: (text: string, replyTo?: string) => Promise<void>;
+  /** Sends a text, or files with the text as their caption, quoting the message `replyTo` when given. */
+  onSend: (text: string, files: File[], replyTo?: string) => Promise<void>;
+  /** Files can be sent in this chat. */
+  canAttach?: boolean;
   /** Where to load a message's attachment from, when the account can fetch it. */
   loadMedia?: LoadMedia;
   /** Opens a document in the system's app for it. */
@@ -39,7 +42,7 @@ interface ChatViewProps {
   onFocused?: () => void;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, focusMessageId, onFocused }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, focusMessageId, onFocused }: ChatViewProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -85,19 +88,34 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
 
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [deleting, setDeleting] = useState<Message | null>(null);
+  /** Files picked, dropped or pasted, waiting for Send. */
+  const [pending, setPending] = useState<File[]>([]);
 
   useEffect(() => {
     setViewing(null);
     setReplyingTo(null);
     setDeleting(null);
+    setPending([]);
   }, [chatKey]);
 
   // A quoted message that is deleted can't be replied to any more.
   const replyTarget = replyingTo && messages.find((m) => m.id === replyingTo.id && !m.deleted);
 
-  async function send(text: string) {
-    await onSend(text, replyTarget?.id);
+  async function send(text: string, files: File[]) {
+    await onSend(text, files, replyTarget?.id);
     setReplyingTo(null);
+    setPending([]);
+  }
+
+  const attaching = Boolean(canAttach && canSend);
+  const [dragging, setDragging] = useState(false);
+
+  function addFiles(files: File[]) {
+    if (files.length) setPending((prev) => [...prev, ...files]);
+  }
+
+  function carriesFiles(event: ReactDragEvent) {
+    return attaching && event.dataTransfer.types.includes("Files");
   }
 
   // Jumping to a message: it goes to the middle of the view and lights up.
@@ -124,7 +142,30 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
   }
 
   return (
-    <section className="flex h-full min-w-0 flex-1 flex-col" aria-label={`Conversation with ${chat.name}`}>
+    <section
+      className="relative flex h-full min-w-0 flex-1 flex-col"
+      aria-label={`Conversation with ${chat.name}`}
+      onDragOver={(event) => {
+        if (!carriesFiles(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        setDragging(true);
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
+      }}
+      onDrop={(event) => {
+        setDragging(false);
+        if (!carriesFiles(event)) return;
+        event.preventDefault();
+        addFiles(Array.from(event.dataTransfer.files));
+      }}
+    >
+      {dragging ? (
+        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-(--panel-header-bg)/85 text-[17px] text-(--text-primary)">
+          Drop to send to {chat.name}
+        </div>
+      ) : null}
       <header className="flex h-15 shrink-0 items-center gap-3 border-l border-(--divider) bg-(--panel-header-bg) px-4">
         <Avatar
           name={chat.name}
@@ -215,6 +256,9 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
 
       <Composer
         chatId={chatKey}
+        files={pending}
+        onAddFiles={attaching ? addFiles : undefined}
+        onRemoveFile={(index) => setPending((prev) => prev.filter((_, at) => at !== index))}
         disabled={!canSend}
         disabledReason={cannotSendReason}
         replyTo={

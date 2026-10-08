@@ -17,7 +17,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::oneshot;
 
-use crate::account::{AccountState, AccountStatus, Me, lock, render_qr, secure_dir};
+use crate::account::{AccountState, AccountStatus, Me, OutgoingFile, lock, render_qr, secure_dir};
 use crate::store::{
     ChatStore, ChatSummary, ContactDto, Content, Deletion, Delivery, Incoming, ListDto, MediaRef, MessageDto, MsgKind,
     OWN_AVATAR, ReplyRef, StarredDto, StoredMessage, avatar_file, now_ms,
@@ -34,6 +34,9 @@ pub const AVATAR_DIR: &str = "avatars";
 const AVATAR_INCOMING: &str = ".incoming";
 const SEND_TIMEOUT: Duration = Duration::from_secs(60);
 const MEDIA_TIMEOUT: Duration = Duration::from_secs(150);
+/// Uploading a file of up to 100 MB, then sending the message.
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(600);
+const OUTBOX_DIR: &str = "outbox";
 const AVATAR_TIMEOUT: Duration = Duration::from_secs(45);
 /// Pause between profile picture lookups, to stay clear of the rate limit.
 const AVATAR_PACE: Duration = Duration::from_millis(150);
@@ -102,6 +105,8 @@ enum BridgeEvent {
     },
     ProfileKey { id: String },
     Avatar { id: u64, picture: Option<String>, error: Option<String> },
+    /// A file was uploaded and sent: where it now lives on Signal's CDN.
+    Uploaded { id: u64, media: Option<serde_json::Value>, error: Option<String> },
     Done { id: u64, error: Option<String> },
 }
 
@@ -168,6 +173,19 @@ pub(crate) fn safe_file_name(name: &str) -> Option<String> {
         .collect();
     let name = name.trim().trim_start_matches('.').to_string();
     (!name.is_empty()).then_some(name)
+}
+
+/// Where a downloaded attachment is kept in the media directory.
+fn media_file_name(media: &MediaRef) -> String {
+    let safe: String = media
+        .cdn_key
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    match (media.kind(), media.file_name.as_deref().and_then(safe_file_name)) {
+        ("file", Some(file_name)) => format!("{safe}/{file_name}"),
+        _ => format!("{safe}.{}", extension(&media.mime, media.file_name.as_deref())),
+    }
 }
 
 fn bridge_path() -> Result<PathBuf, String> {
@@ -587,15 +605,7 @@ impl SignalManager {
         let media = lock(&self.store)
             .media(chat_id, message_id, index)
             .ok_or("This attachment is no longer available.")?;
-        let safe: String = media
-            .cdn_key
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-            .collect();
-        let name = match (media.kind(), media.file_name.as_deref().and_then(safe_file_name)) {
-            ("file", Some(file_name)) => format!("{safe}/{file_name}"),
-            _ => format!("{safe}.{}", extension(&media.mime, media.file_name.as_deref())),
-        };
+        let name = media_file_name(&media);
         let dir = self.dir.join(MEDIA_DIR);
         let path = dir.join(&name);
         if path.exists() {
@@ -766,32 +776,25 @@ impl SignalManager {
     }
 
     /// Sends a text, quoting the message `reply_to` when there is one.
-    pub async fn send_text(&self, chat_id: &str, text: &str, reply_to: Option<&str>) -> Result<MessageDto, String> {
-        let text = text.trim();
-        if text.is_empty() {
-            return Err("The message is empty.".into());
-        }
-        let quoted = match reply_to {
-            Some(id) => {
-                let store = lock(&self.store);
-                let source = store.quote_source(chat_id, id).ok_or("That message is gone.")?;
-                let author = match source.sender {
-                    Some(sender) if !source.from_me => sender,
-                    _ => store.own_id().ok_or("Signal is not connected.")?.to_string(),
-                };
-                Some((source.ts_ms, ReplyRef { author_jid: Some(author), text: source.text }))
-            }
-            None => None,
+    /// The message `reply_to` names, as the bridge quotes it and as it is
+    /// shown here.
+    fn quote(&self, chat_id: &str, reply_to: Option<&str>) -> Result<Option<(serde_json::Value, ReplyRef)>, String> {
+        let Some(id) = reply_to else {
+            return Ok(None);
         };
-        let ts = now_ms();
-        let quote = quoted.as_ref().map(|(target_ts, reply)| {
-            serde_json::json!({ "ts": target_ts, "author": reply.author_jid, "text": reply.text })
-        });
-        let command = serde_json::json!({ "cmd": "send", "chat": chat_id, "text": text, "ts": ts, "quote": quote });
-        self.request(command, SEND_TIMEOUT)
-            .await
-            .map_err(|e| format!("The message was not sent: {e}"))?;
+        let store = lock(&self.store);
+        let source = store.quote_source(chat_id, id).ok_or("That message is gone.")?;
+        let author = match source.sender {
+            Some(sender) if !source.from_me => sender,
+            _ => store.own_id().ok_or("Signal is not connected.")?.to_string(),
+        };
+        let quote = serde_json::json!({ "ts": source.ts_ms, "author": author, "text": source.text });
+        Ok(Some((quote, ReplyRef { author_jid: Some(author), text: source.text })))
+    }
 
+    /// Files a message we just sent, keyed by its timestamp, and returns it
+    /// as the UI shows it.
+    fn store_sent(&self, chat_id: &str, ts: i64, content: Content) -> Result<MessageDto, String> {
         let is_group = lock(&self.store)
             .list_chats()
             .iter()
@@ -807,7 +810,7 @@ impl SignalManager {
                 from_me: true,
                 ts_ms: ts,
                 author_jid: None,
-                content: Content::text(text, quoted.map(|(_, reply)| reply)),
+                content,
                 status: Some(Delivery::Sent),
                 reactions: Vec::new(),
                 wire: None,
@@ -821,6 +824,86 @@ impl SignalManager {
             .ok_or("The message was sent but could not be shown.")?;
         self.mark_dirty();
         Ok(dto)
+    }
+
+    pub async fn send_text(&self, chat_id: &str, text: &str, reply_to: Option<&str>) -> Result<MessageDto, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("The message is empty.".into());
+        }
+        let (quote, reply) = self.quote(chat_id, reply_to)?.unzip();
+        let ts = now_ms();
+        let command = serde_json::json!({ "cmd": "send", "chat": chat_id, "text": text, "ts": ts, "quote": quote });
+        self.request(command, SEND_TIMEOUT)
+            .await
+            .map_err(|e| format!("The message was not sent: {e}"))?;
+        self.store_sent(chat_id, ts, Content::text(text, reply))
+    }
+
+    /// Hands a file to the bridge to upload and send, and keeps it as the
+    /// downloaded copy of the attachment we show.
+    pub async fn send_file(&self, file: OutgoingFile, bytes: Vec<u8>) -> Result<MessageDto, String> {
+        let chat_id = file.chat_id.as_str();
+        let (quote, reply) = self.quote(chat_id, file.reply_to.as_deref())?.unzip();
+        let mime = match file.base_mime() {
+            mime if mime.is_empty() => "application/octet-stream".to_string(),
+            mime => mime,
+        };
+        let (kind, msg_kind, label) = match mime.split('/').next().unwrap_or_default() {
+            "image" => ("image", MsgKind::Image, "Photo".to_string()),
+            "video" => ("video", MsgKind::Media, "Video".to_string()),
+            "audio" => ("audio", MsgKind::Media, "Audio".to_string()),
+            _ => ("file", MsgKind::Media, file.name.clone()),
+        };
+
+        // The bridge reads the file from here rather than through the pipe,
+        // which carries one JSON line per command.
+        let outbox = self.dir.join(OUTBOX_DIR);
+        secure_dir(&outbox).map_err(|e| e.to_string())?;
+        let ts = now_ms();
+        let staged = outbox.join(ts.to_string());
+        fs::write(&staged, &bytes).map_err(|e| format!("could not hand the file over: {e}"))?;
+        let command = serde_json::json!({
+            "cmd": "send_file",
+            "chat": chat_id,
+            "path": staged,
+            "mime": mime,
+            "fileName": file.name,
+            "kind": kind,
+            "width": file.width,
+            "height": file.height,
+            "caption": file.caption(),
+            "quote": quote,
+            "ts": ts,
+        });
+        let answer = self.request(command, UPLOAD_TIMEOUT).await;
+        let media = match answer {
+            Ok(Some(media)) => serde_json::from_str::<MediaRef>(&media).ok(),
+            Ok(None) => None,
+            Err(e) => {
+                let _ = fs::remove_file(&staged);
+                return Err(format!("The file was not sent: {e}"));
+            }
+        };
+        // Kept where a download of it would go, so it opens without one.
+        match &media {
+            Some(media) => {
+                let path = self.dir.join(MEDIA_DIR).join(media_file_name(media));
+                if let Some(parent) = path.parent() {
+                    let _ = secure_dir(parent);
+                }
+                if fs::rename(&staged, &path).is_err() {
+                    let _ = fs::remove_file(&staged);
+                }
+            }
+            None => {
+                let _ = fs::remove_file(&staged);
+            }
+        }
+        let mut content = Content::media(msg_kind, label, file.caption());
+        content.reply_to = reply;
+        content.attachments.extend(media);
+        self.store_sent(chat_id, ts, content)
     }
 
     fn handle_event(self: &Arc<Self>, event: BridgeEvent) {
@@ -999,6 +1082,11 @@ impl SignalManager {
             BridgeEvent::Avatar { id, picture, error } => {
                 if let Some(waiter) = lock(&self.pending).remove(&id) {
                     let _ = waiter.send(error.map_or(Ok(picture), Err));
+                }
+            }
+            BridgeEvent::Uploaded { id, media, error } => {
+                if let Some(waiter) = lock(&self.pending).remove(&id) {
+                    let _ = waiter.send(error.map_or(Ok(media.map(|m| m.to_string())), Err));
                 }
             }
             BridgeEvent::Done { id, error } => {

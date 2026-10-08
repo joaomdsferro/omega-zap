@@ -22,6 +22,7 @@ use presage::libsignal_service::proto::AttachmentPointer;
 use presage::libsignal_service::proto::attachment_pointer::AttachmentIdentifier;
 use presage::libsignal_service::proto::data_message::{Delete, Quote as QuoteProto, Reaction};
 use presage::libsignal_service::push_service::PushService;
+use presage::libsignal_service::sender::AttachmentSpec;
 use presage::libsignal_service::prelude::{ProfileKey, Uuid};
 use presage::libsignal_service::proto::sync_message::{Content as SyncContent, Sent};
 use presage::libsignal_service::proto::{ReceiptMessage, SyncMessage, receipt_message, sync_message};
@@ -43,6 +44,8 @@ const USER_AGENT: &str = concat!("omega-zap-signal/", env!("CARGO_PKG_VERSION"))
 const GROUP_PREFIX: &str = "g.";
 const SEND_TIMEOUT: Duration = Duration::from_secs(45);
 const MEDIA_TIMEOUT: Duration = Duration::from_secs(120);
+/// Uploading a file of up to 100 MB.
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(540);
 const PROFILE_TIMEOUT: Duration = Duration::from_secs(10);
 const RETRY_DELAY: Duration = Duration::from_secs(5);
 const KEY_SYNC_ATTEMPTS: u32 = 5;
@@ -71,6 +74,21 @@ pub(crate) static READ_RECEIPTS: AtomicBool = AtomicBool::new(false);
 enum Command {
     Link,
     Send { id: u64, chat: String, text: String, ts: u64, quote: Option<SendQuote> },
+    /// Uploads the file at `path` and sends it. Answered with `uploaded`.
+    SendFile {
+        id: u64,
+        chat: String,
+        path: PathBuf,
+        mime: String,
+        file_name: Option<String>,
+        /// `image`, `video`, `audio` or `file`.
+        kind: String,
+        width: Option<u32>,
+        height: Option<u32>,
+        caption: Option<String>,
+        quote: Option<SendQuote>,
+        ts: u64,
+    },
     /// Takes back one of our messages for everyone.
     Delete { id: u64, chat: String, target_ts: u64, ts: u64 },
     /// Sets or removes our reaction on a message.
@@ -189,6 +207,8 @@ enum Event {
     ProfileKey { id: String },
     /// The answer to an `avatar` command: the id of the current picture.
     Avatar { id: u64, picture: Option<String>, error: Option<String> },
+    /// The answer to `send_file`: where the file now is.
+    Uploaded { id: u64, media: Option<Media>, error: Option<String> },
     /// The answer to any other command that carried this `id`.
     Done { id: u64, error: Option<String> },
 }
@@ -665,6 +685,61 @@ async fn send(manager: &mut Signal, chat: &str, mut message: DataMessage, ts: u6
         .map_err(|_| "Signal did not answer in time.".to_string())?
 }
 
+/// A file the app asked to send.
+struct OutgoingFile {
+    path: PathBuf,
+    mime: String,
+    file_name: Option<String>,
+    kind: String,
+    width: Option<u32>,
+    height: Option<u32>,
+    caption: Option<String>,
+    quote: Option<SendQuote>,
+}
+
+/// Uploads a file and sends it as a message's one attachment, returning
+/// where it now lives so the app can show it as received ones are.
+async fn send_file(manager: &mut Signal, chat: &str, file: OutgoingFile, ts: u64) -> Result<Media, String> {
+    let bytes = tokio::fs::read(&file.path).await.map_err(|e| format!("could not read the file: {e}"))?;
+    let kind = match file.kind.as_str() {
+        "image" => "image",
+        "video" => "video",
+        "audio" => "audio",
+        _ => "file",
+    };
+    let spec = AttachmentSpec {
+        content_type: file.mime,
+        length: bytes.len(),
+        file_name: file.file_name,
+        width: file.width,
+        height: file.height,
+        ..Default::default()
+    };
+    let uploading = manager.upload_attachments(vec![(spec, bytes)]);
+    let pointer = tokio::time::timeout(UPLOAD_TIMEOUT, uploading)
+        .await
+        .map_err(|_| "Signal did not take the file in time.".to_string())?
+        .map_err(|e| e.to_string())?
+        .pop()
+        .ok_or("Nothing was uploaded.")?
+        .map_err(|e| e.to_string())?;
+    let media = media_of(&pointer, kind).ok_or("The upload came back without a reference.")?;
+    let quote = file.quote.map(|q| QuoteProto {
+        id: Some(q.ts),
+        author_aci: Some(q.author),
+        text: Some(q.text),
+        ..Default::default()
+    });
+    let message = DataMessage {
+        body: file.caption,
+        attachments: vec![pointer],
+        quote,
+        ..Default::default()
+    };
+    send(manager, chat, message, ts).await?;
+    Ok(media)
+}
+
 async fn mark_read(manager: &mut Signal, me: Uuid, messages: Vec<ReadRef>, ts: u64) -> Result<(), String> {
     let sending = async {
         let sync = SyncMessage {
@@ -783,6 +858,19 @@ async fn session(
                     let error = send(&mut sender, &chat, message, ts).await.err();
                     emit(Event::Done { id, error });
                 }
+                // On its own task: an upload can take minutes, and the
+                // commands behind it should not wait for it.
+                Some(Command::SendFile { id, chat, path, mime, file_name, kind, width, height, caption, quote, ts }) => {
+                    let mut manager = sender.clone();
+                    tokio::task::spawn_local(async move {
+                        let file = OutgoingFile { path, mime, file_name, kind, width, height, caption, quote };
+                        let (media, error) = match send_file(&mut manager, &chat, file, ts).await {
+                            Ok(media) => (Some(media), None),
+                            Err(e) => (None, Some(e)),
+                        };
+                        emit(Event::Uploaded { id, media, error });
+                    });
+                }
                 Some(Command::Delete { id, chat, target_ts, ts }) => {
                     let message = DataMessage {
                         delete: Some(Delete { target_sent_timestamp: Some(target_ts) }),
@@ -879,6 +967,7 @@ async fn run(path: String) {
                     Some(Command::Link) => break,
                     Some(
                         Command::Send { id, .. }
+                        | Command::SendFile { id, .. }
                         | Command::Delete { id, .. }
                         | Command::React { id, .. }
                         | Command::Read { id, .. }

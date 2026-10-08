@@ -142,6 +142,8 @@ export interface ChatBackend {
   getMessages(chatId: string): Promise<Message[]>;
   /** Sends a text, quoting the message `replyTo` when given. */
   sendText(chatId: string, text: string, replyTo?: string): Promise<Message>;
+  /** Uploads a file and sends it, with `caption` under it. */
+  sendFile?(chatId: string, file: File, caption?: string, replyTo?: string): Promise<Message>;
   /**
    * Deletes a message for us, or for everyone when it is ours. Returns the
    * placeholder left behind, or `null` when nothing is shown any more.

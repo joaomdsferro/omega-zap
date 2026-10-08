@@ -20,12 +20,12 @@ use whatsapp_rust::waproto::buffa::MessageField;
 use whatsapp_rust::waproto::whatsapp::sync_action_value::label_edit_action::ListType;
 use whatsapp_rust::waproto::whatsapp::sync_action_value::{FavoritesAction, LabelEditAction, favorites_action};
 use whatsapp_rust::{
-    AppStateResyncMode, ErrorChainExt, MediaRetryResult, MediaReuploadRequest, ProfilePictureLookup, RevokeType, WAPatchName,
-    schemas,
+    AppStateResyncMode, ErrorChainExt, MediaRetryResult, MediaReuploadRequest, ProfilePictureLookup, RevokeType, UploadOptions,
+    WAPatchName, schemas,
 };
 
 use crate::account::{
-    AccountState as WaState, AccountStatus as WaStatus, Me, lock, render_qr, secure_dir,
+    AccountState as WaState, AccountStatus as WaStatus, Me, OutgoingFile, lock, render_qr, secure_dir,
 };
 use crate::store;
 use crate::store::{
@@ -66,6 +66,19 @@ impl From<&str> for CdnError {
     fn from(message: &str) -> Self {
         Self::Failed(message.to_string())
     }
+}
+
+/// Where a downloaded file is kept inside its folder: `prefix` and its hash,
+/// except for documents, which keep the name they were sent with in a folder
+/// of their own.
+fn cdn_file_name(file: &CdnRef, prefix: &str) -> Result<String, String> {
+    let sha256 = BASE64.decode(&file.sha256).map_err(|e| format!("Bad file reference: {e}"))?;
+    let hash: String = sha256.iter().map(|b| format!("{b:02x}")).collect();
+    let mime = file.mime.as_deref().unwrap_or("image/jpeg");
+    Ok(match (file.kind.as_deref(), file.file_name.as_deref().and_then(crate::signal::safe_file_name)) {
+        (Some("file"), Some(file_name)) => format!("{prefix}-{hash}/{file_name}"),
+        _ => format!("{prefix}-{hash}.{}", crate::signal::extension(mime, file.file_name.as_deref())),
+    })
 }
 
 impl From<CdnError> for String {
@@ -417,54 +430,42 @@ impl WaManager {
     }
 
     /// Sends a text, quoting the message `reply_to` when there is one.
-    pub async fn send_text(&self, chat_id: &str, text: &str, reply_to: Option<&str>) -> Result<MessageDto, String> {
-        let text = text.trim();
-        if text.is_empty() {
-            return Err("The message is empty.".into());
-        }
-        let client = self
-            .client()
-            .await
-            .ok_or("WhatsApp is not connected.")?;
-        let jid: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
-        let (outgoing, quoted) = match reply_to {
-            Some(id) => {
-                let (source, me) = {
-                    let store = lock(&self.store);
-                    (
-                        store.quote_source(chat_id, id).ok_or("That message is gone.")?,
-                        store.own_id().ok_or("WhatsApp is not connected.")?.to_string(),
-                    )
-                };
-                // The quote names who wrote the message: in a chat with one
-                // person, the chat itself when it isn't ours.
-                let sender = match (&source.sender, source.from_me) {
-                    (_, true) => me,
-                    (Some(sender), _) => sender.clone(),
-                    (None, _) => chat_id.to_string(),
-                };
-                let context = wa::ContextInfo {
-                    stanza_id: Some(id.to_string()),
-                    participant: Some(sender.clone()),
-                    quoted_message: MessageField::some(wa::Message::text(source.text.clone())),
-                    ..Default::default()
-                };
-                let reply = ReplyRef { author_jid: Some(sender), text: source.text };
-                (wa::Message::text_with_context(text, context), Some(reply))
-            }
-            None => (wa::Message::text(text), None),
+    /// The context that quotes `reply_to`, and the quote as it is shown here.
+    fn quote(&self, chat_id: &str, reply_to: Option<&str>) -> Result<Option<(wa::ContextInfo, ReplyRef)>, String> {
+        let Some(id) = reply_to else {
+            return Ok(None);
         };
-        let sent = client
-            .send_message(jid, outgoing)
-            .await
-            .map_err(|e| format!("The message was not sent: {e}"))?;
+        let (source, me) = {
+            let store = lock(&self.store);
+            (
+                store.quote_source(chat_id, id).ok_or("That message is gone.")?,
+                store.own_id().ok_or("WhatsApp is not connected.")?.to_string(),
+            )
+        };
+        // The quote names who wrote the message: in a chat with one
+        // person, the chat itself when it isn't ours.
+        let sender = match (&source.sender, source.from_me) {
+            (_, true) => me,
+            (Some(sender), _) => sender.clone(),
+            (None, _) => chat_id.to_string(),
+        };
+        let context = wa::ContextInfo {
+            stanza_id: Some(id.to_string()),
+            participant: Some(sender.clone()),
+            quoted_message: MessageField::some(wa::Message::text(source.text.clone())),
+            ..Default::default()
+        };
+        Ok(Some((context, ReplyRef { author_jid: Some(sender), text: source.text })))
+    }
 
+    /// Files a message we just sent and returns it as the UI shows it.
+    fn store_sent(&self, chat_id: &str, id: String, content: Content) -> Result<MessageDto, String> {
         let message = StoredMessage {
-            id: sent.message_id,
+            id,
             from_me: true,
             ts_ms: now_ms(),
             author_jid: None,
-            content: Content::text(text, quoted),
+            content,
             status: Some(Delivery::Sent),
             reactions: Vec::new(),
             wire: None,
@@ -487,6 +488,158 @@ impl WaManager {
         Ok(dto)
     }
 
+    pub async fn send_text(&self, chat_id: &str, text: &str, reply_to: Option<&str>) -> Result<MessageDto, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("The message is empty.".into());
+        }
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
+        let (outgoing, quoted) = match self.quote(chat_id, reply_to)? {
+            Some((context, reply)) => (wa::Message::text_with_context(text, context), Some(reply)),
+            None => (wa::Message::text(text), None),
+        };
+        let sent = client
+            .send_message(jid, outgoing)
+            .await
+            .map_err(|e| format!("The message was not sent: {e}"))?;
+        self.store_sent(chat_id, sent.message_id, Content::text(text, quoted))
+    }
+
+    /// Uploads a file and sends it: a photo, video or audio when WhatsApp
+    /// shows that type as one, otherwise a document.
+    pub async fn send_file(&self, file: OutgoingFile, bytes: Vec<u8>) -> Result<MessageDto, String> {
+        let client = self.connected_client().await?;
+        let chat_id = file.chat_id.as_str();
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
+        let context = self.quote(chat_id, file.reply_to.as_deref())?.map(|(context, _)| context);
+        let mime = file.base_mime();
+        let media_type = match mime.as_str() {
+            "image/jpeg" | "image/png" | "image/webp" => MediaType::Image,
+            "video/mp4" | "video/3gpp" => MediaType::Video,
+            "audio/ogg" | "audio/mpeg" | "audio/mp4" | "audio/aac" | "audio/amr" => MediaType::Audio,
+            _ => MediaType::Document,
+        };
+
+        // Kept on disk while it uploads, and named after its hash once that is
+        // known, so the message we show opens without downloading it back.
+        let dir = self.dir.join(MEDIA_DIR);
+        secure_dir(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+        let staged = dir.join(format!(".outgoing-{}", now_ms()));
+        fs::write(&staged, &bytes).map_err(|e| format!("could not keep a copy of the file: {e}"))?;
+        let uploaded = client.upload(bytes, media_type, UploadOptions::default()).await;
+        let upload = match uploaded {
+            Ok(upload) => upload,
+            Err(e) => {
+                let _ = fs::remove_file(&staged);
+                return Err(format!("The file was not uploaded: {e}"));
+            }
+        };
+
+        let caption = file.caption();
+        let thumbnail = file.thumbnail.as_deref().and_then(|t| BASE64.decode(t).ok());
+        let context_info = context.map(MessageField::some).unwrap_or_default();
+        let mut outgoing = wa::Message::default();
+        match media_type {
+            MediaType::Image => {
+                outgoing.image_message = MessageField::some(wa::message::ImageMessage {
+                    url: Some(upload.url.clone()),
+                    direct_path: Some(upload.direct_path.clone()),
+                    media_key: Some(upload.media_key.to_vec()),
+                    file_sha256: Some(upload.file_sha256.to_vec()),
+                    file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
+                    file_length: Some(upload.file_length),
+                    media_key_timestamp: Some(upload.media_key_timestamp),
+                    mimetype: Some(mime.clone()),
+                    caption,
+                    width: file.width,
+                    height: file.height,
+                    jpeg_thumbnail: thumbnail,
+                    context_info,
+                    ..Default::default()
+                })
+            }
+            MediaType::Video => {
+                outgoing.video_message = MessageField::some(wa::message::VideoMessage {
+                    url: Some(upload.url.clone()),
+                    direct_path: Some(upload.direct_path.clone()),
+                    media_key: Some(upload.media_key.to_vec()),
+                    file_sha256: Some(upload.file_sha256.to_vec()),
+                    file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
+                    file_length: Some(upload.file_length),
+                    media_key_timestamp: Some(upload.media_key_timestamp),
+                    streaming_sidecar: upload.streaming_sidecar.clone(),
+                    mimetype: Some(mime.clone()),
+                    caption,
+                    seconds: file.seconds,
+                    width: file.width,
+                    height: file.height,
+                    jpeg_thumbnail: thumbnail,
+                    context_info,
+                    ..Default::default()
+                })
+            }
+            MediaType::Audio => {
+                outgoing.audio_message = MessageField::some(wa::message::AudioMessage {
+                    url: Some(upload.url.clone()),
+                    direct_path: Some(upload.direct_path.clone()),
+                    media_key: Some(upload.media_key.to_vec()),
+                    file_sha256: Some(upload.file_sha256.to_vec()),
+                    file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
+                    file_length: Some(upload.file_length),
+                    media_key_timestamp: Some(upload.media_key_timestamp),
+                    streaming_sidecar: upload.streaming_sidecar.clone(),
+                    mimetype: Some(mime.clone()),
+                    seconds: file.seconds,
+                    ptt: Some(false),
+                    context_info,
+                    ..Default::default()
+                })
+            }
+            _ => {
+                outgoing.document_message = MessageField::some(wa::message::DocumentMessage {
+                    url: Some(upload.url.clone()),
+                    direct_path: Some(upload.direct_path.clone()),
+                    media_key: Some(upload.media_key.to_vec()),
+                    file_sha256: Some(upload.file_sha256.to_vec()),
+                    file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
+                    file_length: Some(upload.file_length),
+                    media_key_timestamp: Some(upload.media_key_timestamp),
+                    mimetype: Some(if mime.is_empty() { "application/octet-stream".into() } else { mime.clone() }),
+                    file_name: Some(file.name.clone()),
+                    title: Some(file.name.clone()),
+                    caption,
+                    jpeg_thumbnail: thumbnail,
+                    context_info,
+                    ..Default::default()
+                })
+            }
+        }
+        // What we show is read back from the message, as one that arrived is.
+        let content = convert::content(&outgoing);
+        let sent = client.send_message(jid, outgoing).await;
+        let sent = match sent {
+            Ok(sent) => sent,
+            Err(e) => {
+                let _ = fs::remove_file(&staged);
+                return Err(format!("The file was uploaded but not sent: {e}"));
+            }
+        };
+        let content = content.ok_or("The file was sent but could not be shown.")?;
+        if let Some(name) = content.wa_media.as_ref().and_then(|r| cdn_file_name(r, "wa").ok()) {
+            let path = dir.join(&name);
+            if let Some(parent) = path.parent() {
+                let _ = secure_dir(parent);
+            }
+            if fs::rename(&staged, &path).is_err() {
+                let _ = fs::remove_file(&staged);
+            }
+        } else {
+            let _ = fs::remove_file(&staged);
+        }
+        self.store_sent(chat_id, sent.message_id, content)
+    }
+
     /// Downloads and decrypts a file into `dir_name` under `prefix` and its
     /// hash, unless it is already there. Returns its path inside `dir_name`:
     /// a plain file name, except for documents, which keep the name they were
@@ -500,12 +653,7 @@ impl WaManager {
     ) -> Result<String, CdnError> {
         let decode = |field: &str| BASE64.decode(field).map_err(|e| format!("Bad file reference: {e}"));
         let sha256 = decode(&file.sha256)?;
-        let hash: String = sha256.iter().map(|b| format!("{b:02x}")).collect();
-        let mime = file.mime.as_deref().unwrap_or("image/jpeg");
-        let name = match (file.kind.as_deref(), file.file_name.as_deref().and_then(crate::signal::safe_file_name)) {
-            (Some("file"), Some(file_name)) => format!("{prefix}-{hash}/{file_name}"),
-            _ => format!("{prefix}-{hash}.{}", crate::signal::extension(mime, file.file_name.as_deref())),
-        };
+        let name = cdn_file_name(&file, prefix)?;
         let path = self.dir.join(dir_name).join(&name);
         if path.exists() {
             return Ok(name);

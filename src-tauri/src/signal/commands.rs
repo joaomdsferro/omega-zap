@@ -81,6 +81,12 @@ pub async fn signal_fetch_media(
 }
 
 #[tauri::command]
+pub async fn signal_send_file(mgr: Mgr<'_>, request: tauri::ipc::Request<'_>) -> Result<MessageDto, String> {
+    let (file, bytes) = crate::account::outgoing_file(&request)?;
+    mgr.send_file(file, bytes).await
+}
+
+#[tauri::command]
 pub async fn signal_open_media(
     mgr: Mgr<'_>,
     chat_id: String,

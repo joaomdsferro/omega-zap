@@ -342,11 +342,34 @@ function Shell() {
 
   const clearFocus = useCallback(() => setFocusMessage(null), []);
 
-  async function handleSend(text: string, replyTo?: string) {
-    if (!selectedBackend || !selectedId) return;
+  async function handleSend(text: string, files: File[], replyTo?: string) {
+    const backend = selectedBackend;
+    const chatId = selectedId;
+    if (!backend || !chatId) return;
     try {
-      const message = await selectedBackend.sendText(selectedId, text, replyTo);
-      setMessages((prev) => upsert(prev, message));
+      if (!files.length || !backend.sendFile) {
+        const message = await backend.sendText(chatId, text, replyTo);
+        setMessages((prev) => upsert(prev, message));
+        return;
+      }
+      // The text goes under the first file, like a caption on the phone; the
+      // reply quotes from that one too. WhatsApp's audio has no caption, so
+      // there it is sent as a message of its own.
+      const captionless = backend.account === "whatsapp" && files[0].type.startsWith("audio/");
+      for (const [index, file] of files.entries()) {
+        const first = index === 0;
+        const message = await backend.sendFile(
+          chatId,
+          file,
+          first && !captionless ? text || undefined : undefined,
+          first ? replyTo : undefined,
+        );
+        setMessages((prev) => upsert(prev, message));
+      }
+      if (captionless && text) {
+        const message = await backend.sendText(chatId, text);
+        setMessages((prev) => upsert(prev, message));
+      }
     } catch (e) {
       setError(String(e));
       throw e;
@@ -612,6 +635,7 @@ function Shell() {
         canSend={canSend}
         cannotSendReason={`Waiting for ${ACCOUNTS[selectedChat.account].label} to connect…`}
         onSend={handleSend}
+        canAttach={Boolean(selectedBackend?.sendFile)}
         loadMedia={loadMedia}
         openMedia={openMedia}
         loadLinkThumbnail={loadLinkThumbnail}

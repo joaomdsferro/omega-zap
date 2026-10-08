@@ -70,6 +70,12 @@ demo chats only; linking needs the desktop app.
   messages, audio, stickers and documents work the same way, and one that
   has expired from WhatsApp's servers is asked for again from the phone that
   sent it.
+- **Send files, on both networks.** Press **+** next to the message box, drop
+  files on the conversation, or paste a picture. They wait above the box,
+  where each can be removed, and what you type goes under the first one as
+  its caption. On WhatsApp, JPEG, PNG and WebP pictures, MP4 videos and
+  common audio go as photos, videos and audio, and anything else as a
+  document; on Signal every file is an attachment. Files up to 100 MB.
 - **Switch accounts, or see everything together.** By default each account is
   its own space: pick WhatsApp or Signal in the side rail. **Settings → Accounts
   → Show all chats together** merges them into one list, where a coloured edge
@@ -131,12 +137,12 @@ Linux: `~/.local/share/rocks.omegazap.desktop/` (the directory is `0700`).
 
 ## Not done yet
 
-- Sending attachments and recording voice messages, on both networks
+- Recording voice messages, on both networks
 - Message edits and deletions are not shown
 - Group names come from history sync; groups first seen live show as "Group"
 - Encrypted local archive, tray
-- Signal: sending attachments, edits and deletions, starting a chat by phone
-  number (saved contacts work)
+- Signal: edits and deletions, starting a chat by phone number (saved
+  contacts work)
 - WhatsApp: albums as a grid
 - More accounts: WhatsApp Business and Telegram, and more than one account per
   network

@@ -4,6 +4,7 @@ import type { AccountId } from "../accounts/accounts";
 import { COMMAND_PREFIX } from "../accounts/useAccount";
 import { hueFor, initialsFor } from "../lib/avatar";
 import { fileUrl } from "../lib/files";
+import { MAX_SEND_BYTES, base64Json, fileDetails } from "../lib/outgoing";
 import type {
   Attachment,
   BackendEvent,
@@ -176,6 +177,17 @@ export class TauriBackend implements ChatBackend {
 
   async sendText(chatId: string, text: string, replyTo?: string): Promise<Message> {
     return toMessage(await invoke<RawMessage>(`${this.prefix}_send_text`, { chatId, text, replyTo: replyTo ?? null }));
+  }
+
+  async sendFile(chatId: string, file: File, caption?: string, replyTo?: string): Promise<Message> {
+    if (file.size > MAX_SEND_BYTES) throw new Error(`${file.name} is larger than ${MAX_SEND_BYTES / 1024 / 1024} MB.`);
+    const details = await fileDetails(file);
+    const description = { chatId, name: file.name, mime: file.type, caption, replyTo, ...details };
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const raw = await invoke<RawMessage>(`${this.prefix}_send_file`, bytes, {
+      headers: { "x-file": base64Json(description) },
+    });
+    return toMessage(raw);
   }
 
   async deleteMessage(chatId: string, messageId: string, forEveryone: boolean): Promise<Message | null> {
