@@ -3,11 +3,10 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./styles/tokens.css";
 
-// A file dropped where nothing takes it would otherwise replace the app with
-// the file itself: the webview opens whatever lands on it. The conversation
-// takes files by preventing the default first, so only the rest is refused.
+// Files from the desktop go to the app, not the page (see lib/dropped). This
+// covers what is dragged within the page, such as a picture: dropped, the
+// webview would open it in place of the app.
 window.addEventListener("dragover", (event) => {
-  if (event.defaultPrevented) return;
   event.preventDefault();
   if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
 });

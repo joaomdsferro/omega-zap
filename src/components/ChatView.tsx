@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent as ReactDragEvent } from "react";
 import type { Chat, Message } from "../backend";
+import { listenForFileDrops } from "../lib/dropped";
 import { formatDayLabel, sameDay } from "../lib/format";
 import { AccountBadge } from "./AccountBadge";
 import { Avatar } from "./Avatar";
@@ -24,6 +24,8 @@ interface ChatViewProps {
   onSend: (text: string, files: File[], replyTo?: string, onFileSent?: () => void) => Promise<void>;
   /** Files can be sent in this chat. */
   canAttach?: boolean;
+  /** Reports something that went wrong, such as a dropped file that can't be read. */
+  onError?: (message: string) => void;
   /** Where to load a message's attachment from, when the account can fetch it. */
   loadMedia?: LoadMedia;
   /** Opens a document in the system's app for it. */
@@ -42,7 +44,7 @@ interface ChatViewProps {
   onFocused?: () => void;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, focusMessageId, onFocused }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, focusMessageId, onFocused }: ChatViewProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -116,12 +118,30 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
     if (files.length) setPending((prev) => [...prev, ...files]);
   }
 
-  // File managers on Linux may offer the files only as a list of their
-  // addresses until the drop, so that counts too.
-  function carriesFiles(event: ReactDragEvent) {
-    const types = event.dataTransfer.types;
-    return attaching && (types.includes("Files") || types.includes("text/uri-list"));
-  }
+  const section = useRef<HTMLElement>(null);
+  const reportError = useRef(onError);
+  reportError.current = onError;
+
+  // Files dragged in from the desktop are taken when they land on the conversation.
+  useEffect(() => {
+    if (!attaching) return;
+    const inside = (x: number, y: number) => {
+      const box = section.current?.getBoundingClientRect();
+      return Boolean(box && x >= box.left && x <= box.right && y >= box.top && y <= box.bottom);
+    };
+    return listenForFileDrops({
+      over: (x, y) => setDragging(inside(x, y)),
+      leave: () => setDragging(false),
+      drop: (x, y, read) => {
+        setDragging(false);
+        if (!inside(x, y)) return;
+        void read().then(({ files, errors }) => {
+          addFiles(files);
+          if (errors.length) reportError.current?.(errors.join(" "));
+        });
+      },
+    });
+  }, [attaching]);
 
   // Jumping to a message: it goes to the middle of the view and lights up.
   useLayoutEffect(() => {
@@ -148,23 +168,9 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
 
   return (
     <section
+      ref={section}
       className="relative flex h-full min-w-0 flex-1 flex-col"
       aria-label={`Conversation with ${chat.name}`}
-      onDragOver={(event) => {
-        if (!carriesFiles(event)) return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "copy";
-        setDragging(true);
-      }}
-      onDragLeave={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
-      }}
-      onDrop={(event) => {
-        setDragging(false);
-        if (!carriesFiles(event)) return;
-        event.preventDefault();
-        addFiles(Array.from(event.dataTransfer.files));
-      }}
     >
       {dragging ? (
         <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-(--panel-header-bg)/85 text-[17px] text-(--text-primary)">

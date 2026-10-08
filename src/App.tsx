@@ -637,6 +637,7 @@ function Shell() {
         cannotSendReason={`Waiting for ${ACCOUNTS[selectedChat.account].label} to connect…`}
         onSend={handleSend}
         canAttach={Boolean(selectedBackend?.sendFile)}
+        onError={setError}
         loadMedia={loadMedia}
         openMedia={openMedia}
         loadLinkThumbnail={loadLinkThumbnail}

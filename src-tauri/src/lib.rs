@@ -1,4 +1,5 @@
 mod account;
+mod dropped;
 mod links;
 mod notify;
 mod signal;
@@ -109,6 +110,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(notify::Shown::default())
+        .manage(dropped::Dropped::default())
+        .on_window_event(dropped::on_window_event)
         // Serves saved profile pictures: avatar://localhost/<file name>. Each
         // network keeps its own, under names that cannot clash.
         .register_uri_scheme_protocol("avatar", |ctx, request| {
@@ -181,6 +184,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            dropped::read_dropped_file,
             wa::commands::wa_status,
             wa::commands::wa_start_linking,
             wa::commands::wa_cancel_linking,
