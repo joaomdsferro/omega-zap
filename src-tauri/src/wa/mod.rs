@@ -394,7 +394,15 @@ impl WaManager {
     /// Clears the unread count and tells the senders their messages were read.
     /// WhatsApp keeps that from them when the account has read receipts off.
     pub fn mark_read(self: &Arc<Self>, chat_id: &str) {
-        let read = lock(&self.store).mark_read(chat_id);
+        // Opening a chat asks for this every time; one with nothing unread
+        // changes nothing, and marking it dirty would redraw the chat list.
+        let read = {
+            let mut store = lock(&self.store);
+            if !store.has_unread(chat_id) {
+                return;
+            }
+            store.mark_read(chat_id)
+        };
         self.mark_dirty();
         if read.is_empty() {
             return;

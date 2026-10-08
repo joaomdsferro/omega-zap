@@ -536,7 +536,15 @@ impl SignalManager {
     /// Clears the unread count and has the bridge pass the news on: to our
     /// other devices, and to the senders when the account sends read receipts.
     pub fn mark_read(self: &Arc<Self>, chat_id: &str) {
-        let read = lock(&self.store).mark_read(chat_id);
+        // Opening a chat asks for this every time; one with nothing unread
+        // changes nothing, and marking it dirty would redraw the chat list.
+        let read = {
+            let mut store = lock(&self.store);
+            if !store.has_unread(chat_id) {
+                return;
+            }
+            store.mark_read(chat_id)
+        };
         self.mark_dirty();
         let messages: Vec<serde_json::Value> = read
             .iter()

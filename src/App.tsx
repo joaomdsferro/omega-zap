@@ -45,6 +45,16 @@ function upsert(messages: Message[], message: Message): Message[] {
   return next;
 }
 
+/** Logs, while developing, how long opening a chat took until its messages were on screen. */
+function logSwitch(key: string, started: number, how: string) {
+  requestAnimationFrame(() =>
+    setTimeout(() => console.debug(`[perf] opened ${key} (${how}) in ${Math.round(performance.now() - started)} ms`)),
+  );
+}
+
+/** How many chats keep their messages in memory, so going back to one shows it at once. */
+const CACHED_CHATS = 30;
+
 function useWindowWidth() {
   const [width, setWidth] = useState(window.innerWidth);
   useEffect(() => {
@@ -190,11 +200,24 @@ function Shell() {
   const [chatsBy, setChatsBy] = useState<Map<ChatBackend, Chat[]>>(new Map());
   const [selected, setSelected] = useState<{ account: AccountId; id: string } | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  /** The messages of recently opened chats, most recent last, by `account:id`. */
+  const messageCache = useRef(new Map<string, Message[]>());
+  /** The chat whose messages `messages` holds. */
+  const messagesOf = useRef<string | null>(null);
   const [forwarding, setForwarding] = useState<Message | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
+  // When the chat on screen last changed: the render that follows a click
+  // is the first moment this side knows of it.
+  const switchStarted = useRef(0);
+  const lastSelected = useRef<string | null>(null);
+  const selectedKey = selected ? `${selected.account}:${selected.id}` : null;
+  if (lastSelected.current !== selectedKey) {
+    lastSelected.current = selectedKey;
+    switchStarted.current = performance.now();
+  }
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   /** A chat to open once the account it is on has been switched to. */
@@ -255,20 +278,43 @@ function Shell() {
   const selectedBackend = selected ? backendFor(selected.account) : null;
   const selectedId = selected?.id ?? null;
 
+  // Keeps the cache up to date with what arrives in the open chat.
+  useEffect(() => {
+    const key = messagesOf.current;
+    if (!key) return;
+    const cache = messageCache.current;
+    cache.delete(key);
+    cache.set(key, messages);
+    if (cache.size > CACHED_CHATS) cache.delete(cache.keys().next().value!);
+  }, [messages]);
+
   useEffect(() => {
     if (!selectedBackend || !selectedId) {
+      messagesOf.current = null;
       setMessages([]);
       return;
     }
+    const key = `${selectedBackend.account}:${selectedId}`;
+    const started = switchStarted.current;
+    // The chat as it was last seen, at once, or nothing: never the chat
+    // that was open before, drawn under this one's name.
+    const cached = messageCache.current.get(key);
+    messagesOf.current = key;
+    setMessages(cached ?? []);
+    if (import.meta.env.DEV && cached) logSwitch(key, started, "cached");
     let alive = true;
     selectedBackend
       .getMessages(selectedId)
-      .then((list) => alive && setMessages(list))
+      .then((list) => {
+        if (!alive) return;
+        setMessages(list);
+        if (import.meta.env.DEV && !cached) logSwitch(key, started, "loaded");
+      })
       .catch(console.error);
     void selectedBackend.markRead(selectedId);
     setChatsBy((prev) => {
       const list = prev.get(selectedBackend);
-      if (!list) return prev;
+      if (!list?.some((c) => c.id === selectedId && c.unread > 0)) return prev;
       return new Map(prev).set(
         selectedBackend,
         list.map((c) => (c.id === selectedId ? { ...c, unread: 0 } : c)),

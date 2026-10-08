@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Chat, Message } from "../backend";
 import { listenForFileDrops } from "../lib/dropped";
 import { formatDayLabel, sameDay } from "../lib/format";
@@ -11,6 +11,11 @@ import { MediaViewer } from "./MediaViewer";
 import type { ViewerItem } from "./MediaViewer";
 import { DeleteDialog } from "./DeleteDialog";
 import { MessageBubble } from "./MessageBubble";
+
+/** Messages drawn when a chat opens; more are drawn, this many at a time, on scrolling up. */
+const PAGE = 60;
+/** How close to the top, in pixels, scrolling has to come for the next page to be drawn. */
+const PAGE_MARGIN = 600;
 
 interface ChatViewProps {
   chat: Chat;
@@ -71,6 +76,30 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
     observer.observe(content.current);
     return () => observer.disconnect();
   }, [chatKey]);
+
+  // How many of the newest messages are drawn, for this chat: a chat opens
+  // with one page, so opening it never waits on hundreds of bubbles.
+  const [drawn, setDrawn] = useState({ chatKey, count: PAGE });
+  const count = drawn.chatKey === chatKey ? drawn.count : PAGE;
+  const visible = useMemo(() => messages.slice(-count), [messages, count]);
+  const hidden = messages.length - visible.length;
+  /** The scroll height before a page was added above, to keep the view still. */
+  const grownFrom = useRef<number | null>(null);
+
+  function drawMore(total: number) {
+    const el = scroller.current;
+    if (el) grownFrom.current = el.scrollHeight - el.scrollTop;
+    setDrawn({ chatKey, count: total });
+  }
+
+  // A page added above would push everything down; this keeps the messages
+  // on screen where they were.
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el || grownFrom.current === null) return;
+    el.scrollTop = el.scrollHeight - grownFrom.current;
+    grownFrom.current = null;
+  }, [count]);
 
   const [flashed, setFlashed] = useState<string | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
@@ -146,13 +175,19 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
   // Jumping to a message: it goes to the middle of the view and lights up.
   useLayoutEffect(() => {
     if (!focusMessageId) return;
+    // An older message is drawn first, with a little of what came before it.
+    const at = messages.findIndex((m) => m.id === focusMessageId);
+    if (at !== -1 && at < hidden) {
+      setDrawn({ chatKey, count: messages.length - at + 10 });
+      return;
+    }
     const el = content.current?.querySelector(`[data-message-id="${CSS.escape(focusMessageId)}"]`);
     if (!el) return;
     el.scrollIntoView({ block: "center" });
     stickToBottom.current = false;
     setFlashed(focusMessageId);
     onFocused?.();
-  }, [messages, focusMessageId, onFocused]);
+  }, [messages, hidden, chatKey, focusMessageId, onFocused]);
 
   useEffect(() => {
     if (!flashed) return;
@@ -164,7 +199,17 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
     const el = scroller.current;
     if (!el) return;
     stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (hidden > 0 && el.scrollTop < PAGE_MARGIN && grownFrom.current === null) drawMore(count + PAGE);
   }
+
+  // Messages that don't fill the view leave nothing to scroll, so the
+  // older ones are drawn until they do.
+  useEffect(() => {
+    const el = scroller.current;
+    if (el && hidden > 0 && el.scrollTop < PAGE_MARGIN && grownFrom.current === null) drawMore(count + PAGE);
+  }, [visible]);
+
+  const openPhoto = useCallback((photo: Message, index: number) => setViewing(`${photo.id}#${index}`), []);
 
   return (
     <section
@@ -203,7 +248,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
         className="chat-wallpaper min-h-0 flex-1 overflow-y-auto pt-2 pb-4"
       >
         <div key={chatKey} ref={content} className="animate-fade-rise">
-          {groupByDay(messages).map((day) => (
+          {groupByDay(visible).map((day) => (
             // Each day is its own block so its sticky chip scrolls away when
             // the next day's chip arrives, instead of stacking under it.
             <section key={day[0].id}>
@@ -231,7 +276,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                     loadMedia={loadMedia}
                     openMedia={openMedia}
                     loadLinkThumbnail={loadLinkThumbnail}
-                    onOpenPhoto={loadMedia ? (photo, index) => setViewing(`${photo.id}#${index}`) : undefined}
+                    onOpenPhoto={loadMedia ? openPhoto : undefined}
                     onReact={onReact}
                     onStar={onStar}
                     onReply={canSend ? setReplyingTo : undefined}

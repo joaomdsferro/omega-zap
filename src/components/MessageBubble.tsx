@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { AccountId } from "../accounts/accounts";
 import type { DeliveryStatus, Message } from "../backend";
@@ -218,7 +218,11 @@ function Linkified({ text }: { text: string }) {
 /** How long a press on a bubble lasts before it opens the reactions, as on the phone. */
 const LONG_PRESS_MS = 450;
 
-export function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, flash }: MessageBubbleProps) {
+/**
+ * Memoized: a chat draws hundreds of these, and a change elsewhere in the app
+ * should not redraw every one.
+ */
+export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, flash }: MessageBubbleProps) {
   const { settings } = useSettings();
   const [picking, setPicking] = useState(false);
   /** The full emoji grid instead of the quick row. */
@@ -630,4 +634,4 @@ export function MessageBubble({ message, account, showAuthor, tail, loadMedia, o
       ) : null}
     </div>
   );
-}
+});

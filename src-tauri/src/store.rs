@@ -1451,6 +1451,10 @@ impl ChatStore {
 
     /// Clears the unread count. Returns the messages it stood for, newest
     /// first, so their senders can be told.
+    pub fn has_unread(&self, chat: &str) -> bool {
+        self.chats.get(&self.canonical(chat)).is_some_and(|c| c.unread > 0)
+    }
+
     pub fn mark_read(&mut self, chat: &str) -> Vec<ReadTarget> {
         let chat_id = self.canonical(chat);
         let Some(stored) = self.chats.get_mut(&chat_id) else {
