@@ -61,12 +61,15 @@ demo chats only; linking needs the desktop app.
   key, which comes from your account's storage service or their messages.
 - **Photos, on both networks.** Photos load in the conversation as you scroll
   to them. A WhatsApp album shows as one message per photo.
-- **Every Signal attachment.** A Signal message with several photos or videos
+- **Every attachment.** A Signal message with several photos or videos
   shows them as a grid, and the viewer steps through each one. Videos play in
   the chat (those up to 8 MB load as you scroll, so their first frame shows;
   larger ones load when you press play). GIFs loop, voice messages and audio
   play with a seek bar, stickers show as pictures, and a document opens in
-  your system's app for it.
+  your system's app for it. WhatsApp's videos, GIFs, video messages, voice
+  messages, audio, stickers and documents work the same way, and one that
+  has expired from WhatsApp's servers is asked for again from the phone that
+  sent it.
 - **Switch accounts, or see everything together.** By default each account is
   its own space: pick WhatsApp or Signal in the side rail. **Settings → Accounts
   → Show all chats together** merges them into one list, where a coloured edge
@@ -90,9 +93,8 @@ demo chats only; linking needs the desktop app.
   Linux). **Settings → Notifications** turns them off or hides the preview.
 - **Basic chatting.** Chat list with search,
   text messages with quotes (with the name of whoever wrote the quoted
-  message), group sender names, delivery ticks, and sending text. On WhatsApp,
-  videos, voice messages, documents and stickers appear as labelled
-  placeholders; locations and polls do on both networks.
+  message), group sender names, delivery ticks, and sending text. Locations,
+  contacts and polls appear as labelled placeholders on both networks.
 - **Link cards.** Links are clickable, and a WhatsApp link shows its title and
   picture. The full-size picture is downloaded from WhatsApp; **Settings →
   Links** turns that off and keeps the small one that comes with the message.
@@ -135,7 +137,7 @@ Linux: `~/.local/share/rocks.omegazap.desktop/` (the directory is `0700`).
 - Encrypted local archive, tray
 - Signal: sending attachments, edits and deletions, starting a chat by phone
   number (saved contacts work)
-- WhatsApp: albums as a grid; videos, voice messages, documents and stickers
+- WhatsApp: albums as a grid
 - More accounts: WhatsApp Business and Telegram, and more than one account per
   network
 

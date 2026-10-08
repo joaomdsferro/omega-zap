@@ -193,6 +193,7 @@ pub fn run() {
             wa::commands::wa_delete_message,
             wa::commands::wa_react,
             wa::commands::wa_fetch_media,
+            wa::commands::wa_open_media,
             wa::commands::wa_link_thumbnail,
             wa::commands::wa_lists,
             wa::commands::wa_set_favorite,

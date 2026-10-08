@@ -487,9 +487,10 @@ impl WaManager {
         Ok(dto)
     }
 
-    /// Reacts to a message, or takes the reaction back when it is already there.
     /// Downloads and decrypts a file into `dir_name` under `prefix` and its
-    /// hash, unless it is already there. Returns the file name.
+    /// hash, unless it is already there. Returns its path inside `dir_name`:
+    /// a plain file name, except for documents, which keep the name they were
+    /// sent with in a folder of their own.
     async fn fetch_cdn(
         &self,
         file: CdnRef,
@@ -499,16 +500,14 @@ impl WaManager {
     ) -> Result<String, CdnError> {
         let decode = |field: &str| BASE64.decode(field).map_err(|e| format!("Bad file reference: {e}"));
         let sha256 = decode(&file.sha256)?;
-        let extension = match file.mime.as_deref() {
-            Some("image/png") => "png",
-            Some("image/gif") => "gif",
-            Some("image/webp") => "webp",
-            _ => "jpg",
-        };
         let hash: String = sha256.iter().map(|b| format!("{b:02x}")).collect();
-        let name = format!("{prefix}-{hash}.{extension}");
-        let dir = self.dir.join(dir_name);
-        if dir.join(&name).exists() {
+        let mime = file.mime.as_deref().unwrap_or("image/jpeg");
+        let name = match (file.kind.as_deref(), file.file_name.as_deref().and_then(crate::signal::safe_file_name)) {
+            (Some("file"), Some(file_name)) => format!("{prefix}-{hash}/{file_name}"),
+            _ => format!("{prefix}-{hash}.{}", crate::signal::extension(mime, file.file_name.as_deref())),
+        };
+        let path = self.dir.join(dir_name).join(&name);
+        if path.exists() {
             return Ok(name);
         }
         let client = self
@@ -523,38 +522,79 @@ impl WaManager {
             file.size,
             media_type,
         );
-        let bytes = client.download_from_params(&params).await.map_err(|e| {
+        // The folder first, so a document's own folder is not what creates it
+        // with the default permissions.
+        for dir in [self.dir.join(dir_name), path.parent().unwrap_or(&self.dir).to_path_buf()] {
+            secure_dir(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+        }
+        // Written beside the file and moved into place once it is complete, so
+        // a download cut short is never served as the file. Streamed rather
+        // than held in memory: a video or a document can be hundreds of MB.
+        // Numbered, because the same file can be asked for twice at once (a
+        // video preloading and then pressed), and two downloads into one file
+        // would interleave.
+        static DOWNLOADS: AtomicU64 = AtomicU64::new(0);
+        let mut partial = path.clone().into_os_string();
+        partial.push(format!(".{}.part", DOWNLOADS.fetch_add(1, Ordering::Relaxed)));
+        let partial = PathBuf::from(partial);
+        let sink = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&partial)
+            .map_err(|e| format!("could not save {name}: {e}"))?;
+        if let Err(e) = client.download_from_params_to_writer(&params, sink).await {
+            let _ = fs::remove_file(&partial);
             let rejected = matches!(e.http_status(), Some(401 | 403 | 404 | 410));
             let message = format!("Could not download the file: {e}");
-            if rejected { CdnError::Rejected(message) } else { CdnError::Failed(message) }
-        })?;
-        secure_dir(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-        fs::write(dir.join(&name), bytes).map_err(|e| format!("could not save {name}: {e}"))?;
+            return Err(if rejected { CdnError::Rejected(message) } else { CdnError::Failed(message) });
+        }
+        fs::rename(&partial, &path).map_err(|e| format!("could not save {name}: {e}"))?;
         Ok(name)
     }
 
-    /// Fetches a message's photo and returns its file name inside the media directory.
+    /// Fetches a message's file and returns its path inside the media directory.
     pub async fn fetch_media(&self, chat_id: &str, message_id: &str) -> Result<String, String> {
         let file = lock(&self.store)
             .wa_media(chat_id, message_id)
             .ok_or("This message has no attachment to fetch.")?;
-        match self.fetch_cdn(file.clone(), MEDIA_DIR, "wa", MediaType::Image).await {
+        let media_type = match file.kind.as_deref() {
+            None => MediaType::Image,
+            Some("video" | "gif") => MediaType::Video,
+            Some("voice" | "audio") => MediaType::Audio,
+            Some("sticker") => MediaType::Sticker,
+            Some(_) => MediaType::Document,
+        };
+        match self.fetch_cdn(file.clone(), MEDIA_DIR, "wa", media_type).await {
             // WhatsApp drops media from its CDN after a few weeks; the sender's
             // phone can upload it again if it still has the file.
             Err(CdnError::Rejected(_)) => {
                 let path = self
                     .reupload_media(chat_id, message_id, &file)
                     .await
-                    .inspect_err(|e| log::warn!("whatsapp: photo {message_id} expired and was not re-uploaded: {e}"))?;
+                    .inspect_err(|e| log::warn!("whatsapp: file {message_id} expired and was not re-uploaded: {e}"))?;
                 lock(&self.store).set_wa_media_path(chat_id, message_id, &path);
                 self.mark_dirty();
-                Ok(self.fetch_cdn(CdnRef { path, ..file }, MEDIA_DIR, "wa", MediaType::Image).await?)
+                Ok(self.fetch_cdn(CdnRef { path, ..file }, MEDIA_DIR, "wa", media_type).await?)
             }
             other => Ok(other?),
         }
     }
 
-    /// Asks the phone that sent a message to put its photo back on the CDN,
+    /// Downloads a message's file if needed and opens it with the system's app
+    /// for its type.
+    pub async fn open_media(&self, chat_id: &str, message_id: &str) -> Result<(), String> {
+        use tauri_plugin_opener::OpenerExt;
+        let name = self.fetch_media(chat_id, message_id).await?;
+        let path = self.dir.join(MEDIA_DIR).join(name);
+        self.app
+            .opener()
+            .open_path(path.to_string_lossy(), None::<&str>)
+            .map_err(|e| format!("The file could not be opened: {e}"))
+    }
+
+    /// Asks the phone that sent a message to put its file back on the CDN,
     /// returning the new path.
     async fn reupload_media(&self, chat_id: &str, message_id: &str, file: &CdnRef) -> Result<String, String> {
         let client = self.connected_client().await?;
@@ -573,11 +613,11 @@ impl WaManager {
                 participant: participant.as_ref(),
             })
             .await
-            .map_err(|e| format!("The phone did not send the photo again: {e}"))?;
+            .map_err(|e| format!("The phone did not send the file again: {e}"))?;
         match result {
             MediaRetryResult::Success { direct_path } => Ok(direct_path),
-            MediaRetryResult::NotFound => Err("The photo is no longer on the phone that sent it.".into()),
-            other => Err(format!("The phone could not send the photo again: {other:?}")),
+            MediaRetryResult::NotFound => Err("The file is no longer on the phone that sent it.".into()),
+            other => Err(format!("The phone could not send the file again: {other:?}")),
         }
     }
 
@@ -590,6 +630,7 @@ impl WaManager {
         Ok(self.fetch_cdn(file, LINK_THUMB_DIR, "link", MediaType::LinkThumbnail).await?)
     }
 
+    /// Reacts to a message, or takes the reaction back when it is already there.
     pub async fn react(&self, chat_id: &str, message_id: &str, emoji: &str) -> Result<MessageDto, String> {
         let client = self
             .client()

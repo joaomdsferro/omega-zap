@@ -76,6 +76,11 @@ pub async fn wa_fetch_media(mgr: Mgr<'_>, chat_id: String, message_id: String) -
 }
 
 #[tauri::command]
+pub async fn wa_open_media(mgr: Mgr<'_>, chat_id: String, message_id: String) -> Result<(), String> {
+    mgr.open_media(&chat_id, &message_id).await
+}
+
+#[tauri::command]
 pub async fn wa_link_thumbnail(mgr: Mgr<'_>, chat_id: String, message_id: String) -> Result<String, String> {
     mgr.link_thumbnail(&chat_id, &message_id).await
 }

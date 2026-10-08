@@ -105,6 +105,28 @@ pub struct CdnRef {
     pub width: u32,
     #[serde(default)]
     pub height: u32,
+    /// `gif`, `video`, `voice`, `audio`, `sticker` or `file`, as
+    /// [`MediaRef::kind`] names them; `None` for a photo, which is all that
+    /// was kept before the other kinds were.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
+}
+
+impl CdnRef {
+    /// Shown as an attachment rather than as the message's photo.
+    pub fn attachment(&self) -> Option<AttachmentDto> {
+        let kind = self.kind.clone()?;
+        Some(AttachmentDto {
+            kind,
+            mime: self.mime.clone().unwrap_or_default(),
+            file_name: self.file_name.clone(),
+            size: u32::try_from(self.size).unwrap_or(u32::MAX),
+            width: Some(self.width).filter(|w| *w > 0),
+            height: Some(self.height).filter(|h| *h > 0),
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -127,7 +149,7 @@ pub struct Content {
     /// older files and moved into `attachments`.
     #[serde(default, skip_serializing)]
     pub media: Option<MediaRef>,
-    /// A WhatsApp attachment; `attachments` are Signal's.
+    /// A WhatsApp message's file; `attachments` are Signal's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wa_media: Option<CdnRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -161,6 +183,19 @@ impl Content {
             wa_media: None,
             link: None,
         }
+    }
+
+    /// A WhatsApp photo or file stored before its download reference was
+    /// kept, so it cannot be fetched until history sends the message again.
+    pub fn lacks_wa_file(&self) -> bool {
+        const NO_FILE: [&str; 5] = ["Location", "Live location", "Contact", "Contacts", "Poll"];
+        self.wa_media.is_none()
+            && self.attachments.is_empty()
+            && match self.kind {
+                MsgKind::Image | MsgKind::Voice => true,
+                MsgKind::Media => self.media_label.as_deref().is_some_and(|l| !NO_FILE.contains(&l)),
+                MsgKind::Text => false,
+            }
     }
 
     /// One-line summary used for chat previews and quotes.
@@ -367,7 +402,7 @@ pub struct MessageDto {
     pub status: Option<Delivery>,
     /// The attachment can be fetched.
     pub has_media: bool,
-    /// Signal's attachments, each fetched by its index.
+    /// Every attachment but a WhatsApp photo, each fetched by its index.
     pub attachments: Vec<AttachmentDto>,
     /// The attachment's size in pixels, when known before it is fetched.
     pub media_width: Option<u32>,
@@ -1234,7 +1269,7 @@ impl ChatStore {
         stale
     }
 
-    /// Chats holding a recent photo that cannot be fetched, newest first,
+    /// Chats holding a recent photo or file that cannot be fetched, newest first,
     /// unless they were handed out before. Same shape as `stale_ticks`.
     pub fn stale_media(&mut self, limit: usize, window: usize) -> Vec<(String, String, bool, i64)> {
         if std::mem::replace(&mut self.media_refreshed, true) {
@@ -1249,7 +1284,7 @@ impl ChatStore {
                 let recent = before.iter().rev().take(window);
                 recent
                     .map(|m| &m.content)
-                    .any(|c| c.kind == MsgKind::Image && c.wa_media.is_none() && c.attachments.is_empty())
+                    .any(Content::lacks_wa_file)
                     .then(|| (id.clone(), last.id.clone(), last.from_me, last.ts_ms))
             })
             .collect();
@@ -1517,6 +1552,7 @@ impl ChatStore {
             MsgKind::Media => (None, m.content.media_label.clone()),
             _ => (None, None),
         };
+        let photo = m.content.wa_media.as_ref().filter(|r| r.kind.is_none());
         MessageDto {
             id: m.id.clone(),
             chat_id: chat_id.to_string(),
@@ -1552,9 +1588,10 @@ impl ChatStore {
                     width: Some(a.width).filter(|w| *w > 0),
                     height: Some(a.height).filter(|h| *h > 0),
                 })
+                .chain(m.content.wa_media.as_ref().and_then(CdnRef::attachment))
                 .collect(),
-            media_width: m.content.wa_media.as_ref().map(|r| r.width).filter(|w| *w > 0),
-            media_height: m.content.wa_media.as_ref().map(|r| r.height).filter(|h| *h > 0),
+            media_width: photo.map(|r| r.width).filter(|w| *w > 0),
+            media_height: photo.map(|r| r.height).filter(|h| *h > 0),
             link_preview: m.content.link.as_ref().map(|l| LinkPreviewDto {
                 url: l.url.clone(),
                 title: l.title.clone(),

@@ -151,11 +151,9 @@ export class TauriBackend implements ChatBackend {
     this.prefix = COMMAND_PREFIX[account];
     this.mediaUrl = async (chatId, messageId, index = 0) =>
       fileUrl(await invoke<string>(`${this.prefix}_fetch_media`, { chatId, messageId, index }), "media");
-    if (account === "signal") {
-      this.openMedia = async (chatId, messageId, index) => {
-        await invoke("signal_open_media", { chatId, messageId, index });
-      };
-    }
+    this.openMedia = async (chatId, messageId, index) => {
+      await invoke(`${this.prefix}_open_media`, { chatId, messageId, index });
+    };
     if (account === "whatsapp") {
       this.linkThumbnailUrl = async (chatId, messageId) =>
         fileUrl(await invoke<string>("wa_link_thumbnail", { chatId, messageId }), "media");

@@ -128,7 +128,9 @@ pub struct SignalManager {
 }
 
 /// A file extension for an attachment, so it is served and opened as what it is.
-fn extension(mime: &str, file_name: Option<&str>) -> String {
+pub(crate) fn extension(mime: &str, file_name: Option<&str>) -> String {
+    // Without parameters: WhatsApp's voice messages are `audio/ogg; codecs=opus`.
+    let mime = mime.split(';').next().unwrap_or_default().trim();
     let known = match mime {
         "image/jpeg" => "jpg",
         "image/png" => "png",
@@ -156,7 +158,7 @@ fn extension(mime: &str, file_name: Option<&str>) -> String {
 }
 
 /// A sent file name that is safe to write: no folders, no hidden files.
-fn safe_file_name(name: &str) -> Option<String> {
+pub(crate) fn safe_file_name(name: &str) -> Option<String> {
     let name: String = name
         .rsplit(['/', '\\'])
         .next()?
