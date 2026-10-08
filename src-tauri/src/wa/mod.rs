@@ -19,7 +19,10 @@ use whatsapp_rust::wacore::types::presence::ReceiptType;
 use whatsapp_rust::waproto::buffa::MessageField;
 use whatsapp_rust::waproto::whatsapp::sync_action_value::label_edit_action::ListType;
 use whatsapp_rust::waproto::whatsapp::sync_action_value::{FavoritesAction, LabelEditAction, favorites_action};
-use whatsapp_rust::{AppStateResyncMode, ProfilePictureLookup, RevokeType, WAPatchName, schemas};
+use whatsapp_rust::{
+    AppStateResyncMode, ErrorChainExt, MediaRetryResult, MediaReuploadRequest, ProfilePictureLookup, RevokeType, WAPatchName,
+    schemas,
+};
 
 use crate::account::{
     AccountState as WaState, AccountStatus as WaStatus, Me, lock, render_qr, secure_dir,
@@ -45,6 +48,33 @@ const AVATAR_PACE: Duration = Duration::from_millis(150);
 const TICK_CHATS: usize = 40;
 const TICK_MESSAGES: usize = 50;
 const TICK_PACE: Duration = Duration::from_secs(1);
+
+/// Why a CDN fetch failed. `Rejected` means the reference itself is no longer
+/// served, which a re-upload can fix.
+enum CdnError {
+    Rejected(String),
+    Failed(String),
+}
+
+impl From<String> for CdnError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+
+impl From<&str> for CdnError {
+    fn from(message: &str) -> Self {
+        Self::Failed(message.to_string())
+    }
+}
+
+impl From<CdnError> for String {
+    fn from(error: CdnError) -> Self {
+        match error {
+            CdnError::Rejected(message) | CdnError::Failed(message) => message,
+        }
+    }
+}
 
 pub struct WaManager {
     app: AppHandle,
@@ -466,7 +496,7 @@ impl WaManager {
         dir_name: &str,
         prefix: &str,
         media_type: MediaType,
-    ) -> Result<String, String> {
+    ) -> Result<String, CdnError> {
         let decode = |field: &str| BASE64.decode(field).map_err(|e| format!("Bad file reference: {e}"));
         let sha256 = decode(&file.sha256)?;
         let extension = match file.mime.as_deref() {
@@ -493,10 +523,11 @@ impl WaManager {
             file.size,
             media_type,
         );
-        let bytes = client
-            .download_from_params(&params)
-            .await
-            .map_err(|e| format!("Could not download the file: {e}"))?;
+        let bytes = client.download_from_params(&params).await.map_err(|e| {
+            let rejected = matches!(e.http_status(), Some(401 | 403 | 404 | 410));
+            let message = format!("Could not download the file: {e}");
+            if rejected { CdnError::Rejected(message) } else { CdnError::Failed(message) }
+        })?;
         secure_dir(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
         fs::write(dir.join(&name), bytes).map_err(|e| format!("could not save {name}: {e}"))?;
         Ok(name)
@@ -507,7 +538,47 @@ impl WaManager {
         let file = lock(&self.store)
             .wa_media(chat_id, message_id)
             .ok_or("This message has no attachment to fetch.")?;
-        self.fetch_cdn(file, MEDIA_DIR, "wa", MediaType::Image).await
+        match self.fetch_cdn(file.clone(), MEDIA_DIR, "wa", MediaType::Image).await {
+            // WhatsApp drops media from its CDN after a few weeks; the sender's
+            // phone can upload it again if it still has the file.
+            Err(CdnError::Rejected(_)) => {
+                let path = self
+                    .reupload_media(chat_id, message_id, &file)
+                    .await
+                    .inspect_err(|e| log::warn!("whatsapp: photo {message_id} expired and was not re-uploaded: {e}"))?;
+                lock(&self.store).set_wa_media_path(chat_id, message_id, &path);
+                self.mark_dirty();
+                Ok(self.fetch_cdn(CdnRef { path, ..file }, MEDIA_DIR, "wa", MediaType::Image).await?)
+            }
+            other => Ok(other?),
+        }
+    }
+
+    /// Asks the phone that sent a message to put its photo back on the CDN,
+    /// returning the new path.
+    async fn reupload_media(&self, chat_id: &str, message_id: &str, file: &CdnRef) -> Result<String, String> {
+        let client = self.connected_client().await?;
+        let (sender, from_me) = lock(&self.store).star_target(chat_id, message_id).ok_or("That message is gone.")?;
+        let chat: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
+        let sender = sender.and_then(|s| s.parse::<Jid>().ok());
+        let media_key = BASE64.decode(&file.key).map_err(|e| format!("Bad file reference: {e}"))?;
+        let participant = sender.filter(|_| !from_me && (chat_id.ends_with("@g.us") || chat_id == "status@broadcast"));
+        let result = client
+            .media_reupload()
+            .request(&MediaReuploadRequest {
+                msg_id: message_id,
+                chat_jid: &chat,
+                media_key: &media_key,
+                is_from_me: from_me,
+                participant: participant.as_ref(),
+            })
+            .await
+            .map_err(|e| format!("The phone did not send the photo again: {e}"))?;
+        match result {
+            MediaRetryResult::Success { direct_path } => Ok(direct_path),
+            MediaRetryResult::NotFound => Err("The photo is no longer on the phone that sent it.".into()),
+            other => Err(format!("The phone could not send the photo again: {other:?}")),
+        }
     }
 
     /// Fetches the full-size picture of a message's link card and returns its
@@ -516,7 +587,7 @@ impl WaManager {
         let file = lock(&self.store)
             .link_thumbnail(chat_id, message_id)
             .ok_or("This link has no larger picture.")?;
-        self.fetch_cdn(file, LINK_THUMB_DIR, "link", MediaType::LinkThumbnail).await
+        Ok(self.fetch_cdn(file, LINK_THUMB_DIR, "link", MediaType::LinkThumbnail).await?)
     }
 
     pub async fn react(&self, chat_id: &str, message_id: &str, emoji: &str) -> Result<MessageDto, String> {

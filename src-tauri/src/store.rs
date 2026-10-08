@@ -1325,6 +1325,19 @@ impl ChatStore {
         self.find_message(chat, id)?.1.content.wa_media.clone()
     }
 
+    /// Points a message's photo at the path the sender's phone re-uploaded it to.
+    pub fn set_wa_media_path(&mut self, chat: &str, id: &str, path: &str) {
+        let chat_id = self.canonical(chat);
+        if let Some(media) = self
+            .chats
+            .get_mut(&chat_id)
+            .and_then(|c| c.messages.iter_mut().find(|m| m.id == id))
+            .and_then(|m| m.content.wa_media.as_mut())
+        {
+            media.path = path.to_string();
+        }
+    }
+
     pub fn link_thumbnail(&self, chat: &str, id: &str) -> Option<CdnRef> {
         self.find_message(chat, id)?.1.content.link.as_ref()?.large.clone()
     }
