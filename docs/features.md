@@ -44,6 +44,11 @@ Everything Omega Zap does today, network by network. For what is still missing, 
   24 hours, 7 days or 30 days.
 - **Edits.** An edited message shows its new text with "Edited". Your own texts can be edited from
   the message menu for 15 minutes after sending on WhatsApp, and for 24 hours on Signal.
+- **Polls.** A poll shows each option's share of the votes; click an option to vote, again to take
+  the vote back, and **View votes** for who picked what. WhatsApp only; creating polls isn't done yet.
+- **Locations and contact cards.** A shared place shows its map, name and address and opens in maps.
+  A contact card shows the name and number, and **Message** opens a chat when the number has
+  WhatsApp. WhatsApp only.
 - **Search.** The sidebar search finds chats and then messages across every chat; **Ctrl+F** searches
   inside a chat and marks the words. Case and accents are ignored.
 - **New chat.** Your contacts A to Z, and yourself. On WhatsApp you can also type a full phone number.

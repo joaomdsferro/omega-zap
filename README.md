@@ -68,6 +68,7 @@ Windows and macOS builds are not available yet.
 | Archive, pin, and mute for 8 hours, a week or always | ✅ | on this computer |
 | Typing, online and last seen, with privacy settings | ✅ | ❌ |
 | Editing your texts, and seeing others' edits | ✅ | ✅ |
+| Polls (voting), locations and contact cards | ✅ | ❌ |
 | Recording voice messages | ❌ | ❌ |
 
 Both accounts can be used side by side or merged into one chat list. The interface looks like
