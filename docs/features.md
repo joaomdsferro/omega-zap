@@ -28,6 +28,8 @@ Everything Omega Zap does today, network by network. For what is still missing, 
   archives. Signal keeps them on this computer, allows four pins, and brings an archived chat back when
   a message arrives, unless it is muted.
 - **Unread.** Chats open at the first unread message, under an "N unread messages" divider.
+- **Jump to present.** Scrolled up in a chat, a button takes you back to the newest message and counts
+  what came in meanwhile.
   Right-click a chat to **Mark as unread** or **Mark as read**; a marked chat shows a dot and "Marked
   unread". On WhatsApp the mark syncs with the phone both ways.
 - **Contact info.** Click a sender's name in a group, a mention, or the header of a chat with one
@@ -38,7 +40,7 @@ Everything Omega Zap does today, network by network. For what is still missing, 
   contact info. WhatsApp only.
 - **Pinned messages.** Messages pinned in a WhatsApp chat show in a bar over the conversation, one at a
   time; click it to go to the message and bring up the next. Pinned messages carry a small pin, and the
-  conversation says who pinned what ("You pinned a message"). Pin or unpin from the message menu, for
+  conversation says who pinned or unpinned what, and when. Pin or unpin from the message menu, for
   24 hours, 7 days or 30 days.
 - **Edits.** On WhatsApp an edited message shows its new text with "Edited". Your own texts can be
   edited from the message menu for 15 minutes after sending.
