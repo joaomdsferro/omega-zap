@@ -15,8 +15,19 @@ fn reply_ref(ctx: &wa::ContextInfo) -> Option<ReplyRef> {
     let text = content(quoted).map(|c| c.preview()).unwrap_or_else(|| "Message".into());
     Some(ReplyRef {
         author_jid: ctx.participant.clone(),
+        id: ctx.stanza_id.clone(),
         text,
     })
+}
+
+/// What a message's context says: the message it answers, and whether it
+/// was forwarded.
+fn with_context(c: &mut Content, ctx: &MessageField<wa::ContextInfo>) {
+    let Some(ctx) = ctx.as_option() else { return };
+    c.reply_to = reply_ref(ctx);
+    if ctx.is_forwarded == Some(true) {
+        c.forwarded = ctx.forwarding_score.unwrap_or(0).max(1);
+    }
 }
 
 fn encoded(field: &Option<Vec<u8>>) -> Option<String> {
@@ -33,20 +44,56 @@ fn large_thumbnail(ext: &wa::message::ExtendedTextMessage) -> Option<CdnRef> {
         mime: None,
         width: ext.thumbnail_width.unwrap_or_default(),
         height: ext.thumbnail_height.unwrap_or_default(),
+        kind: None,
+        file_name: None,
     })
 }
 
-fn image_ref(image: &wa::message::ImageMessage) -> Option<CdnRef> {
+/// The fields every WhatsApp media message carries, whatever its type.
+struct Fields<'a> {
+    direct_path: &'a Option<String>,
+    media_key: &'a Option<Vec<u8>>,
+    file_sha256: &'a Option<Vec<u8>>,
+    file_enc_sha256: &'a Option<Vec<u8>>,
+    file_length: Option<u64>,
+    mimetype: &'a Option<String>,
+}
+
+/// Where a file is on the CDN. `kind` is `None` for a photo.
+fn file_ref(f: Fields<'_>, kind: Option<&str>, width: Option<u32>, height: Option<u32>) -> Option<CdnRef> {
     Some(CdnRef {
-        path: non_empty(&image.direct_path)?,
-        key: encoded(&image.media_key)?,
-        sha256: encoded(&image.file_sha256)?,
-        enc_sha256: encoded(&image.file_enc_sha256)?,
-        size: image.file_length.unwrap_or_default(),
-        mime: non_empty(&image.mimetype),
-        width: image.width.unwrap_or_default(),
-        height: image.height.unwrap_or_default(),
+        path: non_empty(f.direct_path)?,
+        key: encoded(f.media_key)?,
+        sha256: encoded(f.file_sha256)?,
+        enc_sha256: encoded(f.file_enc_sha256)?,
+        size: f.file_length.unwrap_or_default(),
+        mime: non_empty(f.mimetype),
+        width: width.unwrap_or_default(),
+        height: height.unwrap_or_default(),
+        kind: kind.map(str::to_string),
+        file_name: None,
     })
+}
+
+macro_rules! fields {
+    ($m:expr) => {
+        Fields {
+            direct_path: &$m.direct_path,
+            media_key: &$m.media_key,
+            file_sha256: &$m.file_sha256,
+            file_enc_sha256: &$m.file_enc_sha256,
+            file_length: $m.file_length,
+            mimetype: &$m.mimetype,
+        }
+    };
+}
+
+fn image_ref(image: &wa::message::ImageMessage) -> Option<CdnRef> {
+    file_ref(fields!(image), None, image.width, image.height)
+}
+
+fn video_ref(video: &wa::message::VideoMessage, kind: &str) -> Option<CdnRef> {
+    file_ref(fields!(video), Some(kind), video.width, video.height)
 }
 
 /// The link card of a text message, when the sender's phone made one.
@@ -80,39 +127,56 @@ pub fn content(message: &wa::Message) -> Option<Content> {
     }
     if let Some(ext) = base.extended_text_message.as_option() {
         let text = non_empty(&ext.text)?;
-        let reply = ext.context_info.as_option().and_then(reply_ref);
-        let mut c = Content::text(text, reply);
+        let mut c = Content::text(text, None);
+        with_context(&mut c, &ext.context_info);
         c.link = link_preview(ext);
         return Some(c);
     }
     if let Some(image) = base.image_message.as_option() {
         let mut c = Content::media(MsgKind::Image, "Photo", non_empty(&image.caption));
-        c.reply_to = image.context_info.as_option().and_then(reply_ref);
+        with_context(&mut c, &image.context_info);
         c.wa_media = image_ref(image);
         return Some(c);
     }
     if let Some(video) = base.video_message.as_option() {
-        return Some(Content::media(MsgKind::Media, "Video", non_empty(&video.caption)));
+        let gif = video.gif_playback == Some(true);
+        let mut c = Content::media(MsgKind::Media, if gif { "GIF" } else { "Video" }, non_empty(&video.caption));
+        with_context(&mut c, &video.context_info);
+        c.wa_media = video_ref(video, if gif { "gif" } else { "video" });
+        return Some(c);
     }
-    if base.ptv_message.as_option().is_some() {
-        return Some(Content::media(MsgKind::Media, "Video message", None));
+    if let Some(video) = base.ptv_message.as_option() {
+        let mut c = Content::media(MsgKind::Media, "Video message", None);
+        with_context(&mut c, &video.context_info);
+        c.wa_media = video_ref(video, "video");
+        return Some(c);
     }
     if let Some(audio) = base.audio_message.as_option() {
-        if audio.ptt == Some(true) {
-            let mut c = Content::media(MsgKind::Voice, "Voice message", None);
-            c.voice_seconds = audio.seconds;
-            return Some(c);
-        }
-        return Some(Content::media(MsgKind::Media, "Audio", None));
+        let voice = audio.ptt == Some(true);
+        let mut c = if voice {
+            Content::media(MsgKind::Voice, "Voice message", None)
+        } else {
+            Content::media(MsgKind::Media, "Audio", None)
+        };
+        c.voice_seconds = audio.seconds;
+        with_context(&mut c, &audio.context_info);
+        c.wa_media = file_ref(fields!(audio), Some(if voice { "voice" } else { "audio" }), None, None);
+        return Some(c);
     }
     if let Some(doc) = base.document_message.as_option() {
         let name = non_empty(&doc.file_name)
             .or_else(|| non_empty(&doc.title))
             .unwrap_or_else(|| "Document".into());
-        return Some(Content::media(MsgKind::Media, name, non_empty(&doc.caption)));
+        let mut c = Content::media(MsgKind::Media, name.clone(), non_empty(&doc.caption));
+        with_context(&mut c, &doc.context_info);
+        c.wa_media = file_ref(fields!(doc), Some("file"), None, None).map(|r| CdnRef { file_name: Some(name), ..r });
+        return Some(c);
     }
-    if base.sticker_message.as_option().is_some() {
-        return Some(Content::media(MsgKind::Media, "Sticker", None));
+    if let Some(sticker) = base.sticker_message.as_option() {
+        let mut c = Content::media(MsgKind::Media, "Sticker", None);
+        with_context(&mut c, &sticker.context_info);
+        c.wa_media = file_ref(fields!(sticker), Some("sticker"), sticker.width, sticker.height);
+        return Some(c);
     }
     if let Some(location) = base.location_message.as_option() {
         return Some(Content::media(MsgKind::Media, "Location", non_empty(&location.name)));

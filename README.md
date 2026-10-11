@@ -1,176 +1,162 @@
+<div align="center">
+
+<img src="src-tauri/icons/128x128@2x.png" alt="Omega Zap" width="112" />
+
 # Omega Zap
 
-**WhatsApp and Signal, native — with a modern UI.** Omega Zap is a desktop
-companion client inspired by [ZapFast](https://github.com/crmne/zapfast): no
-Chromium browser shell, linked to your phone. The UI is Tauri 2 + React; the
-WhatsApp Web protocol runs in Rust through
-[`whatsapp-rust`](https://github.com/oxidezap/whatsapp-rust), and Signal through
-[`presage`](https://github.com/whisperfish/presage).
+### WhatsApp and Signal in one native desktop app.
+
+**Linked to your phone. No browser shell. Everything kept on your computer, encrypted.**
+
+[![Release](https://img.shields.io/github/v/release/joaomdsferro/omega-zap?include_prereleases&style=flat-square&label=release&color=0e9e7b)](https://github.com/joaomdsferro/omega-zap/releases)
+[![Release build](https://img.shields.io/github/actions/workflow/status/joaomdsferro/omega-zap/release.yml?style=flat-square&label=build)](https://github.com/joaomdsferro/omega-zap/actions/workflows/release.yml)
+[![Platform](https://img.shields.io/badge/platform-Linux-333?style=flat-square&logo=linux&logoColor=white)](#install)
+[![Tauri 2](https://img.shields.io/badge/Tauri-2-24c8db?style=flat-square&logo=tauri&logoColor=white)](https://v2.tauri.app)
+[![MIT license](https://img.shields.io/badge/license-MIT-f4c430?style=flat-square)](LICENSE)
+
+[Install](#install) · [Features](#features) · [How it works](#how-it-works) · [Privacy](#privacy) · [FAQ](#faq) · [Contributing](CONTRIBUTING.md)
+
+<br />
+
+<img src="docs/assets/screenshot.png" alt="Omega Zap showing a group chat in the WhatsApp dark theme, with the chat list on the left" width="1000" />
+
+</div>
+
+---
 
 > [!WARNING]
-> **Extremely early stage (v0.0.x).** Expect bugs, missing features, breaking
-> changes and data being wiped between versions. Omega Zap is an unofficial
-> client, not affiliated with WhatsApp/Meta or Signal; using unofficial clients
-> may put your account at risk. Use at your own risk.
+> **Early test version (v0.0.x).** Expect bugs, missing features, and changes that may ask you to link
+> your accounts again. Omega Zap is an unofficial client, not affiliated with WhatsApp, Meta or Signal;
+> using an unofficial client may put your accounts at risk.
 
-## Run
+Omega Zap is a desktop client for WhatsApp and Signal, part of the open-source
+[Omega](#about-omega) family. It links to your phone like WhatsApp Web or Signal Desktop do, but runs
+natively: the UI is a small Tauri window and both protocols run in Rust. Close the window and it keeps
+running in the tray, using a fraction of the memory.
 
-Requirements: Rust (stable, 1.94+), Node.js, [pnpm](https://pnpm.io), and the
-Linux GUI build deps for Tauri (see
-[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)).
+## Install
+
+Download the package for your distribution from the
+[latest release](https://github.com/joaomdsferro/omega-zap/releases):
+
+| Distribution | Package | Install |
+| --- | --- | --- |
+| Debian, Ubuntu, Mint, Pop!_OS | `.deb` | `sudo apt install ./Omega*Zap_*_amd64.deb` |
+| Fedora, openSUSE | `.rpm` | `sudo dnf install ./Omega*Zap-*.x86_64.rpm` |
+| Any other (Arch, CachyOS…) | `.AppImage` | `chmod +x Omega*Zap_*.AppImage` and run it |
+
+Then **link your accounts**: open Omega Zap and scan the QR code from your phone, under
+**Linked devices → Link a device** in WhatsApp, or **Settings → Linked devices** in Signal. On Signal,
+choose **Transfer message history** to bring your existing chats.
+
+Windows and macOS builds are not available yet.
+
+## Features
+
+| | WhatsApp | Signal |
+| --- | :---: | :---: |
+| Text with formatting, emoji and mentions | ✅ | ✅ |
+| Replies, reactions, forwarding, starred messages | ✅ | ✅ |
+| Photos, videos, GIFs, voice messages, stickers, documents | ✅ | ✅ |
+| Sending files (drop, paste or pick) | ✅ | ✅ |
+| Link cards, sent and received | ✅ | ✅ |
+| Read receipts and delivery ticks | ✅ | ✅ |
+| Desktop notifications, tray with unread badge | ✅ | ✅ |
+| Search across every chat, and inside one | ✅ | ✅ |
+| Full history, fetched from the phone in the background | ✅ | at linking |
+| Favorites and chat lists, in sync with the phone | ✅ | on this computer |
+| Recording voice messages, showing edits | ❌ | ❌ |
+
+Both accounts can be used side by side or merged into one chat list. The interface looks like
+WhatsApp Web by default and also comes in Omega Zap's own themes. See [all features](docs/features.md).
+
+## How it works
+
+```mermaid
+flowchart LR
+  UI["UI<br/>React + TypeScript"] <-->|Tauri commands & events| Core["Core<br/>Rust"]
+  Core <-->|whatsapp-rust| WA["WhatsApp"]
+  Core <-->|JSON lines| Bridge["Signal bridge<br/>presage"]
+  Bridge <--> SG["Signal"]
+  Core --> Disk[("Encrypted store<br/>SQLCipher + AES-GCM")]
+```
+
+The UI talks to the core through one backend interface. WhatsApp runs inside the core; Signal runs
+in a separate bridge process, since its library is AGPL and links a different SQLite. See
+[architecture](docs/architecture.md).
+
+## Privacy
+
+- Messages, media and keys stay on your computer. Nothing goes to a server of ours, because there
+  is none.
+- Everything stored is encrypted: chat history and sessions in SQLCipher, files with AES-256-GCM.
+  The key lives in your desktop keyring (KWallet, GNOME Keyring).
+- To make a card for a link that came without one, the app opens the page itself, from public
+  addresses only. **Settings → Links** turns that off.
+
+## Build from source
+
+Requirements: Rust (stable, 1.94+), Node.js 22+, [pnpm](https://pnpm.io), and the
+[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for Linux.
 
 ```sh
 pnpm install
-pnpm tauri dev
+pnpm tauri dev     # run in development
+pnpm tauri build   # .deb, .rpm and AppImage in src-tauri/target/release/bundle
 ```
 
-`pnpm tauri dev` first builds the Signal bridge (`pnpm signal`), which takes a
-few minutes the first time. `pnpm dev` alone serves the UI in a browser with the
-demo chats only; linking needs the desktop app.
+The first build also compiles the Signal bridge, which takes a few minutes.
 
-## What it does
+## FAQ
 
-- **Looks like WhatsApp Web by default.** The default theme follows your
-  desktop's light or dark preference. **Settings → Theme** also offers WhatsApp
-  light, WhatsApp dark, and two Omega Zap palettes (ink and mint).
-- **Zoom.** `Ctrl +` / `Ctrl −` step between 50% and 200%, `Ctrl 0` resets, and
-  `Ctrl` + mouse wheel works too (`⌘` on macOS). The zoom is also in Settings
-  and is remembered.
-- **Resizable chat list.** Drag the edge between the chat list and the
-  conversation. It stays between 300 and 640 px and never squeezes the
-  conversation below 380 px. Double-click the edge to reset; with the edge
-  focused, the arrow keys, Home and End resize it too.
-- **Link WhatsApp.** Until you link, the app shows demo chats. Click **Link
-  WhatsApp** (in the chat list, the empty screen, or Settings) and scan the QR
-  code from your phone under **Linked devices → Link a device**. After linking,
-  recent history syncs from the phone and new messages arrive live.
-- **Link Signal too.** **Settings → Accounts → Link Signal**, then scan the QR
-  code from Signal on your phone under **Linked devices → Link a new device**.
-  Linking one account never logs out the other. Choose **Transfer message
-  history** on the phone to bring your existing chats (text; media shows as
-  placeholders). That offer only exists while linking: without it, chats appear
-  as new messages arrive. Each code is valid for 90 seconds and is replaced
-  automatically. Each time it starts, the bridge also re-offers the messages
-  of the last 7 days that it has stored, so one that arrived while the app
-  was closing is not lost.
-- **Reactions, on both networks.** Hover a message to react, and click a
-  reaction to take yours back.
-- **Profile pictures, on both networks.** Chats show their picture, and your
-  own sits in the side rail and next to each account in Settings. They are
-  checked again once a day. On Signal a person's picture needs their profile
-  key, which comes from your account's storage service or their messages.
-- **Photos, on both networks.** Photos load in the conversation as you scroll
-  to them. A WhatsApp album shows as one message per photo.
-- **Every Signal attachment.** A Signal message with several photos or videos
-  shows them as a grid, and the viewer steps through each one. Videos play in
-  the chat (those up to 8 MB load as you scroll, so their first frame shows;
-  larger ones load when you press play). GIFs loop, voice messages and audio
-  play with a seek bar, stickers show as pictures, and a document opens in
-  your system's app for it.
-- **Switch accounts, or see everything together.** By default each account is
-  its own space: pick WhatsApp or Signal in the side rail. **Settings → Accounts
-  → Show all chats together** merges them into one list, where a coloured edge
-  and a badge on the picture show which network each chat is on.
-- **Favorites and lists.** Filter the chat list by All, Unread, Favorites,
-  Private (no groups), Groups, or your own lists; each filter counts its unread
-  chats. Right-click a chat (or use the arrow on hover) to add it to your
-  favorites or a list, and press **+** after the filters to make a list.
-  Right-click a list to edit or delete it. On WhatsApp these are the phone's own
-  favorites and lists and stay in sync with it; Signal has none, so there they
-  are kept on this computer.
-- **Starred messages.** Hover a message and press the star. **⋮ → Starred
-  messages** lists them from every chat; click one to jump to it. WhatsApp
-  stars sync with the phone; Signal's stay on this computer.
-- **New chat.** The button next to the title lists your contacts A to Z, and
-  yourself. On WhatsApp you can also type a full phone number, with its country
-  code, to start a chat with anyone on WhatsApp.
-- **Notifications.** New messages, replies ("Replied to you", "Maya replied to
-  Rui") and reactions to your messages show a desktop notification, except for
-  muted chats and the chat you are looking at. Clicking one opens the chat (on
-  Linux). **Settings → Notifications** turns them off or hides the preview.
-- **Basic chatting.** Chat list with search,
-  text messages with quotes (with the name of whoever wrote the quoted
-  message), group sender names, delivery ticks, and sending text. On WhatsApp,
-  videos, voice messages, documents and stickers appear as labelled
-  placeholders; locations and polls do on both networks.
-- **Link cards.** Links are clickable, and a WhatsApp link shows its title and
-  picture. The full-size picture is downloaded from WhatsApp; **Settings →
-  Links** turns that off and keeps the small one that comes with the message.
-- **Short videos play in the chat.** TikTok, Instagram and YouTube Shorts links
-  get a play button that loads the site's own player in the conversation.
-  Nothing is loaded from those sites until you press it. Turn it off under
-  **Settings → Links** to open them in your browser instead.
-- **Read receipts, on both networks.** Opening a chat marks it read on your
-  phone and tells the senders, unless read receipts are turned off in the
-  account's privacy settings. Chats read on the phone lose their unread count
-  here too.
-  Your own messages carry each network's ticks: WhatsApp's turn blue once the
-  message was read (in a group, by everyone), Signal's circles fill in.
-- **Log out** of each account from Settings. For WhatsApp this removes the
-  computer from your linked devices and deletes what Omega Zap stored locally.
-  For Signal it deletes the local session and chats; Signal only lets the phone
-  remove a linked device, so also remove "Omega Zap" under Linked devices there.
+<details>
+<summary><strong>Can my account be banned for using it?</strong></summary>
 
-## Where data lives
+It is possible. WhatsApp and Signal do not allow unofficial clients, and we cannot rule out that an
+account is flagged. Use it with an account you can afford to lose while it is in testing.
+</details>
 
-Linux: `~/.local/share/rocks.omegazap.desktop/` (the directory is `0700`).
+<details>
+<summary><strong>Does my phone need to stay online?</strong></summary>
 
-| File | Contents |
-| --- | --- |
-| `session.db` | The linked-device keys, owned by `whatsapp-rust` |
-| `chats.json` | Chat list and the last 400 messages per chat, **unencrypted** (`0600`) |
-| `linked` | Marker that a session was paired |
-| `signal/signal.db` | The Signal linked-device keys and message store, owned by `presage`, **unencrypted** |
-| `signal/chats.json` | Signal chat list and the last 400 messages per chat, **unencrypted** (`0600`) |
-| `signal/linked` | Marker that a Signal session was paired |
-| `media/`, `signal/media/` | Attachments you have scrolled past or opened, decrypted |
-| `link-thumbs/` | Full-size link pictures from WhatsApp, decrypted |
-| `avatars/`, `signal/avatars/` | Profile pictures, yours included |
+No. Like WhatsApp Web and Signal Desktop, Omega Zap is a linked device and works on its own once
+linked. Fetching older WhatsApp history in the background needs the phone to answer.
+</details>
 
-## Not done yet
+<details>
+<summary><strong>How do I remove it?</strong></summary>
 
-- Sending attachments and recording voice messages, on both networks
-- Message edits and deletions are not shown
-- Group names come from history sync; groups first seen live show as "Group"
-- Encrypted local archive, tray
-- Signal: sending attachments, edits and deletions, starting a chat by phone
-  number (saved contacts work)
-- WhatsApp: albums as a grid; videos, voice messages, documents and stickers
-- More accounts: WhatsApp Business and Telegram, and more than one account per
-  network
+Log out of each account in **Settings → Accounts**, then uninstall the package. Your data lives in
+`~/.local/share/rocks.omegazap.desktop/`; delete that folder to remove everything. On Signal, also
+remove "Omega Zap" from the phone's linked devices.
+</details>
 
-## Stack
+<details>
+<summary><strong>I found a bug. What should I do?</strong></summary>
 
-| Layer | Choice |
-| --- | --- |
-| Shell | Tauri 2 |
-| UI | React 19 + TypeScript + Vite + Tailwind CSS 4 |
-| WhatsApp | `whatsapp-rust` (pinned git revision; the crates.io 0.7.0 release needs nightly) |
-| Signal | `presage` (pinned git revision), in the separate `omega-zap-signal` process |
+[Open an issue](https://github.com/joaomdsferro/omega-zap/issues/new/choose) with what you did, what
+happened and your distribution. Never paste message contents, phone numbers or QR codes.
+</details>
 
-The UI talks to a `ChatBackend` interface (`src/backend`): `MockBackend` for
-the demo, one `TauriBackend` per linked account. On the Rust side,
-`src-tauri/src/store.rs` holds the chat state and persistence both networks
-share. `src-tauri/src/wa/` owns the WhatsApp connection and events (`convert.rs`
-maps WhatsApp messages to the UI model). `src-tauri/src/signal/` starts the
-Signal bridge and turns its events into the same chat state.
+## Documentation
 
-The bridge is its own crate, `signal-sidecar/`. `presage` and `whatsapp-rust`
-need different versions of `libsqlite3-sys`, and Cargo links only one per
-binary, so Signal runs as a second process that exchanges JSON lines with the
-app over stdin and stdout. Tauri bundles it next to the main executable.
+- [Features](docs/features.md): everything the app does, in detail
+- [Architecture](docs/architecture.md): how the code is laid out and where data lives
+- [Contributing](CONTRIBUTING.md): setting up, conventions and pull requests
+- [Security](SECURITY.md): reporting a vulnerability
+
+## About Omega
+
+Omega is a family of open-source apps by the Wisething team and anyone
+who wants to contribute. Each app is small, native and private by default. Omega Zap is the first.
 
 ## Disclaimer
 
-Omega Zap is unofficial and not affiliated with WhatsApp, Meta or Signal. Using
-an unofficial client may violate the networks' terms of service and could risk
-account suspension. Use at your own risk.
-
-ZapFast is MIT-licensed; Omega Zap is a separate project inspired by its goals,
-not a fork of its codebase.
+Omega Zap is not affiliated with, endorsed by or connected to WhatsApp, Meta or Signal. Their names
+and marks belong to their owners. It is inspired by [ZapFast](https://github.com/crmne/zapfast), not a
+fork of it.
 
 ## License
 
-MIT, except `signal-sidecar/`: it links `presage` and `libsignal`, which are
-AGPL-3.0, so the `omega-zap-signal` binary is AGPL-3.0-only. A build that ships
-that binary has to offer its source under the AGPL.
+[MIT](LICENSE), except [`signal-sidecar/`](signal-sidecar): it links `presage` and `libsignal`, which are
+AGPL-3.0, so the `omega-zap-signal` binary is AGPL-3.0-only and its source is offered under that license.

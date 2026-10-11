@@ -125,6 +125,27 @@ export const CheckIcon = (p: IconProps) => (
   </Svg>
 );
 
+export const PhoneIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M6.6 3.5h2.6l1.4 4-2 1.3a11 11 0 0 0 6.6 6.6l1.3-2 4 1.4v2.6a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 4.6 5.7a2 2 0 0 1 2-2.2z" />
+  </Svg>
+);
+
+export const VideoIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="6.5" width="12.5" height="11" rx="2.2" />
+    <path d="m15.5 10.5 5-3v9l-5-3z" />
+  </Svg>
+);
+
+/** A speech bubble with a dot: a chat with something unread. */
+export const UnreadIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M20 12.5a8 8 0 1 1-3.4-6.55" />
+    <circle cx="19" cy="5" r="2.2" fill="currentColor" stroke="none" />
+  </Svg>
+);
+
 export const NewChatIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M20 11.5a8 8 0 0 1-11.7 7.1L4 20l1.4-4.2A8 8 0 1 1 20 11.5z" />
@@ -317,3 +338,11 @@ export function Ticks({ status, account, size = 16 }: { status?: TickStatus; acc
     </svg>
   );
 }
+
+/** A filled person, small enough for a tag. */
+export const PersonIcon = ({ size = 24, ...rest }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden {...rest}>
+    <circle cx="12" cy="7.5" r="5" />
+    <path d="M2.5 22a9.5 9.5 0 0 1 19 0z" />
+  </svg>
+);

@@ -214,13 +214,15 @@ function Tile({ message, index, attachment, loadMedia, onOpen, single, more }: T
       />
     );
   } else if (ready && video) {
+    // Already in memory: loaded in full so WebKit paints a frame, a little
+    // way in, since many videos open on black.
     body = (
       <video
-        src={url}
+        src={`${url}#t=0.1`}
         onError={() => setBroken(true)}
         muted
         playsInline
-        preload="metadata"
+        preload="auto"
         className="block h-full w-full object-cover"
       />
     );

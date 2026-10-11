@@ -17,9 +17,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::oneshot;
 
-use crate::account::{AccountState, AccountStatus, Me, lock, render_qr, secure_dir};
+use base64::Engine as _;
+use crate::account::{AccountState, AccountStatus, Me, OutgoingFile, OutgoingLink, lock, render_qr, secure_dir};
 use crate::store::{
-    ChatStore, ChatSummary, ContactDto, Content, Deletion, Delivery, Incoming, ListDto, MediaRef, MessageDto, MsgKind,
+    ChatStore, ChatSummary, History, ContactDto, Content, Deletion, Delivery, Incoming, LinkPreview, ListDto, MediaRef, MessageDto, MsgKind,
     OWN_AVATAR, ReplyRef, StarredDto, StoredMessage, avatar_file, now_ms,
 };
 
@@ -30,10 +31,10 @@ const CACHE_FILE: &str = "chats.json";
 const SAVE_INTERVAL: Duration = Duration::from_secs(3);
 pub const MEDIA_DIR: &str = "media";
 pub const AVATAR_DIR: &str = "avatars";
-/// Where the bridge writes a picture before it is known to be a new one.
-const AVATAR_INCOMING: &str = ".incoming";
 const SEND_TIMEOUT: Duration = Duration::from_secs(60);
 const MEDIA_TIMEOUT: Duration = Duration::from_secs(150);
+/// Uploading a file of up to 100 MB, then sending the message.
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 const AVATAR_TIMEOUT: Duration = Duration::from_secs(45);
 /// Pause between profile picture lookups, to stay clear of the rate limit.
 const AVATAR_PACE: Duration = Duration::from_millis(150);
@@ -42,7 +43,17 @@ const AVATAR_PACE: Duration = Duration::from_millis(150);
 #[serde(rename_all = "camelCase")]
 struct Quote {
     author: Option<String>,
+    ts: Option<i64>,
     text: String,
+}
+
+/// A text's formatting as Signal sends it, worked out by the UI.
+#[derive(Deserialize)]
+pub struct Styled {
+    /// The text with its markers taken out.
+    pub body: String,
+    /// `{ start, length, style }` over `body`, passed on to the bridge.
+    pub ranges: Vec<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -102,6 +113,8 @@ enum BridgeEvent {
     },
     ProfileKey { id: String },
     Avatar { id: u64, picture: Option<String>, error: Option<String> },
+    /// A file was uploaded and sent: where it now lives on Signal's CDN.
+    Uploaded { id: u64, media: Option<serde_json::Value>, error: Option<String> },
     Done { id: u64, error: Option<String> },
 }
 
@@ -115,12 +128,16 @@ pub struct SignalManager {
     dir: PathBuf,
     status: Mutex<AccountStatus>,
     store: Mutex<ChatStore>,
+    /// Every message, and the store, on disk.
+    history: History,
     bridge: tokio::sync::Mutex<Option<Bridge>>,
     /// Bumped whenever a bridge is started or torn down, so output from one we
     /// already abandoned is ignored.
     generation: AtomicU64,
     chats_dirty: AtomicBool,
     save_dirty: AtomicBool,
+    /// Wakes the refresh / save loop, which otherwise sleeps.
+    wake: tokio::sync::Notify,
     avatars_running: AtomicBool,
     next_request: AtomicU64,
     /// Commands the bridge has yet to answer. Only some answers carry a value.
@@ -128,7 +145,9 @@ pub struct SignalManager {
 }
 
 /// A file extension for an attachment, so it is served and opened as what it is.
-fn extension(mime: &str, file_name: Option<&str>) -> String {
+pub(crate) fn extension(mime: &str, file_name: Option<&str>) -> String {
+    // Without parameters: WhatsApp's voice messages are `audio/ogg; codecs=opus`.
+    let mime = mime.split(';').next().unwrap_or_default().trim();
     let known = match mime {
         "image/jpeg" => "jpg",
         "image/png" => "png",
@@ -156,7 +175,7 @@ fn extension(mime: &str, file_name: Option<&str>) -> String {
 }
 
 /// A sent file name that is safe to write: no folders, no hidden files.
-fn safe_file_name(name: &str) -> Option<String> {
+pub(crate) fn safe_file_name(name: &str) -> Option<String> {
     let name: String = name
         .rsplit(['/', '\\'])
         .next()?
@@ -166,6 +185,19 @@ fn safe_file_name(name: &str) -> Option<String> {
         .collect();
     let name = name.trim().trim_start_matches('.').to_string();
     (!name.is_empty()).then_some(name)
+}
+
+/// Where a downloaded attachment is kept in the media directory.
+fn media_file_name(media: &MediaRef) -> String {
+    let safe: String = media
+        .cdn_key
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    match (media.kind(), media.file_name.as_deref().and_then(safe_file_name)) {
+        ("file", Some(file_name)) => format!("{safe}/{file_name}"),
+        _ => format!("{safe}.{}", extension(&media.mime, media.file_name.as_deref())),
+    }
 }
 
 fn bridge_path() -> Result<PathBuf, String> {
@@ -182,20 +214,19 @@ impl SignalManager {
     pub fn new(app: AppHandle, dir: PathBuf) -> std::io::Result<Arc<Self>> {
         secure_dir(&dir)?;
         let linked = dir.join(LINKED_MARKER).exists();
-        let store = linked
-            .then(|| fs::read(dir.join(CACHE_FILE)).ok())
-            .flatten()
-            .and_then(|bytes| ChatStore::from_json(&bytes))
-            .unwrap_or_default();
+        let history = History::new(&dir, "signal history", CACHE_FILE);
+        let store = linked.then(|| history.load()).flatten().unwrap_or_default();
         Ok(Arc::new(Self {
             app,
             dir,
             status: Mutex::new(AccountStatus::idle(linked)),
             store: Mutex::new(store),
+            history,
             bridge: tokio::sync::Mutex::new(None),
             generation: AtomicU64::new(0),
             chats_dirty: AtomicBool::new(false),
             save_dirty: AtomicBool::new(false),
+            wake: tokio::sync::Notify::new(),
             avatars_running: AtomicBool::new(false),
             next_request: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
@@ -207,16 +238,23 @@ impl SignalManager {
         let mgr = self.clone();
         tauri::async_runtime::spawn(async move {
             let mut last_save = Instant::now();
+            // Idle until something changes, so a quiet background costs no
+            // wake-ups; then tick until the change is shown and saved.
             loop {
-                tokio::time::sleep(Duration::from_millis(350)).await;
-                if mgr.chats_dirty.swap(false, Ordering::AcqRel) {
-                    let _ = mgr.app.emit("signal://chats", ());
-                }
-                if last_save.elapsed() >= SAVE_INTERVAL
-                    && mgr.save_dirty.swap(false, Ordering::AcqRel)
-                {
-                    mgr.save_now();
-                    last_save = Instant::now();
+                mgr.wake.notified().await;
+                loop {
+                    tokio::time::sleep(Duration::from_millis(350)).await;
+                    if mgr.chats_dirty.swap(false, Ordering::AcqRel) {
+                        let _ = mgr.app.emit("signal://chats", ());
+                        crate::tray::refresh(&mgr.app);
+                    }
+                    if !mgr.save_dirty.load(Ordering::Acquire) {
+                        break;
+                    }
+                    if last_save.elapsed() >= SAVE_INTERVAL && mgr.save_dirty.swap(false, Ordering::AcqRel) {
+                        mgr.save_now();
+                        last_save = Instant::now();
+                    }
                 }
             }
         });
@@ -229,6 +267,10 @@ impl SignalManager {
                 }
             });
         }
+    }
+
+    pub fn unread_total(&self) -> u32 {
+        lock(&self.store).unread_total()
     }
 
     fn is_linked(&self) -> bool {
@@ -261,29 +303,36 @@ impl SignalManager {
     fn mark_dirty(&self) {
         self.chats_dirty.store(true, Ordering::Release);
         self.save_dirty.store(true, Ordering::Release);
+        self.wake.notify_one();
     }
 
     pub fn save_now(&self) {
         if !self.is_linked() {
             return;
         }
-        let bytes = match lock(&self.store).to_json() {
-            Ok(bytes) => bytes,
-            Err(e) => return log::warn!("signal: could not serialize chats: {e}"),
-        };
-        let path = self.dir.join(CACHE_FILE);
-        let tmp = path.with_extension("json.tmp");
-        let result = fs::write(&tmp, bytes).and_then(|_| {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+        self.history.save(&self.store);
+    }
+
+    /// Brings a message that only the history database has back into
+    /// memory, before something is done with it.
+    fn recall(&self, chat_id: &str, message_id: &str) {
+        let chat = {
+            let store = lock(&self.store);
+            if store.has_message(chat_id, message_id) {
+                return;
             }
-            fs::rename(&tmp, &path)
-        });
-        if let Err(e) = result {
-            log::warn!("signal: could not save chats: {e}");
+            store.chat_key(chat_id)
+        };
+        if let Some(message) = self.history.message(&chat, message_id) {
+            lock(&self.store).restore(&chat, message);
         }
+    }
+
+    /// Messages of a chat from before `before_ms`, for scrolling back past
+    /// what memory keeps.
+    pub fn older_messages(&self, chat_id: &str, before_ms: i64, limit: usize) -> Vec<MessageDto> {
+        let older = self.history.older(chat_id, before_ms, limit);
+        lock(&self.store).dtos(chat_id, &older)
     }
 
     fn wipe_files(&self) {
@@ -293,10 +342,9 @@ impl SignalManager {
             format!("{SESSION_FILE}-shm"),
             format!("{SESSION_FILE}-journal"),
             LINKED_MARKER.to_string(),
-            CACHE_FILE.to_string(),
         ];
-        for name in names {
-            let path = self.dir.join(name);
+        self.history.close();
+        for path in names.into_iter().map(|name| self.dir.join(name)).chain(self.history.files()) {
             if path.exists()
                 && let Err(e) = fs::remove_file(&path)
             {
@@ -314,6 +362,7 @@ impl SignalManager {
         *lock(&self.store) = ChatStore::default();
         self.save_dirty.store(false, Ordering::Release);
         self.chats_dirty.store(true, Ordering::Release);
+        self.wake.notify_one();
     }
 
     async fn start_bridge(self: &Arc<Self>, link: bool) -> Result<(), String> {
@@ -330,8 +379,19 @@ impl SignalManager {
             s.qr_svg = None;
         });
 
+        let session = self.dir.join(SESSION_FILE);
+        let key = crate::sqlcipher::key("signal session");
+        {
+            let (session, key) = (session.clone(), key.clone());
+            tauri::async_runtime::spawn_blocking(move || crate::sqlcipher::encrypt_in_place(&session, &key))
+                .await
+                .map_err(|e| e.to_string())??;
+        }
         let mut child = Command::new(bridge_path()?)
-            .arg(self.dir.join(SESSION_FILE))
+            .arg(&session)
+            // Read once by the bridge to open its encrypted store.
+            .env("OMEGA_ZAP_DB_KEY", key)
+            .env("OMEGA_ZAP_RUNTIME_DIR", crate::vault::runtime_dir().map_err(|e| e.to_string())?)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .kill_on_drop(true)
@@ -464,8 +524,17 @@ impl SignalManager {
         lock(&self.store).starred()
     }
 
+    pub fn search(&self, query: &str, chat: Option<&str>) -> Vec<StarredDto> {
+        let saved = self.history.search(query, chat, crate::store::SEARCH_LIMIT);
+        lock(&self.store).search(query, chat, crate::store::SEARCH_LIMIT, saved)
+    }
+
     pub fn contacts(&self) -> Vec<ContactDto> {
         lock(&self.store).contacts()
+    }
+
+    pub fn person(&self, id: &str) -> crate::store::PersonDto {
+        lock(&self.store).person(id)
     }
 
     // Signal has no favorites, lists or stars of its own, so these stay on
@@ -506,6 +575,7 @@ impl SignalManager {
     }
 
     pub fn set_starred(&self, chat_id: &str, message_id: &str, starred: bool) -> Result<MessageDto, String> {
+        self.recall(chat_id, message_id);
         let dto = lock(&self.store)
             .set_starred(chat_id, message_id, starred)
             .ok_or("That message is gone.")?;
@@ -515,8 +585,33 @@ impl SignalManager {
 
     /// Clears the unread count and has the bridge pass the news on: to our
     /// other devices, and to the senders when the account sends read receipts.
+    pub fn person_details(&self, id: &str) -> crate::store::PersonDetailsDto {
+        crate::store::PersonDetailsDto { common_groups: lock(&self.store).common_groups(id), ..Default::default() }
+    }
+
+    /// Mutes a chat for good, or unmutes it, on this computer.
+    pub fn set_muted(&self, chat_id: &str, muted: bool) {
+        lock(&self.store).set_muted(chat_id, muted.then_some(i64::MAX));
+        self.mark_dirty();
+    }
+
+    /// Marks a chat unread, or read. Signal keeps no such mark for linked
+    /// devices, so it stays on this computer.
+    pub fn set_unread(&self, chat_id: &str, unread: bool) {
+        lock(&self.store).set_marked_unread(chat_id, unread);
+        self.mark_dirty();
+    }
+
     pub fn mark_read(self: &Arc<Self>, chat_id: &str) {
-        let read = lock(&self.store).mark_read(chat_id);
+        // Opening a chat asks for this every time; one with nothing unread
+        // changes nothing, and marking it dirty would redraw the chat list.
+        let read = {
+            let mut store = lock(&self.store);
+            if !store.has_unread(chat_id) {
+                return;
+            }
+            store.mark_read(chat_id)
+        };
         self.mark_dirty();
         let messages: Vec<serde_json::Value> = read
             .iter()
@@ -582,27 +677,24 @@ impl SignalManager {
     /// in the media directory: a plain file name, except for documents,
     /// which keep the name they were sent with in a folder of their own.
     pub async fn fetch_media(&self, chat_id: &str, message_id: &str, index: usize) -> Result<String, String> {
+        self.recall(chat_id, message_id);
         let media = lock(&self.store)
             .media(chat_id, message_id, index)
             .ok_or("This attachment is no longer available.")?;
-        let safe: String = media
-            .cdn_key
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-            .collect();
-        let name = match (media.kind(), media.file_name.as_deref().and_then(safe_file_name)) {
-            ("file", Some(file_name)) => format!("{safe}/{file_name}"),
-            _ => format!("{safe}.{}", extension(&media.mime, media.file_name.as_deref())),
-        };
+        let name = media_file_name(&media);
         let dir = self.dir.join(MEDIA_DIR);
         let path = dir.join(&name);
         if path.exists() {
             return Ok(name);
         }
-        secure_dir(&dir).map_err(|e| e.to_string())?;
+        if let Some(parent) = path.parent() {
+            secure_dir(parent).map_err(|e| e.to_string())?;
+        }
+        // The bridge writes it plain into memory, and it is sealed from there.
+        let incoming = crate::vault::handoff_path("signal-media").map_err(|e| e.to_string())?;
         let command = serde_json::json!({
             "cmd": "media",
-            "path": path,
+            "path": incoming,
             "media": {
                 "mime": media.mime,
                 "cdn": media.cdn,
@@ -611,18 +703,27 @@ impl SignalManager {
                 "size": media.size,
             },
         });
-        self.request(command, MEDIA_TIMEOUT)
-            .await
-            .map_err(|e| format!("The attachment was not downloaded: {e}"))?;
+        let fetched = self.request(command, MEDIA_TIMEOUT).await;
+        if let Err(e) = fetched {
+            let _ = fs::remove_file(&incoming);
+            return Err(format!("The attachment was not downloaded: {e}"));
+        }
+        crate::vault::get()
+            .import(&incoming, &path)
+            .map_err(|e| format!("The attachment could not be saved: {e}"))?;
         Ok(name)
     }
 
     /// Downloads an attachment if needed and opens it with the system's app
     /// for its type.
     pub async fn open_media(&self, chat_id: &str, message_id: &str, index: usize) -> Result<(), String> {
+        self.recall(chat_id, message_id);
         use tauri_plugin_opener::OpenerExt;
         let name = self.fetch_media(chat_id, message_id, index).await?;
-        let path = self.dir.join(MEDIA_DIR).join(name);
+        let file_name = Path::new(&name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let path = crate::vault::get()
+            .export(&self.dir.join(MEDIA_DIR).join(&name), &file_name)
+            .map_err(|e| format!("The attachment could not be opened: {e}"))?;
         self.app
             .opener()
             .open_path(path.to_string_lossy(), None::<&str>)
@@ -654,16 +755,22 @@ impl SignalManager {
         stored: Option<&str>,
     ) -> Result<Option<String>, String> {
         let have = stored.filter(|id| dir.join(avatar_file(owner, id)).exists());
-        let incoming = dir.join(AVATAR_INCOMING);
+        let incoming = crate::vault::handoff_path("signal-avatar").map_err(|e| e.to_string())?;
         let command = serde_json::json!({
             "cmd": "avatar",
             "target": target,
             "have": have,
             "path": incoming,
         });
-        let picture = self.request(command, AVATAR_TIMEOUT).await?;
-        if let Some(id) = picture.as_deref().filter(|id| Some(*id) != have) {
-            fs::rename(&incoming, dir.join(avatar_file(owner, id))).map_err(|e| e.to_string())?;
+        let picture = self.request(command, AVATAR_TIMEOUT).await;
+        let picture = picture.inspect_err(|_| {
+            let _ = fs::remove_file(&incoming);
+        })?;
+        match picture.as_deref().filter(|id| Some(*id) != have) {
+            Some(id) => crate::vault::get().import(&incoming, &dir.join(avatar_file(owner, id))).map_err(|e| e.to_string())?,
+            None => {
+                let _ = fs::remove_file(&incoming);
+            }
         }
         if let Some(old) = stored.filter(|old| Some(*old) != picture.as_deref()) {
             let _ = fs::remove_file(dir.join(avatar_file(owner, old)));
@@ -716,6 +823,7 @@ impl SignalManager {
 
     /// Reacts to a message, or takes the reaction back when it is already there.
     pub async fn react(&self, chat_id: &str, message_id: &str, emoji: &str) -> Result<MessageDto, String> {
+        self.recall(chat_id, message_id);
         let (target, me) = {
             let store = lock(&self.store);
             (
@@ -747,6 +855,7 @@ impl SignalManager {
     /// Deletes a message here, or for everyone when `for_everyone` and it is
     /// ours. Returns what is left of it, if anything is shown.
     pub async fn delete_message(&self, chat_id: &str, message_id: &str, for_everyone: bool) -> Result<Option<MessageDto>, String> {
+        self.recall(chat_id, message_id);
         if for_everyone {
             let target = lock(&self.store).quote_source(chat_id, message_id).ok_or("That message is gone.")?;
             if !target.from_me {
@@ -764,32 +873,26 @@ impl SignalManager {
     }
 
     /// Sends a text, quoting the message `reply_to` when there is one.
-    pub async fn send_text(&self, chat_id: &str, text: &str, reply_to: Option<&str>) -> Result<MessageDto, String> {
-        let text = text.trim();
-        if text.is_empty() {
-            return Err("The message is empty.".into());
-        }
-        let quoted = match reply_to {
-            Some(id) => {
-                let store = lock(&self.store);
-                let source = store.quote_source(chat_id, id).ok_or("That message is gone.")?;
-                let author = match source.sender {
-                    Some(sender) if !source.from_me => sender,
-                    _ => store.own_id().ok_or("Signal is not connected.")?.to_string(),
-                };
-                Some((source.ts_ms, ReplyRef { author_jid: Some(author), text: source.text }))
-            }
-            None => None,
+    /// The message `reply_to` names, as the bridge quotes it and as it is
+    /// shown here.
+    fn quote(&self, chat_id: &str, reply_to: Option<&str>) -> Result<Option<(serde_json::Value, ReplyRef)>, String> {
+        let Some(id) = reply_to else {
+            return Ok(None);
         };
-        let ts = now_ms();
-        let quote = quoted.as_ref().map(|(target_ts, reply)| {
-            serde_json::json!({ "ts": target_ts, "author": reply.author_jid, "text": reply.text })
-        });
-        let command = serde_json::json!({ "cmd": "send", "chat": chat_id, "text": text, "ts": ts, "quote": quote });
-        self.request(command, SEND_TIMEOUT)
-            .await
-            .map_err(|e| format!("The message was not sent: {e}"))?;
+        self.recall(chat_id, id);
+        let store = lock(&self.store);
+        let source = store.quote_source(chat_id, id).ok_or("That message is gone.")?;
+        let author = match source.sender {
+            Some(sender) if !source.from_me => sender,
+            _ => store.own_id().ok_or("Signal is not connected.")?.to_string(),
+        };
+        let quote = serde_json::json!({ "ts": source.ts_ms, "author": author, "text": source.text });
+        Ok(Some((quote, ReplyRef { author_jid: Some(author), id: Some(id.to_string()), text: source.text })))
+    }
 
+    /// Files a message we just sent, keyed by its timestamp, and returns it
+    /// as the UI shows it.
+    fn store_sent(&self, chat_id: &str, ts: i64, content: Content) -> Result<MessageDto, String> {
         let is_group = lock(&self.store)
             .list_chats()
             .iter()
@@ -805,7 +908,7 @@ impl SignalManager {
                 from_me: true,
                 ts_ms: ts,
                 author_jid: None,
-                content: Content::text(text, quoted.map(|(_, reply)| reply)),
+                content,
                 status: Some(Delivery::Sent),
                 reactions: Vec::new(),
                 wire: None,
@@ -819,6 +922,140 @@ impl SignalManager {
             .ok_or("The message was sent but could not be shown.")?;
         self.mark_dirty();
         Ok(dto)
+    }
+
+    pub async fn send_text(
+        &self,
+        chat_id: &str,
+        text: &str,
+        reply_to: Option<&str>,
+        link: Option<OutgoingLink>,
+        styled: Option<Styled>,
+    ) -> Result<MessageDto, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("The message is empty.".into());
+        }
+        let (quote, reply) = self.quote(chat_id, reply_to)?.unzip();
+        let ts = now_ms();
+        let link = link.filter(|l| text.contains(&l.url));
+        // The card's picture goes to the bridge as a file, like an attachment,
+        // and is uploaded with the message.
+        let picture = match link.as_ref().and_then(|l| OutgoingLink::decoded(&l.image)) {
+            Some(bytes) => {
+                let staged = crate::vault::handoff_path("signal-outbox").map_err(|e| e.to_string())?;
+                fs::write(&staged, &bytes).map_err(|e| format!("could not hand the link picture over: {e}"))?;
+                Some(staged)
+            }
+            None => None,
+        };
+        let preview = link.as_ref().map(|l| {
+            serde_json::json!({
+                "url": l.url,
+                "title": l.title,
+                "description": l.description,
+                "path": picture,
+                "width": l.width,
+                "height": l.height,
+            })
+        });
+        // Signal formats with ranges over the text without its markers; the
+        // text kept here keeps them, as WhatsApp's does.
+        let (body, ranges) = match styled.filter(|s| !s.ranges.is_empty()) {
+            Some(styled) => (styled.body, styled.ranges),
+            None => (text.to_string(), Vec::new()),
+        };
+        let command = serde_json::json!({
+            "cmd": "send",
+            "chat": chat_id,
+            "text": body,
+            "ts": ts,
+            "quote": quote,
+            "preview": preview,
+            "ranges": ranges,
+        });
+        let sent = self.request(command, UPLOAD_TIMEOUT).await;
+        if let Some(path) = picture {
+            let _ = fs::remove_file(path);
+        }
+        sent.map_err(|e| format!("The message was not sent: {e}"))?;
+        let mut content = Content::text(text, reply);
+        content.link = link.map(|l| LinkPreview {
+            thumbnail: OutgoingLink::decoded(&l.thumbnail)
+                .map(|bytes| format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))),
+            url: l.url,
+            title: l.title,
+            description: l.description,
+            large: None,
+        });
+        self.store_sent(chat_id, ts, content)
+    }
+
+    /// Hands a file to the bridge to upload and send, and keeps it as the
+    /// downloaded copy of the attachment we show.
+    pub async fn send_file(&self, file: OutgoingFile, bytes: Vec<u8>) -> Result<MessageDto, String> {
+        let chat_id = file.chat_id.as_str();
+        let (quote, reply) = self.quote(chat_id, file.reply_to.as_deref())?.unzip();
+        let mime = match file.base_mime() {
+            mime if mime.is_empty() => "application/octet-stream".to_string(),
+            mime => mime,
+        };
+        let (kind, msg_kind, label) = match mime.split('/').next().unwrap_or_default() {
+            // A drawing, not a picture Signal's apps show: it goes as a file.
+            "image" if mime == "image/svg+xml" => ("file", MsgKind::Media, file.name.clone()),
+            "image" => ("image", MsgKind::Image, "Photo".to_string()),
+            "video" => ("video", MsgKind::Media, "Video".to_string()),
+            "audio" => ("audio", MsgKind::Media, "Audio".to_string()),
+            _ => ("file", MsgKind::Media, file.name.clone()),
+        };
+
+        // The bridge reads the file from here rather than through the pipe,
+        // which carries one JSON line per command.
+        // It has to be plain for the bridge, so it waits in memory, not on disk.
+        let ts = now_ms();
+        let staged = crate::vault::handoff_path("signal-outbox").map_err(|e| e.to_string())?;
+        fs::write(&staged, &bytes).map_err(|e| format!("could not hand the file over: {e}"))?;
+        let command = serde_json::json!({
+            "cmd": "send_file",
+            "chat": chat_id,
+            "path": staged,
+            "mime": mime,
+            "fileName": file.name,
+            "kind": kind,
+            "width": file.width,
+            "height": file.height,
+            "caption": file.caption(),
+            "quote": quote,
+            "ts": ts,
+        });
+        let answer = self.request(command, UPLOAD_TIMEOUT).await;
+        let media = match answer {
+            Ok(Some(media)) => serde_json::from_str::<MediaRef>(&media).ok(),
+            Ok(None) => None,
+            Err(e) => {
+                let _ = fs::remove_file(&staged);
+                return Err(format!("The file was not sent: {e}"));
+            }
+        };
+        // Kept where a download of it would go, so it opens without one.
+        match &media {
+            Some(media) => {
+                let path = self.dir.join(MEDIA_DIR).join(media_file_name(media));
+                if let Some(parent) = path.parent() {
+                    let _ = secure_dir(parent);
+                }
+                if let Err(e) = crate::vault::get().import(&staged, &path) {
+                    log::warn!("signal: could not keep a copy of the sent file: {e}");
+                }
+            }
+            None => {
+                let _ = fs::remove_file(&staged);
+            }
+        }
+        let mut content = Content::media(msg_kind, label, file.caption());
+        content.reply_to = reply;
+        content.attachments.extend(media);
+        self.store_sent(chat_id, ts, content)
     }
 
     fn handle_event(self: &Arc<Self>, event: BridgeEvent) {
@@ -885,7 +1122,11 @@ impl SignalManager {
                 self.mark_dirty();
             }
             BridgeEvent::Message { chat, is_group, sender, from_me, ts, kind, text, media_label, quote, attachments, history, delivery } => {
-                let reply_to = quote.map(|q| ReplyRef { author_jid: q.author, text: q.text });
+                let reply_to = quote.map(|q| ReplyRef {
+                    id: q.author.as_deref().zip(q.ts).map(|(author, ts)| self.message_id(author, ts)),
+                    author_jid: q.author,
+                    text: q.text,
+                });
                 let content = Content {
                     kind,
                     text,
@@ -896,6 +1137,7 @@ impl SignalManager {
                     media: None,
                     wa_media: None,
                     link: None,
+                    forwarded: 0,
                 };
                 let id = if from_me { ts.to_string() } else { self.message_id(&sender, ts) };
                 let incoming = Incoming {
@@ -927,13 +1169,14 @@ impl SignalManager {
                     drop(store);
                     let _ = self.app.emit("signal://message", dto);
                     if let Some(notice) = notice {
-                        let _ = self.app.emit("signal://notice", notice);
+                        crate::notify::deliver(&self.app, "signal", "signal://notice", notice);
                     }
                 }
                 self.mark_dirty();
             }
             BridgeEvent::Delete { chat, sender, target_ts, history } => {
                 let id = self.message_id(&sender, target_ts);
+                self.recall(&chat, &id);
                 let deleted = lock(&self.store).delete_message(&chat, &id, Deletion::ForEveryone);
                 if let Some(dto) = deleted {
                     if !history {
@@ -944,6 +1187,7 @@ impl SignalManager {
             }
             BridgeEvent::Reaction { chat, sender, target_author, target_ts, emoji, remove, history } => {
                 let id = self.message_id(&target_author, target_ts);
+                self.recall(&chat, &id);
                 let (changed, notice) = {
                     let mut store = lock(&self.store);
                     let changed = store.set_reaction(&chat, &id, &sender, (!remove).then_some(&emoji));
@@ -959,7 +1203,7 @@ impl SignalManager {
                     self.mark_dirty();
                 }
                 if let Some(notice) = notice {
-                    let _ = self.app.emit("signal://notice", notice);
+                    crate::notify::deliver(&self.app, "signal", "signal://notice", notice);
                 }
             }
             BridgeEvent::History { state, percent, error } => self.set_status(|s| {
@@ -997,6 +1241,11 @@ impl SignalManager {
             BridgeEvent::Avatar { id, picture, error } => {
                 if let Some(waiter) = lock(&self.pending).remove(&id) {
                     let _ = waiter.send(error.map_or(Ok(picture), Err));
+                }
+            }
+            BridgeEvent::Uploaded { id, media, error } => {
+                if let Some(waiter) = lock(&self.pending).remove(&id) {
+                    let _ = waiter.send(error.map_or(Ok(media.map(|m| m.to_string())), Err));
                 }
             }
             BridgeEvent::Done { id, error } => {

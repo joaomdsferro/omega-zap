@@ -22,7 +22,7 @@ use presage_store_sqlite::SqliteStore;
 use protobuf::Message as _;
 use serde::Deserialize;
 
-use crate::{Event, GROUP_PREFIX, Media, Quote, attachment_kind, summarize};
+use crate::{Event, GROUP_PREFIX, Look, Media, Quote, attachment_kind, summarize};
 
 /// How long to wait for the phone to build and upload the archive.
 const UPLOAD_WINDOW: Duration = Duration::from_secs(15 * 60);
@@ -196,7 +196,32 @@ fn describe(item: &proto::chat_item::Item) -> Option<(&'static str, Option<Strin
     use proto::chat_item::Item;
     match item {
         Item::StandardMessage(message) => {
-            let text = Some(message.text.body.clone()).filter(|t| !t.trim().is_empty());
+            let looks: Vec<_> = message
+                .text
+                .bodyRanges
+                .iter()
+                .filter_map(|range| match range.associatedValue {
+                    Some(proto::body_range::AssociatedValue::Style(style)) => {
+                        Some((range.start, range.length, Look::from_style(style.value())?))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let mut mentions: Vec<_> = message
+                .text
+                .bodyRanges
+                .iter()
+                .filter_map(|range| match &range.associatedValue {
+                    Some(proto::body_range::AssociatedValue::MentionAci(aci)) => {
+                        Some((range.start, presage::libsignal_service::prelude::Uuid::from_slice(aci).ok()?.to_string()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            mentions.sort_by_key(|(start, _)| *start);
+            let mentions: Vec<_> = mentions.into_iter().map(|(_, aci)| aci).collect();
+            let text = Some(crate::with_mentions(&crate::with_markers(&message.text.body, &looks), &mentions))
+                .filter(|t| !t.trim().is_empty());
             let kinds: Vec<_> = pointers(item)
                 .into_iter()
                 .map(|(pointer, kind)| (kind, pointer.fileName.clone()))
@@ -288,6 +313,7 @@ async fn read(
                             Some(Recipient::Me) => Some(me.clone()),
                             _ => None,
                         },
+                        ts: q.targetSentTimestamp,
                         text: Some(q.text.body.clone())
                             .filter(|t| !t.trim().is_empty())
                             .unwrap_or_else(|| "Message".into()),
@@ -359,7 +385,7 @@ fn delivery(statuses: &[proto::SendStatus]) -> &'static str {
 
 /// Imports the phone's message history. Linking works without it, so a
 /// failure is reported and nothing more.
-pub async fn import(mut access: HistoryAccess, dir: &Path, mut store: SqliteStore) {
+pub async fn import(mut access: HistoryAccess, dir_fallback: &Path, mut store: SqliteStore) {
     progress("waiting", Some(0), None);
     let outcome = async {
         let Some((cdn, key)) = locate(&access.service).await? else {
@@ -374,6 +400,10 @@ pub async fn import(mut access: HistoryAccess, dir: &Path, mut store: SqliteStor
         if read.is_err() {
             // The phone only uploads once per link. Keeping the archive and
             // its key lets a failed import be retried without linking again.
+            // The key opens it, so both go to the app's private runtime
+            // folder, in memory, rather than next to the encrypted store.
+            let dir = std::env::var_os("OMEGA_ZAP_RUNTIME_DIR").map(std::path::PathBuf::from);
+            let dir = dir.as_deref().unwrap_or(dir_fallback);
             let _ = std::fs::write(dir.join("history-failed.bin"), &archive);
             let _ = std::fs::write(
                 dir.join("history-failed.key"),

@@ -1,0 +1,16 @@
+name: Feature request
+description: Something you'd like Omega Zap to do
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What you'd like
+      description: What you want to do, and why. How the official apps do it helps too.
+    validations:
+      required: true
+  - type: dropdown
+    id: network
+    attributes:
+      label: Network
+      options: [WhatsApp, Signal, Both, Not network-related]

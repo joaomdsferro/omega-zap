@@ -1,6 +1,6 @@
 [package]
 name = "omega-zap-signal"
-version = "0.0.1"
+version = "0.0.2"
 description = "Signal bridge for Omega Zap: links as a secondary device and speaks JSON lines on stdio"
 edition = "2024"
 # presage and libsignal are AGPL-3.0, so this binary is too. It is a separate

@@ -50,14 +50,33 @@ pub fn signal_mark_read(mgr: Mgr<'_>, chat_id: String) {
     mgr.mark_read(&chat_id);
 }
 
+/// Signal tells linked devices nothing more about a person; the groups in
+/// common come from what this computer knows.
+#[tauri::command]
+pub fn signal_person_details(mgr: Mgr<'_>, id: String) -> crate::store::PersonDetailsDto {
+    mgr.person_details(&id)
+}
+
+#[tauri::command]
+pub fn signal_set_muted(mgr: Mgr<'_>, chat_id: String, muted: bool) {
+    mgr.set_muted(&chat_id, muted);
+}
+
+#[tauri::command]
+pub fn signal_set_unread(mgr: Mgr<'_>, chat_id: String, unread: bool) {
+    mgr.set_unread(&chat_id, unread);
+}
+
 #[tauri::command]
 pub async fn signal_send_text(
     mgr: Mgr<'_>,
     chat_id: String,
     text: String,
     reply_to: Option<String>,
+    link: Option<crate::account::OutgoingLink>,
+    styled: Option<super::Styled>,
 ) -> Result<MessageDto, String> {
-    mgr.send_text(&chat_id, &text, reply_to.as_deref()).await
+    mgr.send_text(&chat_id, &text, reply_to.as_deref(), link, styled).await
 }
 
 #[tauri::command]
@@ -78,6 +97,12 @@ pub async fn signal_fetch_media(
     index: Option<usize>,
 ) -> Result<String, String> {
     mgr.fetch_media(&chat_id, &message_id, index.unwrap_or(0)).await
+}
+
+#[tauri::command]
+pub async fn signal_send_file(mgr: Mgr<'_>, request: tauri::ipc::Request<'_>) -> Result<MessageDto, String> {
+    let (file, bytes) = crate::account::outgoing_file(&request)?;
+    mgr.send_file(file, bytes).await
 }
 
 #[tauri::command]
@@ -141,7 +166,24 @@ pub fn signal_starred(mgr: Mgr<'_>) -> Vec<StarredDto> {
     mgr.starred()
 }
 
+/// Messages with the words of `query` in them, newest first.
+/// Messages of a chat from before `before_ms`, oldest first, past what memory keeps.
+#[tauri::command]
+pub fn signal_older_messages(mgr: Mgr<'_>, chat_id: String, before_ms: i64) -> Vec<MessageDto> {
+    mgr.older_messages(&chat_id, before_ms, crate::store::OLDER_PAGE)
+}
+
+#[tauri::command]
+pub fn signal_search(mgr: Mgr<'_>, query: String, chat_id: Option<String>) -> Vec<StarredDto> {
+    mgr.search(&query, chat_id.as_deref())
+}
+
 #[tauri::command]
 pub fn signal_contacts(mgr: Mgr<'_>) -> Vec<ContactDto> {
     mgr.contacts()
+}
+
+#[tauri::command]
+pub fn signal_person(mgr: Mgr<'_>, id: String) -> crate::store::PersonDto {
+    mgr.person(&id)
 }

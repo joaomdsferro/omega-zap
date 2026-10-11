@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name={{name}}
+Comment={{comment}}
+Exec={{exec}}
+Icon={{icon}}
+StartupWMClass={{exec}}
+Categories=Network;InstantMessaging;Chat;
+Keywords=WhatsApp;Signal;chat;messages;
+Terminal=false
+StartupNotify=true
+X-GNOME-UsesNotifications=true

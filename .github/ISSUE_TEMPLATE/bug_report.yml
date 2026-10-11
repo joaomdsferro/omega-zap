@@ -1,0 +1,47 @@
+name: Bug report
+description: Something doesn't work as it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing Omega Zap. **Don't paste message contents, phone numbers or QR codes**; describe them or redact screenshots.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: network
+    attributes:
+      label: Network
+      options: [WhatsApp, Signal, Both, Not network-related]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Omega Zap version
+      placeholder: "0.0.2"
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Distribution and desktop
+      placeholder: "Ubuntu 24.04, GNOME"
+    validations:
+      required: true
+  - type: dropdown
+    id: package
+    attributes:
+      label: Installed from
+      options: [.deb, .rpm, AppImage, Built from source]
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: If you started it from a terminal, anything it printed around the problem. Check it for personal data first.
+      render: text
