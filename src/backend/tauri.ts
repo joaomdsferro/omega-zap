@@ -50,6 +50,7 @@ interface RawChat {
   avatar: string | null;
   favorite: boolean;
   lists: string[];
+  blocked: boolean;
 }
 
 interface RawContact {
@@ -183,6 +184,7 @@ function toChat(raw: RawChat, account: AccountId): Chat {
     isGroup: raw.isGroup,
     favorite: raw.favorite,
     lists: raw.lists,
+    blocked: raw.blocked || undefined,
   };
 }
 
@@ -254,6 +256,7 @@ export class TauriBackend implements ChatBackend {
   watchPresence?: (chatId: string) => Promise<void>;
   privacy?: () => Promise<Privacy>;
   setPrivacy?: (category: PrivacyCategory, value: string) => Promise<void>;
+  setBlocked?: (id: string, blocked: boolean) => Promise<void>;
 
   constructor(readonly account: AccountId) {
     this.prefix = COMMAND_PREFIX[account];
@@ -294,6 +297,7 @@ export class TauriBackend implements ChatBackend {
         };
       };
       this.setPrivacy = (category, value) => invoke("wa_set_privacy", { category, value });
+      this.setBlocked = (id, blocked) => invoke("wa_set_blocked", { id, blocked });
     }
   }
 
@@ -397,6 +401,7 @@ export class TauriBackend implements ChatBackend {
       recentMedia: RawMessage[];
       about: string | null;
       commonGroups: RawGroupRef[];
+      blocked: boolean;
     }>(`${this.prefix}_person`, { id });
     return {
       id: raw.id,
@@ -416,6 +421,7 @@ export class TauriBackend implements ChatBackend {
       recentMedia: raw.recentMedia.map(toMessage),
       about: raw.about ?? undefined,
       commonGroups: raw.commonGroups.map(toGroupRef),
+      blocked: raw.blocked || undefined,
     };
   }
 

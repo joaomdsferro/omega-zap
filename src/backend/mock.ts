@@ -213,6 +213,10 @@ export class MockBackend implements ChatBackend {
     this.update(chatId, { pinned });
   }
 
+  async setBlocked(id: string, blocked: boolean): Promise<void> {
+    this.update(id, { blocked });
+  }
+
   async deleteChat(chatId: string): Promise<void> {
     this.chats = this.chats.filter((c) => c.id !== chatId);
     this.messages.delete(chatId);

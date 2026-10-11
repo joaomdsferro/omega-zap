@@ -254,6 +254,13 @@ export const TrashIcon = (p: IconProps) => (
   </Svg>
 );
 
+export const InfoIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 11v5M12 8h.01" />
+  </Svg>
+);
+
 /** Leaving a group. */
 export const ExitIcon = (p: IconProps) => (
   <Svg {...p}>

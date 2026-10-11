@@ -106,6 +106,11 @@ pub async fn wa_set_archived(mgr: Mgr<'_>, chat_id: String, archived: bool) -> R
 }
 
 #[tauri::command]
+pub async fn wa_set_blocked(mgr: Mgr<'_>, id: String, blocked: bool) -> Result<(), String> {
+    mgr.set_blocked(&id, blocked).await
+}
+
+#[tauri::command]
 pub async fn wa_delete_chat(mgr: Mgr<'_>, chat_id: String) -> Result<(), String> {
     mgr.delete_chat(&chat_id).await
 }

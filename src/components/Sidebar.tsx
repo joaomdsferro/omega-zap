@@ -5,6 +5,7 @@ import { MessageResults } from "./MessageResults";
 import { matches } from "../lib/search";
 import {
   ArchiveIcon,
+  BlockedIcon,
   ClearIcon,
   BackIcon,
   CloseIcon,
@@ -71,6 +72,10 @@ interface SidebarProps {
   /** Ask before emptying or deleting a chat. */
   onClearChat?: (chat: Chat) => void;
   onDeleteChat?: (chat: Chat) => void;
+  /** Ask before blocking or unblocking someone. */
+  onToggleBlocked?: (chat: Chat) => void;
+  /** Whether a chat's account can block. */
+  canBlock?: (chat: Chat) => boolean;
   /** Opens the list editor, with a chat already in the new list. */
   onNewList: (chat?: Chat) => void;
   onEditList: (list: string) => void;
@@ -165,6 +170,8 @@ export function Sidebar({
   onToggleMuted,
   onClearChat,
   onDeleteChat,
+  onToggleBlocked,
+  canBlock,
   onNewList,
   onEditList,
   searchMessages,
@@ -296,8 +303,11 @@ export function Sidebar({
           onSelect: () => onToggleList(chat, name),
         })),
         { label: "New list…", icon: <PlusIcon size={18} />, onSelect: () => onNewList(chat) },
-        ...(onClearChat || onDeleteChat ? ["separator" as const] : []),
+        ...(onClearChat || onDeleteChat || onToggleBlocked ? ["separator" as const] : []),
         ...(onClearChat ? [{ label: "Clear chat", icon: <ClearIcon size={18} />, onSelect: () => onClearChat(chat) }] : []),
+        ...(onToggleBlocked && !chat.isGroup && canBlock?.(chat)
+          ? [{ label: chat.blocked ? "Unblock" : "Block", icon: <BlockedIcon size={18} />, danger: !chat.blocked, onSelect: () => onToggleBlocked(chat) }]
+          : []),
         ...(onDeleteChat
           ? [{ label: "Delete chat", icon: <TrashIcon size={18} />, danger: true, onSelect: () => onDeleteChat(chat) }]
           : []),

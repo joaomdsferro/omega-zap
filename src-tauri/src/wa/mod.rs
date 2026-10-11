@@ -1492,6 +1492,35 @@ impl WaManager {
         });
     }
 
+    /// Looks up who we blocked: the phone can change it without telling us.
+    fn sync_blocklist(self: &Arc<Self>, generation: u64, client: Arc<Client>) {
+        let mgr = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let entries = match client.blocking().get_blocklist().await {
+                Ok(entries) => entries,
+                Err(e) => return log::warn!("whatsapp: blocklist lookup failed: {e}"),
+            };
+            if mgr.generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            if lock(&mgr.store).set_blocklist(entries.into_iter().map(|e| e.jid.to_non_ad_string())) {
+                mgr.mark_dirty();
+            }
+        });
+    }
+
+    /// Blocks someone or unblocks them, here and on the phone.
+    pub async fn set_blocked(&self, id: &str, blocked: bool) -> Result<(), String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = id.parse().map_err(|e| format!("Not a person: {e}"))?;
+        let blocking = client.blocking();
+        if blocked { blocking.block(&jid).await } else { blocking.unblock(&jid).await }
+            .map_err(|e| format!("They were not {}: {e}", if blocked { "blocked" } else { "unblocked" }))?;
+        lock(&self.store).set_blocked(id, blocked);
+        self.mark_dirty();
+        Ok(())
+    }
+
     /// Someone's profile picture at full size, saved encrypted beside the
     /// small ones. Its file name, when they have one we may see.
     async fn full_picture(&self, client: &Client, id: &str, jid: &Jid) -> Option<String> {
@@ -2014,6 +2043,7 @@ impl WaManager {
                 self.refresh_ticks(generation, client.clone());
                 self.fetch_all_history(generation, client.clone());
                 self.sync_participants(generation, client.clone());
+                self.sync_blocklist(generation, client.clone());
                 self.sync_avatars(generation, client);
             }
             Event::Disconnected(_) if self.is_linked() => {

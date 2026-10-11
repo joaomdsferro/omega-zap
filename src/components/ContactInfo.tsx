@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Message, Person, PersonDetails } from "../backend";
 import type { LoadMedia } from "./Attachments";
 import { Avatar } from "./Avatar";
-import { BackIcon, ChevronRightIcon, FileIcon, MuteIcon, NewChatIcon, PhoneIcon, StarIcon, VideoIcon } from "./Icons";
+import { BackIcon, BlockedIcon, ChevronRightIcon, FileIcon, MuteIcon, NewChatIcon, PhoneIcon, StarIcon, TrashIcon, VideoIcon } from "./Icons";
 
 interface ContactInfoProps {
   load: () => Promise<Person>;
@@ -15,10 +15,14 @@ interface ContactInfoProps {
   onOpenGroup?: (id: string) => void;
   onStarred?: () => void;
   onMute?: (person: Person, muted: boolean) => Promise<void>;
+  /** Asks to block or unblock them; settles once it is done, failing when cancelled. */
+  onBlock?: (person: Person, blocked: boolean) => Promise<void>;
+  /** Asks to delete the chat with them. */
+  onDeleteChat?: (person: Person) => void;
 }
 
 /** Someone's contact info, as WhatsApp shows it beside the chat. */
-export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, onOpenGroup, onStarred, onMute }: ContactInfoProps) {
+export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, onOpenGroup, onStarred, onMute, onBlock, onDeleteChat }: ContactInfoProps) {
   const [person, setPerson] = useState<Person | null>(null);
   const [details, setDetails] = useState<PersonDetails | null>(null);
 
@@ -58,6 +62,14 @@ export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, 
     const muted = !person.muted;
     setPerson({ ...person, muted });
     await onMute(person, muted).catch(() => setPerson({ ...person, muted: !muted }));
+  }
+
+  function toggleBlocked() {
+    if (!person || !onBlock) return;
+    const blocked = !person.blocked;
+    onBlock(person, blocked)
+      .then(() => setPerson((now) => now && { ...now, blocked }))
+      .catch(() => {});
   }
 
   // What was found last time shows at once; the network's answer replaces it.
@@ -163,6 +175,21 @@ export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, 
             </Section>
           ) : null}
 
+          {!person.isMe && (onBlock || (onDeleteChat && person.hasChat)) ? (
+            <Section>
+              {onBlock ? (
+                <DangerRow
+                  icon={<BlockedIcon size={20} />}
+                  label={`${person.blocked ? "Unblock" : "Block"} ${person.name}`}
+                  onClick={toggleBlocked}
+                />
+              ) : null}
+              {onDeleteChat && person.hasChat ? (
+                <DangerRow icon={<TrashIcon size={20} />} label="Delete chat" onClick={() => onDeleteChat(person)} />
+              ) : null}
+            </Section>
+          ) : null}
+
           {!person.saved && !person.isMe ? (
             <p className="px-8 py-5 text-center text-[13px] text-(--text-secondary)">Not in your contacts</p>
           ) : null}
@@ -226,6 +253,16 @@ export function Row({ icon, label, value, onClick }: { icon: ReactNode; label: s
       <span className="flex-1 text-[15px] text-(--text-primary)">{label}</span>
       {value ? <span className="text-[14px] text-(--text-secondary)">{value}</span> : null}
       {onClick ? <ChevronRightIcon size={18} className="text-(--text-secondary)" /> : null}
+    </button>
+  );
+}
+
+/** Block, delete, exit: red, as WhatsApp has them at the bottom of the panel. */
+export function DangerRow({ icon, label, onClick }: { icon: ReactNode; label: string; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className="flex w-full items-center gap-5 rounded-lg px-3 py-3 text-left hover:bg-(--hover-bg)">
+      <span className="text-(--danger)">{icon}</span>
+      <span className="flex-1 truncate text-[15px] text-(--danger)">{label}</span>
     </button>
   );
 }

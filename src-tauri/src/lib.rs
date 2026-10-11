@@ -346,6 +346,7 @@ pub fn run() {
             wa::commands::wa_set_privacy,
             wa::commands::wa_set_pinned,
             wa::commands::wa_delete_chat,
+            wa::commands::wa_set_blocked,
             wa::commands::wa_clear_chat,
             wa::commands::wa_lookup_number,
             notify::show_notification,

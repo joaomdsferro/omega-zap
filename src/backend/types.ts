@@ -161,6 +161,8 @@ export interface Chat {
   favorite?: boolean;
   /** Ids of the custom lists the chat is in. */
   lists?: string[];
+  /** We blocked them. */
+  blocked?: boolean;
 }
 
 /** A chat list the user made, such as "Family" or "Work". */
@@ -200,6 +202,8 @@ export interface Person {
   /** As found the last time contact info opened; refreshed by `personDetails`. */
   about?: string;
   commonGroups: GroupRef[];
+  /** We blocked them. */
+  blocked?: boolean;
 }
 
 /** What someone's contact info adds from the network. */
@@ -400,6 +404,8 @@ export interface ChatBackend {
   setArchived?(chatId: string, archived: boolean): Promise<void>;
   /** Pins a chat to the top of the list, or unpins it. */
   setPinned?(chatId: string, pinned: boolean): Promise<void>;
+  /** Blocks someone, or unblocks them. */
+  setBlocked?(id: string, blocked: boolean): Promise<void>;
   /** Deletes a chat and its messages. */
   deleteChat?(chatId: string): Promise<void>;
   /** Empties a chat of its messages, keeping it in the list; starred ones stay when `keepStarred`. */

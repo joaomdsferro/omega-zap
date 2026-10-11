@@ -18,7 +18,8 @@ import { canForward } from "./ForwardDialog";
 import { MessageBubble } from "./MessageBubble";
 import { PinnedBar } from "./PinnedBar";
 import { PinDialog } from "./PinDialog";
-import { CheckIcon, ChevronDownIcon, CloseIcon, ForwardIcon, PinIcon, StarIcon, TrashIcon } from "./Icons";
+import { BlockedIcon, CheckIcon, ChevronDownIcon, ClearIcon, CloseIcon, ForwardIcon, InfoIcon, MoreIcon, MuteIcon, PinIcon, SelectIcon, StarIcon, TrashIcon } from "./Icons";
+import { PopupMenu, type MenuEntry } from "./PopupMenu";
 import { ChatSearch, searchChat } from "./ChatSearch";
 import { searchWords } from "../lib/search";
 import { SearchIcon } from "./Icons";
@@ -74,6 +75,12 @@ interface ChatViewProps {
   onOpenChatId?: (id: string) => void;
   onStarred?: () => void;
   onMuteChat?: (chatId: string, muted: boolean) => Promise<void>;
+  /** Asks to block or unblock someone; settles once it is done, failing when cancelled. */
+  onBlock?: (person: { id: string; name: string }, blocked: boolean) => Promise<void>;
+  /** Asks to empty this chat of its messages. */
+  onClearChat?: () => void;
+  /** Asks to delete a chat of this account: this one, or the one with someone from their contact info. */
+  onDeleteChat?: (id: string, isGroup: boolean) => void;
   /** Tells a chat, named `account:id`, that we are typing or stopped. */
   onTyping?: (chatKey: string, state: TypingState) => void;
   /** Loads the messages from before `before` (an ISO time); false when there are none. */
@@ -94,7 +101,7 @@ interface ChatViewProps {
   pinsTick?: number;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, onVote, onMessageNumber, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, onVote, onMessageNumber, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onBlock, onClearChat, onDeleteChat, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
   const [personId, setPersonId] = useState<string | null>(null);
   const closePerson = useCallback(() => setPersonId(null), []);
   const loadShownPerson = useCallback(() => loadPerson!(personId!), [loadPerson, personId]);
@@ -370,6 +377,26 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
   );
   const stopSelecting = useCallback(() => setPicked(null), []);
 
+  /** The chat's menu, open at a point. */
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => setMenuAt(null), [chatKey]);
+  const blockPerson = onBlock && !chat.isGroup ? (blocked: boolean) => void onBlock({ id: chat.id, name: chat.name }, blocked).catch(() => {}) : undefined;
+  const menuItems: MenuEntry[] = [
+    ...((chat.isGroup ? loadGroup : loadPerson)
+      ? [{ label: chat.isGroup ? "Group info" : "Contact info", icon: <InfoIcon size={18} />, onSelect: () => (chat.isGroup ? setGroupOpen(chatKey) : setPersonId(chat.id)) }]
+      : []),
+    ...(startSelecting ? [{ label: "Select messages", icon: <SelectIcon size={18} />, onSelect: () => setPicked({ chatKey, ids: new Set() }) }] : []),
+    ...(onMuteChat
+      ? [{ label: chat.muted ? "Unmute notifications" : "Mute notifications", icon: <MuteIcon size={18} />, onSelect: () => void onMuteChat(chat.id, !chat.muted).catch(() => {}) }]
+      : []),
+    "separator",
+    ...(onClearChat ? [{ label: "Clear chat", icon: <ClearIcon size={18} />, onSelect: onClearChat }] : []),
+    ...(blockPerson ? [{ label: chat.blocked ? "Unblock" : "Block", icon: <BlockedIcon size={18} />, danger: !chat.blocked, onSelect: () => blockPerson(!chat.blocked) }] : []),
+    ...(onDeleteChat ? [{ label: "Delete chat", icon: <TrashIcon size={18} />, danger: true, onSelect: () => onDeleteChat(chat.id, Boolean(chat.isGroup)) }] : []),
+  ];
+  // No separator at the end.
+  if (menuItems[menuItems.length - 1] === "separator") menuItems.pop();
+
   /** Picks or unpicks `ids` (an album's photos go together); with Shift, picks everything from the last one picked. */
   function togglePicked(ids: string[], range: boolean) {
     setPicked((prev) => {
@@ -584,9 +611,23 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
           >
             <SearchIcon size={20} />
           </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              setMenuAt(menuAt ? null : { x: rect.right - 220, y: rect.bottom + 4 });
+            }}
+            aria-label="Menu"
+            aria-haspopup="menu"
+            aria-expanded={menuAt !== null}
+            className={["flex h-10 w-10 items-center justify-center rounded-full text-(--icon) hover:bg-(--hover-bg)", menuAt ? "bg-(--hover-bg)" : ""].join(" ")}
+          >
+            <MoreIcon size={20} />
+          </button>
           {showAccount ? <AccountBadge account={chat.account} size={26} /> : null}
         </span>
       </header>
+      {menuAt ? <PopupMenu x={menuAt.x} y={menuAt.y} label={`Options for ${chat.name}`} items={menuItems} onClose={() => setMenuAt(null)} /> : null}
       <PinnedBar pins={pins} chatKey={chatKey} onJump={setJumpTo} />
       {searchOpen ? <ChatSearch query={searchQuery} onQuery={setSearchQuery} found={searchFound} onJump={setJumpTo} onClose={() => setSearching(null)} /> : null}
 
@@ -764,6 +805,15 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
           }
           onStarred={onStarred}
           onMute={onMuteChat ? (person, muted) => onMuteChat(person.id, muted) : undefined}
+          onBlock={onBlock}
+          onDeleteChat={
+            onDeleteChat
+              ? (person) => {
+                  setPersonId(null);
+                  onDeleteChat(person.id, false);
+                }
+              : undefined
+          }
         />
       ) : null}
 
@@ -816,6 +866,16 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
       ) : null}
       {/* Kept while selecting, so what was typed stays. */}
       <div className={selection ? "hidden" : "contents"}>
+      {chat.blocked ? (
+        <div className="flex min-h-15.5 shrink-0 items-center justify-center gap-1 border-l border-(--divider) bg-(--panel-header-bg) px-4 py-3 text-center">
+          <span className="text-[14px] text-(--text-secondary)">You blocked this contact.</span>
+          {blockPerson ? (
+            <button type="button" onClick={() => blockPerson(false)} className="rounded px-1 hover:underline">
+              <span className="text-[14px] text-(--accent)">Unblock</span>
+            </button>
+          ) : null}
+        </div>
+      ) : (
       <Composer
         chatId={chatKey}
         account={chat.account}
@@ -844,6 +904,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
         onSend={send}
         onTyping={onTyping}
       />
+      )}
       </div>
     </section>
   );

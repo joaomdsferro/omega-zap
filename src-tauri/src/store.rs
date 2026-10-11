@@ -581,6 +581,8 @@ pub struct ChatSummary {
     pub favorite: bool,
     /// The ids of the lists the chat is in.
     pub lists: Vec<String>,
+    /// We blocked them.
+    pub blocked: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -726,6 +728,8 @@ pub struct PersonDto {
     /// What was found the last time contact info opened, refreshed after.
     pub about: Option<String>,
     pub common_groups: Vec<GroupRefDto>,
+    /// We blocked them.
+    pub blocked: bool,
 }
 
 /// What someone's contact info adds from the network.
@@ -933,6 +937,9 @@ pub struct ChatStore {
     /// Messages to delete from the history database too.
     #[serde(skip)]
     purged: Vec<Purge>,
+    /// People we blocked, as the server last listed them.
+    #[serde(default)]
+    blocked: HashSet<String>,
 }
 
 /// Messages of a chat to delete from the history database: all up to
@@ -969,6 +976,7 @@ impl Default for ChatStore {
             history_complete: HashSet::new(),
             cleared: HashMap::new(),
             purged: Vec::new(),
+            blocked: HashSet::new(),
         }
     }
 }
@@ -1298,6 +1306,7 @@ impl ChatStore {
             starred: chat.map_or(0, |c| c.messages.iter().filter(|m| m.starred).count() as u32),
             media_count,
             recent_media,
+            blocked: self.blocked.contains(&id),
             id,
         }
     }
@@ -1988,6 +1997,23 @@ impl ChatStore {
     /// clearing or deleting it now covers.
     pub fn clear_point(&self, jid: &str) -> i64 {
         self.chats.get(&self.canonical(jid)).map_or(0, |c| c.messages.iter().map(|m| m.ts_ms).max().unwrap_or(0).max(c.last_ts_ms))
+    }
+
+    /// Keeps who we blocked, as the server lists them. Returns whether it changed.
+    pub fn set_blocklist(&mut self, jids: impl IntoIterator<Item = String>) -> bool {
+        let blocked: HashSet<String> = jids.into_iter().map(|j| self.canonical(&j)).collect();
+        let changed = blocked != self.blocked;
+        self.blocked = blocked;
+        changed
+    }
+
+    pub fn set_blocked(&mut self, jid: &str, blocked: bool) {
+        let jid = self.canonical(jid);
+        if blocked {
+            self.blocked.insert(jid);
+        } else {
+            self.blocked.remove(&jid);
+        }
     }
 
     pub fn set_pinned(&mut self, jid: &str, pinned_at_ms: Option<i64>) {
@@ -2691,6 +2717,7 @@ impl ChatStore {
                         .filter(|(_, chats)| chats.contains(id))
                         .map(|(list, _)| list.to_string())
                         .collect(),
+                    blocked: self.blocked.contains(id),
                 }
             })
             .collect();

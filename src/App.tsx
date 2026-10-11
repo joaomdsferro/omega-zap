@@ -241,7 +241,7 @@ function Shell() {
     reject: (reason: unknown) => void;
   } | null>(null);
   /** Something that can't be taken back, waiting to be confirmed. */
-  const [confirming, setConfirming] = useState<ConfirmRequest | null>(null);
+  const [confirming, setConfirming] = useState<(ConfirmRequest & { cancel: () => void }) | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
@@ -817,10 +817,41 @@ function Shell() {
     return account === "whatsapp" ? "this computer and your phone" : "this computer only; your phone keeps them";
   }
 
+  /** Asks before something that can't be taken back. Settles once it is done, failing when cancelled. */
+  function ask(request: ConfirmRequest): Promise<void> {
+    return new Promise((resolve, reject) =>
+      setConfirming({
+        ...request,
+        onConfirm: async (option) => {
+          await request.onConfirm(option);
+          resolve();
+        },
+        cancel: () => reject(new Error("cancelled")),
+      }),
+    );
+  }
+
+  function askBlock(account: AccountId, person: { id: string; name: string }, blocked: boolean): Promise<void> {
+    const backend = backendFor(account);
+    if (!backend?.setBlocked) return Promise.reject(new Error("Blocking isn't available here."));
+    return ask({
+      title: `${blocked ? "Block" : "Unblock"} ${person.name}?`,
+      body: blocked
+        ? "They will no longer be able to call you or send you messages. They won't be told."
+        : "They will be able to call you and send you messages again.",
+      confirmLabel: blocked ? "Block" : "Unblock",
+      danger: blocked,
+      onConfirm: async () => {
+        await backend.setBlocked!(person.id, blocked);
+        patchChat(backend, person.id, { blocked });
+      },
+    });
+  }
+
   function askClearChat(chat: Pick<Chat, "account" | "id">) {
     const backend = backendFor(chat.account);
     if (!backend?.clearChat) return;
-    setConfirming({
+    void ask({
       title: "Clear this chat?",
       body: `The chat stays in your list, empty. Its messages are removed from ${reachOf(chat.account)}.`,
       option: { label: "Keep starred messages", initial: true },
@@ -830,13 +861,13 @@ function Shell() {
         await backend.clearChat!(chat.id, keepStarred);
         patchChat(backend, chat.id, { lastMessage: "", unread: 0, markedUnread: false });
       },
-    });
+    }).catch(() => {});
   }
 
   function askDeleteChat(chat: Pick<Chat, "account" | "id" | "isGroup">) {
     const backend = backendFor(chat.account);
     if (!backend?.deleteChat) return;
-    setConfirming({
+    void ask({
       title: "Delete this chat?",
       body: `Its messages are deleted from ${reachOf(chat.account)}.${chat.isGroup ? " You stay in the group." : ""}`,
       confirmLabel: "Delete chat",
@@ -849,7 +880,7 @@ function Shell() {
         });
         if (selectedRef.current?.account === chat.account && selectedRef.current.id === chat.id) setSelected(null);
       },
-    });
+    }).catch(() => {});
   }
 
   function toggleFavorite(chat: Chat) {
@@ -1234,6 +1265,9 @@ function Shell() {
             ?.setTyping?.(key.slice(at + 1), state)
             .catch(() => {});
         }}
+        onBlock={selectedBackend?.setBlocked ? (person, blocked) => askBlock(selectedChat.account, person, blocked) : undefined}
+        onClearChat={selectedBackend?.clearChat ? () => askClearChat(selectedChat) : undefined}
+        onDeleteChat={selectedBackend?.deleteChat ? (id, isGroup) => askDeleteChat({ account: selectedChat.account, id, isGroup }) : undefined}
         onMuteChat={
           selectedBackend?.setMuted
             ? (chatId, muted) => toggleMuted({ account: selectedChat.account, id: chatId, muted: !muted })
@@ -1348,6 +1382,8 @@ function Shell() {
             onToggleMuted={(chat) => void toggleMuted(chat).catch(() => {})}
             onClearChat={askClearChat}
             onDeleteChat={askDeleteChat}
+            onToggleBlocked={(chat) => void askBlock(chat.account, chat, !chat.blocked).catch(() => {})}
+            canBlock={(chat) => Boolean(backendFor(chat.account)?.setBlocked)}
             onNewList={(chat) => editList(undefined, chat)}
             onEditList={(name) => editList(name)}
             searchMessages={searchMessages}
@@ -1408,7 +1444,16 @@ function Shell() {
           }}
         />
       ) : null}
-      {confirming ? <ConfirmDialog {...confirming} onClose={() => setConfirming(null)} /> : null}
+      {confirming ? (
+        <ConfirmDialog
+          {...confirming}
+          onClose={() => {
+            // After it is done this does nothing: the promise has settled.
+            confirming.cancel();
+            setConfirming(null);
+          }}
+        />
+      ) : null}
       {shortcutsOpen ? <ShortcutsDialog onClose={() => setShortcutsOpen(false)} /> : null}
       {forwarding ? (
         <ForwardDialog
