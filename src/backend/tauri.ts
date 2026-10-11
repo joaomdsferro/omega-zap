@@ -18,6 +18,7 @@ import type {
   Message,
   MessageKind,
   OutgoingLink,
+  GroupRef,
   Person,
   PersonDetails,
   Notice,
@@ -82,6 +83,24 @@ interface RawMessage {
   reactions: ReactionCount[];
   starred: boolean;
   deleted: boolean;
+}
+
+interface RawGroupRef {
+  id: string;
+  name: string;
+  avatar: string | null;
+  members: number | null;
+}
+
+function toGroupRef(g: RawGroupRef): GroupRef {
+  return {
+    id: g.id,
+    name: g.name,
+    avatarUrl: g.avatar ? fileUrl(g.avatar, "avatar") : undefined,
+    avatarHue: hueFor(g.id),
+    initials: initialsFor(g.name),
+    members: g.members ?? undefined,
+  };
 }
 
 function toChat(raw: RawChat, account: AccountId): Chat {
@@ -273,6 +292,8 @@ export class TauriBackend implements ChatBackend {
       starred: number;
       mediaCount: number;
       recentMedia: RawMessage[];
+      about: string | null;
+      commonGroups: RawGroupRef[];
     }>(`${this.prefix}_person`, { id });
     return {
       id: raw.id,
@@ -290,6 +311,8 @@ export class TauriBackend implements ChatBackend {
       starred: raw.starred,
       mediaCount: raw.mediaCount,
       recentMedia: raw.recentMedia.map(toMessage),
+      about: raw.about ?? undefined,
+      commonGroups: raw.commonGroups.map(toGroupRef),
     };
   }
 
@@ -297,19 +320,12 @@ export class TauriBackend implements ChatBackend {
     const raw = await invoke<{
       about: string | null;
       photo: string | null;
-      commonGroups: { id: string; name: string; avatar: string | null; members: number | null }[];
+      commonGroups: RawGroupRef[];
     }>(`${this.prefix}_person_details`, { id });
     return {
       about: raw.about ?? undefined,
       photoUrl: raw.photo ? fileUrl(raw.photo, "avatar") : undefined,
-      commonGroups: raw.commonGroups.map((g) => ({
-        id: g.id,
-        name: g.name,
-        avatarUrl: g.avatar ? fileUrl(g.avatar, "avatar") : undefined,
-        avatarHue: hueFor(g.id),
-        initials: initialsFor(g.name),
-        members: g.members ?? undefined,
-      })),
+      commonGroups: raw.commonGroups.map(toGroupRef),
     };
   }
 

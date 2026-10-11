@@ -1069,40 +1069,53 @@ impl WaManager {
             }
         };
         let photo = self.full_picture(&client, id, &jid).await;
-        // Members of the groups not looked up lately, a few at a time.
-        let groups = lock(&self.store).groups_to_look_up();
-        for batch in groups.chunks(8) {
-            let lookups: Vec<_> = batch
-                .iter()
-                .filter_map(|group| group.parse::<Jid>().ok())
-                .map(|group| {
-                    let client = client.clone();
-                    tauri::async_runtime::spawn(async move { (group.clone(), client.groups().fetch_metadata(&group).await) })
-                })
-                .collect();
-            for lookup in lookups {
-                let Ok((group, result)) = lookup.await else { continue };
-                match result {
-                    Ok(metadata) => {
-                        let members = members_of(&metadata);
-                        lock(&self.store).set_group_participants(&group.to_non_ad_string(), &members);
-                    }
-                    Err(e) => log::warn!("whatsapp: group members lookup failed: {e}"),
-                }
-            }
-        }
+        lock(&self.store).remember_person(id, photo.as_deref(), about.as_deref());
         self.mark_dirty();
         let common_groups = lock(&self.store).common_groups(id);
         Ok(store::PersonDetailsDto { about, photo, common_groups })
+    }
+
+    /// Looks up who is in every group, in one request, at most once a day:
+    /// contact info finds the groups in common from it.
+    fn sync_participants(self: &Arc<Self>, generation: u64, client: Arc<Client>) {
+        if !lock(&self.store).participants_due() {
+            return;
+        }
+        let mgr = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let groups = match client.execute(whatsapp_rust::wacore::iq::groups::GroupParticipatingIq::new()).await {
+                Ok(response) => response.groups,
+                Err(e) => return log::warn!("whatsapp: group members lookup failed: {e}"),
+            };
+            if mgr.generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            {
+                let mut store = lock(&mgr.store);
+                for group in groups {
+                    let metadata = whatsapp_rust::features::GroupMetadata::from(group);
+                    store.set_group_participants(&metadata.id.to_non_ad_string(), &members_of(&metadata));
+                }
+                store.set_participants_synced();
+            }
+            mgr.mark_dirty();
+        });
     }
 
     /// Someone's profile picture at full size, saved encrypted beside the
     /// small ones. Its file name, when they have one we may see.
     async fn full_picture(&self, client: &Client, id: &str, jid: &Jid) -> Option<String> {
         let dir = self.dir.join(AVATAR_DIR);
-        let lookup = client.contacts().lookup_profile_picture(jid, false, None).await.ok()?;
-        let ProfilePictureLookup::Found(picture) = lookup else { return None };
         let owner = format!("{id}-full");
+        let known = lock(&self.store).full_picture(id).map(str::to_string);
+        // The picture id is what follows the owner in the file name.
+        let known_id = known.as_deref().and_then(|file| file.strip_suffix(".jpg")?.rsplit('-').next().map(str::to_string));
+        let lookup = client.contacts().lookup_profile_picture(jid, false, known_id.as_deref()).await.ok()?;
+        let picture = match lookup {
+            ProfilePictureLookup::Found(picture) => picture,
+            ProfilePictureLookup::Unchanged => return known.filter(|file| dir.join(file).exists()),
+            _ => return None,
+        };
         let file = store::avatar_file(&owner, &picture.id);
         if dir.join(&file).exists() {
             return Some(file);
@@ -1598,6 +1611,7 @@ impl WaManager {
                 self.sync_chat_state(generation, client.clone());
                 self.refresh_ticks(generation, client.clone());
                 self.fetch_all_history(generation, client.clone());
+                self.sync_participants(generation, client.clone());
                 self.sync_avatars(generation, client);
             }
             Event::Disconnected(_) if self.is_linked() => {

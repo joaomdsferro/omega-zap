@@ -155,6 +155,9 @@ export interface Person {
   mediaCount: number;
   /** The latest photos and videos there, newest first. */
   recentMedia: Message[];
+  /** As found the last time contact info opened; refreshed by `personDetails`. */
+  about?: string;
+  commonGroups: GroupRef[];
 }
 
 /** What someone's contact info adds from the network. */

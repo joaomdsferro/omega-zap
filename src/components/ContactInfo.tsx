@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Message, Person, PersonDetails } from "../backend";
 import type { LoadMedia } from "./Attachments";
 import { Avatar } from "./Avatar";
-import { BackIcon, ChevronRightIcon, FileIcon, MuteIcon, NewChatIcon, StarIcon } from "./Icons";
+import { BackIcon, ChevronRightIcon, FileIcon, MuteIcon, NewChatIcon, PhoneIcon, StarIcon, VideoIcon } from "./Icons";
 
 interface ContactInfoProps {
   load: () => Promise<Person>;
@@ -21,7 +21,6 @@ interface ContactInfoProps {
 export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, onOpenGroup, onStarred, onMute }: ContactInfoProps) {
   const [person, setPerson] = useState<Person | null>(null);
   const [details, setDetails] = useState<PersonDetails | null>(null);
-  const [detailsDone, setDetailsDone] = useState(!loadDetails);
 
   useEffect(() => {
     let alive = true;
@@ -38,8 +37,7 @@ export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, 
     let alive = true;
     loadDetails()
       .then((loaded) => alive && setDetails(loaded))
-      .catch(console.error)
-      .finally(() => alive && setDetailsDone(true));
+      .catch(console.error);
     return () => {
       alive = false;
     };
@@ -58,7 +56,9 @@ export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, 
     await onMute(person, muted).catch(() => setPerson({ ...person, muted: !muted }));
   }
 
-  const groups = details?.commonGroups ?? [];
+  // What was found last time shows at once; the network's answer replaces it.
+  const groups = details?.commonGroups ?? person?.commonGroups ?? [];
+  const about = details ? details.about : person?.about;
   return (
     <aside
       className="absolute inset-y-0 right-0 z-40 flex w-[min(420px,100%)] flex-col border-l border-(--divider) bg-(--panel-bg)"
@@ -90,22 +90,19 @@ export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, 
               <p className="mt-1 text-[16px] text-(--text-secondary)">{person.phone}</p>
             ) : null}
             {person.profileName ? <p className="mt-0.5 text-[14px] text-(--text-secondary)">~{person.profileName}</p> : null}
-            {onMessage && !person.isMe ? (
-              <button
-                type="button"
-                onClick={() => onMessage(person)}
-                className="mt-5 flex w-21 flex-col items-center gap-1.5 rounded-xl border border-(--divider) py-2.5 text-[13px] text-(--text-primary) hover:bg-(--hover-bg)"
-              >
-                <NewChatIcon size={22} className="text-(--accent)" />
-                Message
-              </button>
+            {!person.isMe ? (
+              <div className="mt-5 flex gap-3">
+                <Action icon={<NewChatIcon size={22} />} label="Message" onClick={onMessage && (() => onMessage(person))} />
+                <Action icon={<PhoneIcon size={22} />} label="Voice" soon />
+                <Action icon={<VideoIcon size={22} />} label="Video" soon />
+              </div>
             ) : null}
           </section>
 
-          {details?.about ? (
+          {about ? (
             <Section>
-              <h4 className="text-[14px] text-(--text-secondary)">About</h4>
-              <p className="mt-1 text-[15px] break-words whitespace-pre-wrap text-(--text-primary)">{details.about}</p>
+              <h4 className="px-3 text-[14px] text-(--text-secondary)">About</h4>
+              <p className="mt-1 px-3 text-[15px] break-words whitespace-pre-wrap text-(--text-primary)">{about}</p>
             </Section>
           ) : null}
 
@@ -153,10 +150,10 @@ export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, 
             </Section>
           ) : null}
 
-          {groups.length > 0 || !detailsDone ? (
+          {groups.length > 0 ? (
             <Section>
               <h4 className="px-3 text-[14px] text-(--text-secondary)">
-                {detailsDone ? `${groups.length} ${groups.length === 1 ? "group" : "groups"} in common` : "Groups in common…"}
+                {groups.length} {groups.length === 1 ? "group" : "groups"} in common
               </h4>
               <ul className="mt-1">
                 {groups.map((group) => (
@@ -185,6 +182,23 @@ export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, 
         </div>
       ) : null}
     </aside>
+  );
+}
+
+/** One of the buttons under the name. Calls are not there yet: they say so. */
+function Action({ icon, label, onClick, soon }: { icon: ReactNode; label: string; onClick?: () => void; soon?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={soon || !onClick}
+      title={soon ? `${label} calls are coming soon` : undefined}
+      className="flex w-21 flex-col items-center gap-1.5 rounded-xl border border-(--divider) py-2.5 text-[13px] text-(--text-primary) hover:bg-(--hover-bg) disabled:hover:bg-transparent"
+    >
+      <span className={soon ? "text-(--text-secondary)" : "text-(--accent)"}>{icon}</span>
+      {label}
+      {soon ? <span className="-mt-1 text-[10.5px] text-(--text-secondary)">Coming soon</span> : null}
+    </button>
   );
 }
 

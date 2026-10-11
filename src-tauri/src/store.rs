@@ -362,7 +362,6 @@ struct StoredChat {
     members_checked_ms: i64,
     /// Who is in the group, once looked up: finds the groups in common.
     participants: Vec<String>,
-    participants_checked_ms: i64,
 }
 
 /// A group message counts as read once everyone else has read it.
@@ -525,6 +524,9 @@ pub struct PersonDto {
     pub media_count: u32,
     /// The latest photos and videos there, newest first.
     pub recent_media: Vec<MessageDto>,
+    /// What was found the last time contact info opened, refreshed after.
+    pub about: Option<String>,
+    pub common_groups: Vec<GroupRefDto>,
 }
 
 /// What someone's contact info adds from the network.
@@ -628,6 +630,15 @@ pub struct ChatStore {
     /// unread message, and the phone's marks are asked for again once.
     #[serde(default)]
     marked_unread_replayed: bool,
+    /// Full-size profile pictures (file names) and abouts seen in contact
+    /// info, shown at once the next time it opens.
+    #[serde(default)]
+    full_pictures: HashMap<String, String>,
+    #[serde(default)]
+    abouts: HashMap<String, String>,
+    /// When the members of every group were last looked up together.
+    #[serde(default)]
+    participants_synced_ms: i64,
     /// Server id of our own profile picture saved on disk.
     #[serde(default)]
     own_avatar_id: Option<String>,
@@ -674,6 +685,9 @@ impl Default for ChatStore {
             own_ids: Vec::new(),
             chat_state_synced: true,
             marked_unread_replayed: true,
+            full_pictures: HashMap::new(),
+            abouts: HashMap::new(),
+            participants_synced_ms: 0,
             own_avatar_id: None,
             own_avatar_checked_ms: 0,
             ticks_refreshed: false,
@@ -1003,8 +1017,13 @@ impl ChatStore {
             avatar: if is_me {
                 self.own_avatar()
             } else {
-                self.chats.get(&id).and_then(|c| c.avatar_id.as_deref()).map(|pic| avatar_file(&id, pic))
+                self.full_pictures
+                    .get(&id)
+                    .cloned()
+                    .or_else(|| self.chats.get(&id).and_then(|c| c.avatar_id.as_deref()).map(|pic| avatar_file(&id, pic)))
             },
+            about: self.abouts.get(&id).cloned(),
+            common_groups: if is_me { Vec::new() } else { self.common_groups(&id) },
             is_me,
             saved: saved.is_some(),
             has_chat: chat.is_some(),
@@ -1022,17 +1041,32 @@ impl ChatStore {
         }
     }
 
-    /// Group chats whose members were never looked up, or not for a week.
-    pub fn groups_to_look_up(&self) -> Vec<String> {
-        let stale = now_ms() - 7 * 24 * 3_600_000;
-        self.chats
-            .iter()
-            .filter(|(id, chat)| chat.is_group && !is_hidden_chat(id) && chat.participants_checked_ms < stale)
-            .map(|(id, _)| id.clone())
-            .collect()
+    /// Whether the members of every group are due a lookup: once a day.
+    pub fn participants_due(&self) -> bool {
+        self.participants_synced_ms < now_ms() - 24 * 3_600_000
     }
 
-    /// Records who is in a group: (id, phone number id, LID) for each member.
+    pub fn set_participants_synced(&mut self) {
+        self.participants_synced_ms = now_ms();
+    }
+
+    /// Keeps what contact info found: a full-size picture and an about.
+    pub fn remember_person(&mut self, id: &str, picture: Option<&str>, about: Option<&str>) {
+        let id = self.canonical(id);
+        match picture {
+            Some(file) => self.full_pictures.insert(id.clone(), file.to_string()),
+            None => self.full_pictures.remove(&id),
+        };
+        match about {
+            Some(about) => self.abouts.insert(id, about.to_string()),
+            None => self.abouts.remove(&id),
+        };
+    }
+
+    pub fn full_picture(&self, id: &str) -> Option<&str> {
+        self.full_pictures.get(&self.canonical(id)).map(String::as_str)
+    }
+
     pub fn set_group_participants(&mut self, group: &str, members: &[(String, Option<String>, Option<String>)]) {
         for (_, pn, lid) in members {
             if let (Some(pn), Some(lid)) = (pn, lid) {
@@ -1044,7 +1078,6 @@ impl ChatStore {
         if let Some(chat) = self.chats.get_mut(&group) {
             chat.members = Some(ids.len() as u32);
             chat.participants = ids;
-            chat.participants_checked_ms = now_ms();
         }
     }
 
