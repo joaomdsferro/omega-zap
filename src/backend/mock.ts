@@ -3,7 +3,7 @@ import { hueFor, initialsFor } from "../lib/avatar";
 import { DEMO_CHATS, DEMO_MESSAGES } from "../data/demo-chats";
 import type { BackendEvent, Chat, ChatBackend, Contact, CustomList, GroupInfo, Message, OutgoingLink, PinNote, Pins, StarredMessage } from "./types";
 
-/** A demo pin; unpinned ones keep their line in the chat. */
+/** A demo pin or unpin; pins that were undone are marked so. */
 type MockPin = PinNote & { unpinned?: boolean };
 
 function cloneChats(): Chat[] {
@@ -97,7 +97,7 @@ export class MockBackend implements ChatBackend {
     let pins = this.pins.get(chatId);
     if (!pins) {
       const texts = (this.messages.get(chatId) ?? []).filter((m) => m.kind === "text" && !m.deleted).slice(0, 2);
-      pins = texts.map((m, i): MockPin => ({ messageId: m.id, at: m.sentAt, byMe: i === 0, by: i === 0 ? undefined : (m.author ?? "Them") }));
+      pins = texts.map((m, i): MockPin => ({ messageId: m.id, at: m.sentAt, pinned: true, byMe: i === 0, by: i === 0 ? undefined : (m.author ?? "Them") }));
       this.pins.set(chatId, pins);
     }
     return pins;
@@ -105,7 +105,7 @@ export class MockBackend implements ChatBackend {
 
   async pinnedMessages(chatId: string): Promise<Pins> {
     const list = this.messages.get(chatId) ?? [];
-    const pins = this.pinsOf(chatId).filter((p) => !p.unpinned);
+    const pins = this.pinsOf(chatId).filter((p) => p.pinned && !p.unpinned);
     const messages = pins
       .slice(-3)
       .reverse()
@@ -116,7 +116,7 @@ export class MockBackend implements ChatBackend {
   async pinMessage(chatId: string, messageId: string, secs: number | null): Promise<void> {
     const pins = this.pinsOf(chatId);
     for (const p of pins) if (p.messageId === messageId) p.unpinned = true;
-    if (secs !== null) pins.push({ messageId, at: new Date().toISOString(), byMe: true });
+    pins.push({ messageId, at: new Date().toISOString(), pinned: secs !== null, byMe: true });
   }
 
   async markRead(chatId: string): Promise<void> {

@@ -251,11 +251,13 @@ export interface Notice {
   avatar?: string;
 }
 
-/** A line in a conversation saying someone pinned a message. */
+/** A line in a conversation saying someone pinned or unpinned a message. */
 export interface PinNote {
   messageId: string;
-  /** ISO time of the pin. */
+  /** ISO time of the pin or unpin. */
   at: string;
+  /** Pinned; unpinned when false. */
+  pinned: boolean;
   byMe: boolean;
   /** Who pinned it, by name, when it was someone else. */
   by?: string;

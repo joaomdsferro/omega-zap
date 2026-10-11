@@ -260,10 +260,10 @@ export class TauriBackend implements ChatBackend {
       this.groupInfo = async (id) => toGroupInfo(await invoke<RawGroupInfo>("wa_group_info", { id }), account);
       this.groupDetails = async (id) => toGroupInfo(await invoke<RawGroupInfo>("wa_group_details", { id }), account);
       this.pinnedMessages = async (chatId) => {
-        const raw = await invoke<{ messages: RawMessage[]; notes: { messageId: string; at: number; byMe: boolean; by: string | null }[] }>("wa_pinned_messages", { chatId });
+        const raw = await invoke<{ messages: RawMessage[]; notes: { messageId: string; at: number; pinned: boolean; byMe: boolean; by: string | null }[] }>("wa_pinned_messages", { chatId });
         return {
           messages: raw.messages.map(toMessage),
-          notes: raw.notes.map((n) => ({ messageId: n.messageId, at: new Date(n.at).toISOString(), byMe: n.byMe, by: n.by ?? undefined })),
+          notes: raw.notes.map((n) => ({ messageId: n.messageId, at: new Date(n.at).toISOString(), pinned: n.pinned, byMe: n.byMe, by: n.by ?? undefined })),
         };
       };
       this.pinMessage = (chatId, messageId, secs) => invoke("wa_pin_message", { chatId, messageId, secs });

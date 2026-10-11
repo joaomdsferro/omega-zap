@@ -389,8 +389,8 @@ struct StoredChat {
     /// When the phone was last asked to send this chat's latest messages
     /// again, to bring their ticks and files up to date.
     refreshed_ms: i64,
-    /// Who pinned what and when, for the "You pinned a message" lines in
-    /// the conversation. Kept after an unpin, as WhatsApp keeps them.
+    /// Who pinned or unpinned what and when, for the "You pinned a message"
+    /// lines in the conversation. Kept after an unpin, as WhatsApp keeps them.
     pin_notes: Vec<StoredPin>,
 }
 
@@ -408,12 +408,14 @@ struct StoredPin {
     by: Option<String>,
 }
 
-/// A line in a conversation saying someone pinned a message.
+/// A line in a conversation saying someone pinned or unpinned a message.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PinNoteDto {
     pub message_id: String,
     pub at: i64,
+    /// Pinned; unpinned when false.
+    pub pinned: bool,
     pub by_me: bool,
     /// Who pinned it, by name, when it was someone else.
     pub by: Option<String>,
@@ -2260,7 +2262,7 @@ impl ChatStore {
     pub fn set_message_pin(&mut self, chat: &str, id: &str, at_ms: i64, until_ms: Option<i64>, by: Option<&str>) -> bool {
         let by = by.map(|b| self.canonical(b)).filter(|b| !self.own_ids.contains(b));
         let Some(chat) = self.chats.get_mut(&self.canonical(chat)) else { return false };
-        if until_ms.is_some() && !chat.pin_notes.iter().any(|n| n.id == id && n.at_ms == at_ms) {
+        if !chat.pin_notes.iter().any(|n| n.id == id && n.at_ms == at_ms) {
             chat.pin_notes.push(StoredPin { id: id.to_string(), at_ms, until_ms, by: by.clone() });
             chat.pin_notes.sort_by_key(|n| n.at_ms);
             let extra = chat.pin_notes.len().saturating_sub(MAX_PIN_NOTES);
@@ -2294,6 +2296,7 @@ impl ChatStore {
             .map(|n| PinNoteDto {
                 message_id: n.id.clone(),
                 at: n.at_ms,
+                pinned: n.until_ms.is_some(),
                 by_me: n.by.is_none(),
                 by: n.by.as_deref().map(|b| self.display_name(b)),
             })
@@ -2916,7 +2919,8 @@ mod tests {
         assert_eq!(store.pinned_ids(chat), ["c", "b"], "unpinned and lapsed ones left out");
         let notes = store.pin_notes(chat);
         let ids: Vec<&str> = notes.iter().map(|n| n.message_id.as_str()).collect();
-        assert_eq!(ids, ["a", "b", "c", "d", "a"], "every pin keeps its line, unpinned or not");
+        assert_eq!(ids, ["a", "b", "c", "d", "d", "a"], "every pin and unpin keeps its line, in order");
+        assert!(!notes[4].pinned && notes[5].pinned);
         assert!(!notes[1].by_me && notes[1].by.is_some() && notes[0].by_me);
     }
 

@@ -3,7 +3,7 @@ import type { Chat, GroupInfo as Group, Message, OutgoingLink, Person, PersonDet
 import { ContactInfo } from "./ContactInfo";
 import { GroupInfo } from "./GroupInfo";
 import { listenForFileDrops } from "../lib/dropped";
-import { formatDayLabel, sameDay } from "../lib/format";
+import { formatDayLabel, formatMessageTime, sameDay } from "../lib/format";
 import { AccountBadge } from "./AccountBadge";
 import { Avatar } from "./Avatar";
 import { Composer } from "./Composer";
@@ -792,7 +792,10 @@ function pinLines(notes: PinNote[], after: Message | undefined, upTo: Message | 
           style={{ boxShadow: "var(--bubble-shadow)" }}
         >
           <PinIcon size={14} className="shrink-0" />
-          <span className="truncate">{note.byMe ? "You" : (note.by ?? "Someone")} pinned a message</span>
+          <span className="truncate">
+            {note.byMe ? "You" : (note.by ?? "Someone")} {note.pinned ? "pinned" : "unpinned"} a message
+          </span>
+          <span className="shrink-0 tabular-nums opacity-75">{formatMessageTime(note.at)}</span>
         </button>
       </div>
     ));
