@@ -37,7 +37,20 @@ Everything Omega Zap does today, network by network. For what is still missing, 
   groups you share.
 - **Group info.** Click a group's header: its picture, description, who made it and when, media,
   starred messages, a mute switch, and the members (admins marked), searchable, each opening their
-  contact info. WhatsApp only.
+  contact info. The pencils change the group's name and description (admins only, unless the group
+  lets everyone). Admins can **Add member** from their contacts and, from the arrow on a member, make
+  them an admin, dismiss them as admin or remove them. Changes made on other devices show here too.
+  WhatsApp only.
+- **Chat menu.** The **⋮** in a chat's header: contact or group info, select messages, mute, clear,
+  block, and delete or exit.
+- **Clear and delete.** **Clear chat** empties a chat but keeps it in the list, starred messages kept
+  unless you untick it; **Delete chat** removes it with its messages. On WhatsApp both sync with the
+  phone both ways; on Signal they change this computer only. Cleared messages don't come back when
+  history is fetched again.
+- **Block.** Block or unblock someone from the chat menu, the list's right-click menu or their contact
+  info. A blocked chat shows **Unblock** in place of the message box. WhatsApp only.
+- **Exit group.** From the chat menu, the list or group info. Only the group's admins are told. The
+  chat stays, read-only, until you delete it. WhatsApp only.
 - **Pinned messages.** Messages pinned in a WhatsApp chat show in a bar over the conversation, one at a
   time; click it to go to the message and bring up the next. Pinned messages carry a small pin, and the
   conversation says who pinned or unpinned what, and when. Pin or unpin from the message menu, for

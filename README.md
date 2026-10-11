@@ -69,6 +69,8 @@ Windows and macOS builds are not available yet.
 | Typing, online and last seen, with privacy settings | ✅ | ❌ |
 | Editing your texts, and seeing others' edits | ✅ | ✅ |
 | Polls (voting), locations and contact cards | ✅ | ❌ |
+| Clear and delete chats | ✅ | on this computer |
+| Block, exit groups, edit groups and manage members | ✅ | ❌ |
 | Recording voice messages | ❌ | ❌ |
 
 Both accounts can be used side by side or merged into one chat list. The interface looks like
