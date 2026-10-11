@@ -584,7 +584,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
 
         {hasText && !deleted ? (
           bigEmoji ? (
-            <p className="flex gap-0.5 px-0.5 pt-0.5 pb-4">
+            <p className="flex gap-0.5 px-0.5 pt-0.5">
               {withEmoji(message.text ?? "", BIG_EMOJI[bigEmoji])}
             </p>
           ) : (
@@ -595,7 +595,8 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
           )
         ) : null}
 
-        <span className={hasText || deleted ? "absolute right-1.75 bottom-1.25" : "flex justify-end"}>
+        {/* Under a big emoji the time takes its own line, so the bubble is wide enough for it. */}
+        <span className={(hasText && !bigEmoji) || deleted ? "absolute right-1.75 bottom-1.25" : "flex justify-end"}>
           <Meta message={message} account={account} pinned={pinned} />
         </span>
 
