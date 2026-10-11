@@ -58,6 +58,22 @@ export const THEMES: ThemeOption[] = [
   },
 ];
 
+export type TrayBadge = "graphite" | "green" | "red" | "blue";
+
+export interface TrayBadgeOption {
+  id: TrayBadge;
+  label: string;
+  /** Top and bottom of its gradient, as the tray draws it. */
+  gradient: [string, string];
+}
+
+export const TRAY_BADGES: TrayBadgeOption[] = [
+  { id: "graphite", label: "Graphite", gradient: ["#4a505a", "#23272e"] },
+  { id: "green", label: "Green", gradient: ["#25d366", "#00a884"] },
+  { id: "red", label: "Red", gradient: ["#ff4d5e", "#e0243b"] },
+  { id: "blue", label: "Blue", gradient: ["#4c9aff", "#1d6ff2"] },
+];
+
 export const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 export const SIDEBAR_DEFAULT = 400;
 export const SIDEBAR_MIN = 300;
@@ -75,12 +91,18 @@ export interface Settings {
   unifiedInbox: boolean;
   /** Fetch the full-size picture of a link card instead of keeping the small one. */
   largeLinkPreviews: boolean;
-  /** Play TikTok, Instagram and YouTube Shorts links inside the chat. */
+  /** Play TikTok, Instagram, YouTube Shorts and X video links inside the chat. */
   inlineVideos: boolean;
+  /** Make a card for a link that came without one, from the page itself. */
+  fetchLinkPreviews: boolean;
   /** Desktop notifications for new messages and reactions. */
   notifications: boolean;
   /** Show what a message says in its notification. */
   notificationPreview: boolean;
+  /** Colour of the unread count on the tray icon. */
+  trayBadge: TrayBadge;
+  /** Clicking a notification opens its chat, rather than pointing it out in the list. */
+  notificationOpensChat: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -91,8 +113,11 @@ const DEFAULTS: Settings = {
   unifiedInbox: false,
   largeLinkPreviews: true,
   inlineVideos: true,
+  fetchLinkPreviews: true,
   notifications: true,
   notificationPreview: true,
+  trayBadge: "red",
+  notificationOpensChat: false,
 };
 
 const STORAGE_KEY = "omega-zap-settings";
@@ -120,8 +145,11 @@ function load(): Settings {
       unifiedInbox: parsed.unifiedInbox === true,
       largeLinkPreviews: parsed.largeLinkPreviews !== false,
       inlineVideos: parsed.inlineVideos !== false,
+      fetchLinkPreviews: parsed.fetchLinkPreviews !== false,
       notifications: parsed.notifications !== false,
       notificationPreview: parsed.notificationPreview !== false,
+      notificationOpensChat: parsed.notificationOpensChat === true,
+      trayBadge: TRAY_BADGES.some((b) => b.id === parsed.trayBadge) ? (parsed.trayBadge as TrayBadge) : DEFAULTS.trayBadge,
     };
   } catch {
     return DEFAULTS;
@@ -141,8 +169,11 @@ interface SettingsContextValue {
   setUnifiedInbox: (unified: boolean) => void;
   setLargeLinkPreviews: (large: boolean) => void;
   setInlineVideos: (inline: boolean) => void;
+  setFetchLinkPreviews: (on: boolean) => void;
   setNotifications: (on: boolean) => void;
   setNotificationPreview: (on: boolean) => void;
+  setTrayBadge: (badge: TrayBadge) => void;
+  setNotificationOpensChat: (on: boolean) => void;
 }
 
 const SettingsContext = createContext<SettingsContextValue | null>(null);
@@ -209,8 +240,11 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       setUnifiedInbox: (unifiedInbox) => setSettings((s) => ({ ...s, unifiedInbox })),
       setLargeLinkPreviews: (largeLinkPreviews) => setSettings((s) => ({ ...s, largeLinkPreviews })),
       setInlineVideos: (inlineVideos) => setSettings((s) => ({ ...s, inlineVideos })),
+      setFetchLinkPreviews: (fetchLinkPreviews) => setSettings((s) => ({ ...s, fetchLinkPreviews })),
       setNotifications: (notifications) => setSettings((s) => ({ ...s, notifications })),
       setNotificationPreview: (notificationPreview) => setSettings((s) => ({ ...s, notificationPreview })),
+      setTrayBadge: (trayBadge) => setSettings((s) => ({ ...s, trayBadge })),
+      setNotificationOpensChat: (notificationOpensChat) => setSettings((s) => ({ ...s, notificationOpensChat })),
     }),
     [settings, resolvedTheme, setZoom, stepZoom],
   );

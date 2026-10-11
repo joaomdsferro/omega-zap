@@ -5,6 +5,7 @@ import { modKey } from "../lib/platform";
 import {
   SIDEBAR_DEFAULT,
   THEMES,
+  TRAY_BADGES,
   ZOOM_STEPS,
   useSettings,
 } from "../settings/settings";
@@ -197,9 +198,12 @@ export function SettingsPanel({ accounts, onBack, onLink }: SettingsPanelProps) 
     setSidebarWidth,
     setUnifiedInbox,
     setLargeLinkPreviews,
+    setFetchLinkPreviews,
     setInlineVideos,
     setNotifications,
     setNotificationPreview,
+    setTrayBadge,
+    setNotificationOpensChat,
   } = useSettings();
 
   const zoomIndex = ZOOM_STEPS.indexOf(settings.zoom);
@@ -254,6 +258,46 @@ export function SettingsPanel({ accounts, onBack, onLink }: SettingsPanelProps) 
               description="Show what the message says. When off, notifications only name the chat."
             />
           ) : null}
+          {settings.notifications ? (
+            <Switch
+              checked={settings.notificationOpensChat}
+              onChange={setNotificationOpensChat}
+              label="Open the chat from a notification"
+              description="Clicking a notification opens its chat, which marks it as read. When off, the chat is pointed out in the list instead."
+            />
+          ) : null}
+          <div className="flex items-center gap-4 rounded-lg px-3 py-2.5">
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px] text-(--text-primary)">Tray badge</span>
+              <span className="block text-[13px] text-(--text-secondary)">
+                Colour of the unread count on the tray icon.
+              </span>
+            </span>
+            <div className="flex shrink-0 gap-2" role="radiogroup" aria-label="Tray badge colour">
+              {TRAY_BADGES.map((badge) => {
+                const active = settings.trayBadge === badge.id;
+                return (
+                  <button
+                    key={badge.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    aria-label={badge.label}
+                    title={badge.label}
+                    onClick={() => setTrayBadge(badge.id)}
+                    className={[
+                      "flex h-8 min-w-8 items-center justify-center rounded-full px-2 text-[13px] font-bold text-white",
+                      "ring-offset-2 ring-offset-(--panel-bg) transition-shadow",
+                      active ? "ring-2 ring-(--accent)" : "hover:ring-2 hover:ring-(--divider)",
+                    ].join(" ")}
+                    style={{ background: `linear-gradient(${badge.gradient[0]}, ${badge.gradient[1]})` }}
+                  >
+                    3
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </Section>
 
         <Section title="Links">
@@ -267,7 +311,13 @@ export function SettingsPanel({ accounts, onBack, onLink }: SettingsPanelProps) 
             checked={settings.inlineVideos}
             onChange={setInlineVideos}
             label="Play videos in the chat"
-            description="TikTok, Instagram and YouTube Shorts links play here, loaded from their site when you press play. When off, they open in your browser."
+            description="TikTok, Instagram, YouTube Shorts and X videos play here, loaded from their site when you press play (for X, the post is looked up when its card shows). When off, they open in your browser."
+          />
+          <Switch
+            checked={settings.fetchLinkPreviews}
+            onChange={setFetchLinkPreviews}
+            label="Cards for links without one"
+            description="When a link arrives with no card, read its title and picture from the site, once, and keep them on this computer. The site sees your IP address, as it would if you opened the link."
           />
         </Section>
 
