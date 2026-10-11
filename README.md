@@ -153,8 +153,7 @@ who wants to contribute. Each app is small, native and private by default. Omega
 ## Disclaimer
 
 Omega Zap is not affiliated with, endorsed by or connected to WhatsApp, Meta or Signal. Their names
-and marks belong to their owners. It is inspired by [ZapFast](https://github.com/crmne/zapfast), not a
-fork of it.
+and marks belong to their owners.
 
 ## License
 

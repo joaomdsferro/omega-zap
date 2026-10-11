@@ -411,7 +411,7 @@ export function SettingsPanel({ accounts, onBack, onLink }: SettingsPanelProps) 
         <Section title="About">
           <p className="text-[14px] text-(--text-primary)">Omega Zap 0.0.1</p>
           <p className="mt-1 text-[13px] leading-5 text-(--text-secondary)">
-            An unofficial WhatsApp and Signal client inspired by ZapFast. Not affiliated with WhatsApp,
+            An unofficial WhatsApp and Signal client. Not affiliated with WhatsApp,
             Meta or Signal.
           </p>
         </Section>
