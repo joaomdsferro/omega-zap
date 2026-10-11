@@ -45,6 +45,8 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Built into the app for GIF search; without it the app has no search.
+          KLIPY_API_KEY: ${{ secrets.KLIPY_API_KEY }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
           releaseName: Omega Zap v__VERSION__

@@ -29,7 +29,7 @@ base64 = "0.22"
 ureq = "3"
 notify-rust = "4.18"
 # Emoji images resized for notifications. Already built for Tauri's icons.
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 # Splits text into emoji for notifications. Already built for Tauri.
 unicode-segmentation = "1"
 # Encrypts what is kept on disk. Already built for TLS.
@@ -38,6 +38,9 @@ ring = "0.17"
 # Same version whatsapp-rust links; only one SQLite can be linked per binary.
 libsqlite3-sys = { version = "0.38", features = ["bundled-sqlcipher"] }
 diesel = { version = "2.3", default-features = false, features = ["sqlite"] }
+# Stickers are WebP; libwebp built in (static), so nothing is needed on the system.
+webp-animation = { version = "0.10.0", default-features = false, features = ["static"] }
+libwebp-sys2 = { version = "0.2.0", features = ["static"] }
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 # Keeps the storage key in the desktop's keyring (KWallet, GNOME Keyring).

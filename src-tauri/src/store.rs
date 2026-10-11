@@ -132,12 +132,13 @@ impl CdnRef {
     pub fn attachment(&self) -> Option<AttachmentDto> {
         let kind = self.kind.clone()?;
         Some(AttachmentDto {
-            kind,
             mime: self.mime.clone().unwrap_or_default(),
             file_name: self.file_name.clone(),
             size: u32::try_from(self.size).unwrap_or(u32::MAX),
             width: Some(self.width).filter(|w| *w > 0),
             height: Some(self.height).filter(|h| *h > 0),
+            sticker_id: (kind == "sticker").then(|| self.sha256.clone()),
+            kind,
         })
     }
 }
@@ -608,6 +609,9 @@ pub struct AttachmentDto {
     pub size: u32,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// A WhatsApp sticker's id in the sticker library (its file's hash).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sticker_id: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -2933,6 +2937,7 @@ impl ChatStore {
                     size: a.size,
                     width: Some(a.width).filter(|w| *w > 0),
                     height: Some(a.height).filter(|h| *h > 0),
+                    sticker_id: None,
                 })
                 .chain(m.content.wa_media.as_ref().and_then(CdnRef::attachment))
                 .collect(),

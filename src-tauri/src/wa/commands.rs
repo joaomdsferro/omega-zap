@@ -291,3 +291,120 @@ pub fn wa_person(mgr: Mgr<'_>, id: String) -> crate::store::PersonDto {
 pub async fn wa_lookup_number(mgr: Mgr<'_>, phone: String) -> Result<Option<String>, String> {
     mgr.lookup_number(&phone).await
 }
+
+#[tauri::command]
+pub fn wa_sticker_library(mgr: Mgr<'_>) -> super::stickers::LibraryDto {
+    mgr.sticker_library()
+}
+
+#[tauri::command]
+pub async fn wa_library_media(mgr: Mgr<'_>, id: String) -> Result<String, String> {
+    mgr.library_media(&id).await
+}
+
+#[tauri::command]
+pub async fn wa_send_sticker(mgr: Mgr<'_>, chat_id: String, id: String, reply_to: Option<String>) -> Result<MessageDto, String> {
+    mgr.send_library_sticker(&chat_id, &id, reply_to.as_deref()).await
+}
+
+/// A picture sent as the body, with `x-chat` (and `x-reply`) or `x-pack` headers.
+fn picture(request: &tauri::ipc::Request<'_>) -> Result<Vec<u8>, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("The picture is missing.".into());
+    };
+    if bytes.is_empty() || bytes.len() > 16 * 1024 * 1024 {
+        return Err("A sticker can be made from a picture of up to 16 MB.".into());
+    }
+    Ok(bytes.clone())
+}
+
+fn header(request: &tauri::ipc::Request<'_>, name: &str) -> Option<String> {
+    request.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string).filter(|v| !v.is_empty())
+}
+
+#[tauri::command]
+pub async fn wa_send_new_sticker(mgr: Mgr<'_>, request: tauri::ipc::Request<'_>) -> Result<MessageDto, String> {
+    let chat_id = header(&request, "x-chat").ok_or("The chat is missing.")?;
+    let reply_to = header(&request, "x-reply");
+    mgr.send_new_sticker(&chat_id, picture(&request)?, reply_to.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn wa_add_new_sticker(mgr: Mgr<'_>, request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let pack = header(&request, "x-pack").ok_or("The pack is missing.")?;
+    mgr.add_new_sticker(&pack, picture(&request)?).await
+}
+
+#[tauri::command]
+pub async fn wa_set_sticker_favorite(
+    mgr: Mgr<'_>,
+    id: Option<String>,
+    chat_id: Option<String>,
+    message_id: Option<String>,
+    favorite: bool,
+) -> Result<(), String> {
+    let message = chat_id.as_deref().zip(message_id.as_deref());
+    mgr.set_sticker_favorite(id.as_deref(), message, favorite).await
+}
+
+#[tauri::command]
+pub fn wa_message_sticker(mgr: Mgr<'_>, chat_id: String, message_id: String) -> Option<String> {
+    mgr.message_sticker(&chat_id, &message_id)
+}
+
+#[tauri::command]
+pub async fn wa_sticker_store(mgr: Mgr<'_>) -> Result<Vec<super::stickers::StorePackDto>, String> {
+    mgr.sticker_store().await
+}
+
+#[tauri::command]
+pub async fn wa_install_pack(mgr: Mgr<'_>, id: String) -> Result<(), String> {
+    mgr.install_store_pack(&id).await
+}
+
+#[tauri::command]
+pub fn wa_remove_pack(mgr: Mgr<'_>, id: String) {
+    mgr.remove_pack(&id)
+}
+
+#[tauri::command]
+pub fn wa_create_pack(mgr: Mgr<'_>, name: String) -> Result<String, String> {
+    mgr.create_pack(&name)
+}
+
+#[tauri::command]
+pub fn wa_rename_pack(mgr: Mgr<'_>, id: String, name: String) -> Result<(), String> {
+    mgr.rename_pack(&id, &name)
+}
+
+#[tauri::command]
+pub fn wa_add_to_pack(
+    mgr: Mgr<'_>,
+    pack_id: String,
+    id: Option<String>,
+    chat_id: Option<String>,
+    message_id: Option<String>,
+) -> Result<(), String> {
+    let message = chat_id.as_deref().zip(message_id.as_deref());
+    mgr.add_to_pack(&pack_id, id.as_deref(), message)
+}
+
+#[tauri::command]
+pub fn wa_remove_from_pack(mgr: Mgr<'_>, pack_id: String, id: String) -> Result<(), String> {
+    mgr.remove_from_pack(&pack_id, &id)
+}
+
+#[tauri::command]
+pub async fn wa_send_gif(
+    mgr: Mgr<'_>,
+    chat_id: String,
+    pick: crate::klipy::GifPick,
+    reply_to: Option<String>,
+) -> Result<MessageDto, String> {
+    mgr.send_klipy_gif(&chat_id, pick, reply_to.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn wa_send_recent_gif(mgr: Mgr<'_>, chat_id: String, id: String, reply_to: Option<String>) -> Result<MessageDto, String> {
+    mgr.send_recent_gif(&chat_id, &id, reply_to.as_deref()).await
+}

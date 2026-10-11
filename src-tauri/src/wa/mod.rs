@@ -1,5 +1,6 @@
 pub mod commands;
 mod convert;
+mod stickers;
 
 use std::collections::HashMap;
 use std::fs;
@@ -147,6 +148,10 @@ pub struct WaManager {
     active: AtomicBool,
     /// What the server was last told: 0 nothing since connecting, 1 offline, 2 online.
     announced: std::sync::atomic::AtomicU8,
+    /// Recent and favorite stickers, sticker packs and recent GIFs.
+    stickers: Mutex<stickers::Library>,
+    /// WhatsApp's sticker store's list of packs, and when it was fetched.
+    sticker_store: tokio::sync::Mutex<Option<(Instant, Vec<whatsapp_rust::sticker_pack::StickerPack>)>>,
 }
 
 /// How long the window can be out of focus before we show as offline, so
@@ -203,7 +208,6 @@ impl WaManager {
         };
         Ok(Arc::new(Self {
             app,
-            dir,
             status: Mutex::new(WaStatus::idle(linked)),
             store: Mutex::new(store),
             history,
@@ -220,6 +224,9 @@ impl WaManager {
             backfill_wake: tokio::sync::Notify::new(),
             active: AtomicBool::new(false),
             announced: std::sync::atomic::AtomicU8::new(0),
+            stickers: Mutex::new(if linked { stickers::Library::load(&dir) } else { stickers::Library::default() }),
+            sticker_store: tokio::sync::Mutex::new(None),
+            dir,
         }))
     }
 
@@ -2117,6 +2124,7 @@ impl WaManager {
                     tauri::async_runtime::spawn(async move { mgr.announce_presence().await });
                 }
                 self.sync_chat_state(generation, client.clone());
+                self.sync_sticker_favorites(generation, client.clone());
                 self.refresh_ticks(generation, client.clone());
                 self.fetch_all_history(generation, client.clone());
                 self.sync_participants(generation, client.clone());
@@ -2210,9 +2218,11 @@ impl WaManager {
                                 dtos.push(dto);
                             }
                             None => {
-                                let Some(dto) = convert::live(&m.message, &m.info)
-                                    .and_then(|incoming| store.ingest(incoming, true))
-                                else {
+                                let Some(incoming) = convert::live(&m.message, &m.info) else {
+                                    continue;
+                                };
+                                self.note_own_media([&incoming.message]);
+                                let Some(dto) = store.ingest(incoming, true) else {
                                     continue;
                                 };
                                 notices.extend(store.message_notice(&dto.chat_id, &dto.id));
@@ -2382,6 +2392,12 @@ impl WaManager {
                     self.mark_dirty();
                 }
             }
+            Event::FavoriteStickerUpdate(update) => {
+                self.phone_favorite(&update.filehash, &update.action, update.timestamp.timestamp_millis());
+            }
+            Event::RemoveRecentStickerUpdate(update) => {
+                self.phone_removed_recent(&update.filehash, update.action.last_sticker_sent_ts);
+            }
             Event::FavoritesUpdate(update) => {
                 let ids = update.action.favorites.iter().filter_map(|f| f.id.clone()).collect();
                 lock(&self.store).set_favorites(ids);
@@ -2440,6 +2456,8 @@ impl WaManager {
     fn ingest_history(&self, lazy: &LazyHistorySync) -> Result<(), String> {
         let on_demand = lazy.sync_type() == ON_DEMAND;
         let mut answered: HashMap<String, u32> = HashMap::new();
+        // Our stickers and GIFs, kept as recent once the chunk is in.
+        let mut own_media: Vec<StoredMessage> = Vec::new();
         let mut stream = lazy.stream();
         let mut conversation = wa::Conversation::default();
         while stream
@@ -2475,6 +2493,9 @@ impl WaManager {
                 if let Some(incoming) = convert::history(&c.id, item) {
                     let id = incoming.message.id.clone();
                     let options = incoming.message.content.poll.as_ref().map(|p| p.options.clone());
+                    if incoming.message.from_me && incoming.message.content.wa_media.is_some() {
+                        own_media.push(incoming.message.clone());
+                    }
                     store.ingest(incoming, false);
                     // The phone sends a poll's votes already opened.
                     for (voter, hashes, at_ms) in options.as_ref().map(|_| convert::history_votes(&c.id, item)).unwrap_or_default() {
@@ -2495,7 +2516,9 @@ impl WaManager {
                 store.edit_message(&c.id, &edit.target, editor.as_deref(), edit.content, edit.at_ms);
             }
         }
+        self.note_own_media(&own_media);
         let rest = stream.remainder().map_err(|e| e.to_string())?;
+        self.note_phone_recents(&rest.recent_stickers);
         let mut store = lock(&self.store);
         for mapping in &rest.phone_number_to_lid_mappings {
             if let (Some(pn), Some(lid)) = (&mapping.pn_jid, &mapping.lid_jid) {

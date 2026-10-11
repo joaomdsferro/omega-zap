@@ -6,12 +6,14 @@ mod devfiles;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod emoji;
 mod link_preview;
+mod klipy;
 mod links;
 mod notify;
 #[cfg(target_os = "linux")]
 mod players;
 mod signal;
 mod sqlcipher;
+mod sticker_image;
 mod store;
 mod tray;
 mod vault;
@@ -359,6 +361,24 @@ pub fn run() {
             wa::commands::wa_change_members,
             wa::commands::wa_clear_chat,
             wa::commands::wa_lookup_number,
+            wa::commands::wa_sticker_library,
+            wa::commands::wa_library_media,
+            wa::commands::wa_send_sticker,
+            wa::commands::wa_send_new_sticker,
+            wa::commands::wa_add_new_sticker,
+            wa::commands::wa_set_sticker_favorite,
+            wa::commands::wa_message_sticker,
+            wa::commands::wa_sticker_store,
+            wa::commands::wa_install_pack,
+            wa::commands::wa_remove_pack,
+            wa::commands::wa_create_pack,
+            wa::commands::wa_rename_pack,
+            wa::commands::wa_add_to_pack,
+            wa::commands::wa_remove_from_pack,
+            wa::commands::wa_send_gif,
+            wa::commands::wa_send_recent_gif,
+            klipy::gif_search_available,
+            klipy::gif_search,
             notify::show_notification,
             notify::dismiss_notification,
             tray::set_notification_prefs,
