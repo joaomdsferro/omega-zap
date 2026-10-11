@@ -26,8 +26,8 @@
 
 > [!WARNING]
 > **Early test version (v0.0.x).** Expect bugs, missing features, and changes that may ask you to link
-> your accounts again. Omega Zap is an unofficial client, not affiliated with WhatsApp, Meta or Signal;
-> using an unofficial client may put your accounts at risk.
+> your accounts again. Omega Zap is an unofficial client, not affiliated with WhatsApp, Meta or Signal.
+> It is built for everyday chatting, not bots or bulk messaging; see the [FAQ](#faq).
 
 Omega Zap is a desktop client for WhatsApp and Signal, part of the open-source
 [Omega](#about-omega) family. It links to your phone like WhatsApp Web or Signal Desktop do, but runs
@@ -112,8 +112,17 @@ The first build also compiles the Signal bridge, which takes a few minutes.
 <details>
 <summary><strong>Can my account be banned for using it?</strong></summary>
 
-It is possible. WhatsApp and Signal do not allow unofficial clients, and we cannot rule out that an
-account is flagged. Use it with an account you can afford to lose while it is in testing.
+It is unlikely with normal use, but we cannot promise it never happens. Omega Zap is unofficial, and
+WhatsApp's terms do not allow unofficial clients.
+
+What WhatsApp and Signal act on is abuse: spam, bulk messaging, bots and scams. Omega Zap is built for
+the opposite. It links to your phone as one more device, as WhatsApp Web and Signal Desktop do, and
+shows your chats as they would. It has no bulk sending or automation, and forwarding stops at five
+chats, as it does in WhatsApp. Use it as you would use WhatsApp Desktop and you look like any other
+person chatting.
+
+The difference is that your messages are stored on your computer, the app is faster and lighter, and
+WhatsApp and Signal live in one window.
 </details>
 
 <details>

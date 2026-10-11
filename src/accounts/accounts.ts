@@ -24,7 +24,7 @@ export const ACCOUNTS: Record<AccountId, AccountInfo> = {
       "Point your phone at this screen to scan the QR code",
     ],
     linkNote:
-      "Omega Zap is an unofficial client. Using it may go against WhatsApp's terms and could put your account at risk.",
+      "Omega Zap is an unofficial client for everyday chatting. Bulk messaging and automation are what get accounts banned, so don't use it for that.",
     logoutConfirm:
       "Log out and remove this computer from your linked devices? Chats saved here are deleted.",
     emptyText: "Your chats will appear here once they sync.",
