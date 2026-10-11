@@ -12,6 +12,9 @@ export type PanelTab = "emoji" | "gif" | "stickers";
 
 const TAB_KEY = "omega-zap.media-tab";
 
+/** Why there is no search: the app was built without a KLIPY key. */
+const NO_KEY = "Search needs a KLIPY key: KLIPY_API_KEY in the build, or in .env for development.";
+
 function savedTab(): PanelTab {
   try {
     const tab = localStorage.getItem(TAB_KEY);
@@ -264,16 +267,16 @@ function StickerTab({ stickers, onSend, onError }: { stickers: StickerShelf; onS
 
   return (
     <>
-      {available ? (
-        <input
-          type="search"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search KLIPY stickers"
-          aria-label="Search stickers"
-          className="mx-2 mt-2 mb-1 h-8 shrink-0 rounded-full bg-(--hover-bg) px-3 text-[14px] outline-none placeholder:text-(--text-secondary)"
-        />
-      ) : null}
+      <input
+        type="search"
+        value={query}
+        disabled={!available}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder={available ? "Search KLIPY stickers" : "Sticker search is off in this build"}
+        title={available ? undefined : NO_KEY}
+        aria-label="Search stickers"
+        className="mx-2 mt-2 mb-1 h-8 shrink-0 rounded-full bg-(--hover-bg) px-3 text-[14px] outline-none placeholder:text-(--text-secondary) disabled:opacity-60"
+      />
       {searching ? (
         <>
           <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
@@ -761,16 +764,16 @@ function GifTab({ stickers, onSend, onError }: { stickers?: StickerShelf; onSend
 
   return (
     <>
-      {available ? (
-        <input
-          type="search"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search KLIPY"
-          aria-label="Search GIFs"
-          className="mx-2 mt-2 h-8 shrink-0 rounded-full bg-(--hover-bg) px-3 text-[14px] outline-none placeholder:text-(--text-secondary)"
-        />
-      ) : null}
+      <input
+        type="search"
+        value={query}
+        disabled={available === false}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder={available === false ? "GIF search is off in this build" : "Search KLIPY"}
+        title={available === false ? NO_KEY : undefined}
+        aria-label="Search GIFs"
+        className="mx-2 mt-2 h-8 shrink-0 rounded-full bg-(--hover-bg) px-3 text-[14px] outline-none placeholder:text-(--text-secondary) disabled:opacity-60"
+      />
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {!query.trim() && stickers && recent.length ? (
           <section>
@@ -790,7 +793,7 @@ function GifTab({ stickers, onSend, onError }: { stickers?: StickerShelf; onSend
         ) : null}
         {available === false ? (
           <p className="px-1 py-4 text-[13px] text-(--text-secondary)">
-            {recent.length ? "GIF search isn't set up in this build." : "GIFs you send show here. GIF search isn't set up in this build."}
+            {recent.length ? NO_KEY : `GIFs you send show here. ${NO_KEY}`}
           </p>
         ) : available ? (
           <section>

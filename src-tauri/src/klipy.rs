@@ -18,8 +18,22 @@ pub fn key() -> Option<String> {
     std::env::var("KLIPY_API_KEY")
         .ok()
         .or_else(|| option_env!("KLIPY_API_KEY").map(str::to_string))
+        .or_else(dev_key)
         .map(|k| k.trim().to_string())
         .filter(|k| !k.is_empty())
+}
+
+/// In a development build, the key in the repository's gitignored `.env`,
+/// read when asked, so adding it needs no rebuild.
+fn dev_key() -> Option<String> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../.env")).ok()?;
+    text.lines().find_map(|line| {
+        let value = line.trim().strip_prefix("KLIPY_API_KEY=")?.trim().trim_matches(['"', '\'']);
+        (!value.is_empty()).then(|| value.to_string())
+    })
 }
 
 /// One result: what the picker shows, and what is sent.

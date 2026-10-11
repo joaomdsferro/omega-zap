@@ -3,10 +3,18 @@ import type { GifResult, StickerResult } from "../backend";
 
 let available: Promise<boolean> | undefined;
 
-/** Whether this build can search GIFs and stickers (it carries a KLIPY key). */
+/**
+ * Whether this build can search GIFs and stickers (it has a KLIPY key). A
+ * "no" is asked again next time: a development build reads the key from
+ * `.env` as it goes.
+ */
 export function klipyAvailable(): Promise<boolean> {
   available ??= invoke<boolean>("gif_search_available").catch(() => false);
-  return available;
+  const answer = available;
+  void answer.then((yes) => {
+    if (!yes && available === answer) available = undefined;
+  });
+  return answer;
 }
 
 /** A page of GIFs from KLIPY: trending when the query is empty. */

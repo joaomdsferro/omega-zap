@@ -23,6 +23,16 @@ pnpm install
 pnpm tauri dev
 ```
 
+GIF and sticker search need a [KLIPY](https://klipy.com) API key (Partner Panel → API Keys). Put it in a `.env` file
+at the repository root (it is gitignored):
+
+```sh
+KLIPY_API_KEY=your-key
+```
+
+A debug build reads it when you open the GIFs tab, so no rebuild is needed; a release build takes it
+in at compile time. Without one, everything else works and the search boxes say search is off.
+
 A debug build is called "Omega Zap (Dev)" and has its own icon. It uses the same data folder as an
 installed copy, so quit one before starting the other.
 
