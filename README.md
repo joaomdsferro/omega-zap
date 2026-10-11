@@ -65,6 +65,8 @@ Windows and macOS builds are not available yet.
 | Search across every chat, and inside one | ✅ | ✅ |
 | Full history, fetched from the phone in the background | ✅ | at linking |
 | Favorites and chat lists, in sync with the phone | ✅ | on this computer |
+| Archive, pin, and mute for 8 hours, a week or always | ✅ | on this computer |
+| Typing, online and last seen, with privacy settings | ✅ | ❌ |
 | Recording voice messages, showing edits | ❌ | ❌ |
 
 Both accounts can be used side by side or merged into one chat list. The interface looks like

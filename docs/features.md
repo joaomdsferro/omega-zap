@@ -22,6 +22,11 @@ Everything Omega Zap does today, network by network. For what is still missing, 
 - **Chat list** with filters: All, Unread, Favorites, Private, Groups and your own lists, each with its
   unread count. Right-click a chat to add it to favorites or a list. On WhatsApp these are the phone's
   own favorites and lists; Signal has none, so they are kept on this computer.
+- **Archive, pin and mute.** Right-click a chat to archive it, pin it to the top, or mute it for 8 hours,
+  a week or always. Archived chats sit under **Archived** at the top of the list, and searches look in
+  them too. On WhatsApp all three sync with the phone, which allows three pins and unpins a chat it
+  archives. Signal keeps them on this computer, allows four pins, and brings an archived chat back when
+  a message arrives, unless it is muted.
 - **Unread.** Chats open at the first unread message, under an "N unread messages" divider.
   Right-click a chat to **Mark as unread** or **Mark as read**; a marked chat shows a dot and "Marked
   unread". On WhatsApp the mark syncs with the phone both ways.
@@ -33,6 +38,21 @@ Everything Omega Zap does today, network by network. For what is still missing, 
 - **New chat.** Your contacts A to Z, and yourself. On WhatsApp you can also type a full phone number.
 - **Starred messages** from every chat under **⋮ → Starred messages**. WhatsApp stars sync with the
   phone; Signal's stay on this computer.
+
+## Typing and online
+
+WhatsApp only, for now.
+
+- **Typing.** Someone typing or recording shows in the chat list, with a tinted row, a ring around their
+  picture and pulsing dots, and in the chat's header. In a group it names who. It goes away when they
+  stop or their message arrives.
+- **Online and last seen** show in the header of the chat you have open, when the person shares them.
+- **What others see of you.** "typing…" while you write, which **Settings → Privacy → Show when I'm
+  typing** turns off. You show as online only while the Omega Zap window is in front, and go offline
+  10 seconds after it loses focus or closes, so your phone keeps ringing while the app sits in the tray.
+- **Settings → Privacy** changes your WhatsApp account's own **Last seen**, **Online** and **Read
+  receipts**, the same settings as on your phone. If you don't share your last seen or online, you
+  can't see other people's. "My contacts except…" can only be set on the phone.
 
 ## Messages
 
@@ -78,4 +98,5 @@ Everything Omega Zap does today, network by network. For what is still missing, 
 - Showing message edits
 - An app lock (a password for the stored data)
 - More than one account per network, WhatsApp Business, Telegram
-- Signal: starting a chat by phone number (saved contacts work), fetching history older than the link
+- Signal: typing indicators, starting a chat by phone number (saved contacts work), fetching history
+  older than the link
