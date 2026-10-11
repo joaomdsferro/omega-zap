@@ -175,6 +175,8 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
   const panel = useRef<HTMLDivElement>(null);
   const emojiButton = useRef<HTMLButtonElement>(null);
   const typing = useTypingSignal(chatId, onTyping);
+  // The Stickers tab, while open, makes pasted pictures into stickers.
+  const pasteIntoStickers = useRef<((files: File[]) => boolean) | null>(null);
 
   useEffect(() => {
     input.current?.setText("");
@@ -332,6 +334,7 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
             onSend={onSendMedia && !disabled ? onSendMedia : undefined}
             stickers={stickers}
             onError={onError}
+            pasteInto={pasteIntoStickers}
           />
         </div>
       ) : null}
@@ -459,7 +462,10 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
           }}
           onCaret={setCaret}
           onKeyDown={onKeyDown}
-          onPasteFiles={onAddFiles}
+          onPasteFiles={(pasted) => {
+            if (emojiOpen && pasteIntoStickers.current?.(pasted)) return;
+            onAddFiles?.(pasted);
+          }}
           placeholder={disabled ? (disabledReason ?? "Can't send messages right now") : files.length ? "Add a caption" : "Type a message"}
           disabled={disabled}
           label="Message"

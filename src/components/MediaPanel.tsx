@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type MutableRefObject, type ReactNode } from "react";
 import type { AccountId } from "../accounts/accounts";
 import type { GifResult, LibrarySticker, OutgoingMedia, StickerLibrary, StickerPack, StickerResult, StickerShelf, StorePack } from "../backend";
 import { formatFileSize } from "../lib/format";
 import { klipyAvailable, searchGifs, searchStickers } from "../lib/gifs";
 import { GifVideo, useNear } from "./Attachments";
-import { BackIcon, ClockIcon, EditIcon, GifIcon, PlusIcon, SmileIcon, StarIcon, StickerIcon, TrashIcon } from "./Icons";
+import { BackIcon, ClockIcon, CloseIcon, CopyIcon, EditIcon, GifIcon, PlusIcon, SmileIcon, StarIcon, StickerIcon, TrashIcon } from "./Icons";
 import { PopupMenu, type MenuEntry } from "./PopupMenu";
 import { EmojiGrid } from "./ReactionPicker";
 
@@ -32,10 +32,15 @@ interface MediaPanelProps {
   onSend?: (item: OutgoingMedia) => Promise<void>;
   stickers?: StickerShelf;
   onError?: (message: string) => void;
+  /**
+   * Set while the Stickers tab is open: takes pictures pasted into the
+   * message box and makes them into a sticker. Returns false to leave them.
+   */
+  pasteInto?: MutableRefObject<((files: File[]) => boolean) | null>;
 }
 
 /** The composer's panel: emoji, and where the network takes them, GIFs and stickers. */
-export function MediaPanel({ account, onEmoji, onSend, stickers, onError }: MediaPanelProps) {
+export function MediaPanel({ account, onEmoji, onSend, stickers, onError, pasteInto }: MediaPanelProps) {
   const [tab, setTab] = useState<PanelTab>(() => (onSend ? savedTab() : "emoji"));
   const choose = (next: PanelTab) => {
     setTab(next);
@@ -79,7 +84,7 @@ export function MediaPanel({ account, onEmoji, onSend, stickers, onError }: Medi
       ) : tab === "gif" ? (
         <GifTab stickers={stickers} onSend={onSend} onError={report} />
       ) : stickers ? (
-        <StickerTab stickers={stickers} onSend={onSend} onError={report} />
+        <StickerTab stickers={stickers} onSend={onSend} onError={report} pasteInto={pasteInto} />
       ) : (
         <p className="p-6 text-center text-[13px] text-(--text-secondary)">Stickers can't be sent here.</p>
       )}
@@ -178,7 +183,17 @@ function StickerImage({ stickers, id, className }: { stickers: StickerShelf; id:
 
 type SectionId = "recent" | "favorites" | string;
 
-function StickerTab({ stickers, onSend, onError }: { stickers: StickerShelf; onSend: (item: OutgoingMedia) => Promise<void>; onError: (e: unknown) => void }) {
+/** The first picture among pasted or dropped files. */
+function pictureIn(files: File[]): File | undefined {
+  return files.find((f) => f.type.startsWith("image/"));
+}
+
+function StickerTab({ stickers, onSend, onError, pasteInto }: {
+  stickers: StickerShelf;
+  onSend: (item: OutgoingMedia) => Promise<void>;
+  onError: (e: unknown) => void;
+  pasteInto?: MutableRefObject<((files: File[]) => boolean) | null>;
+}) {
   const library = useLibrary(stickers, onError);
   const [adding, setAdding] = useState(false);
   const list = useRef<HTMLDivElement>(null);
@@ -192,13 +207,49 @@ function StickerTab({ stickers, onSend, onError }: { stickers: StickerShelf; onS
   const [query, setQuery] = useState("");
   const found = useKlipy(searchStickers, query, available, false, onError);
   const [foundMenu, setFoundMenu] = useState<{ x: number; y: number; sticker: StickerResult } | null>(null);
+  // A picture chosen or pasted, waiting to be sent or put in a pack.
+  const [picked, setPicked] = useState<{ picture: Blob; url: string } | null>(null);
+  const [sendingPicked, setSendingPicked] = useState(false);
 
   useEffect(() => {
     void klipyAvailable().then(setAvailable);
   }, []);
 
+  const pick = useCallback((picture: Blob) => {
+    setAdding(false);
+    setPicked((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      return { picture, url: URL.createObjectURL(picture) };
+    });
+  }, []);
+  useEffect(() => () => setPicked((prev) => (prev && URL.revokeObjectURL(prev.url), null)), []);
+
+  // Pictures pasted into the message box come here while this tab is open.
+  useEffect(() => {
+    if (!pasteInto) return;
+    pasteInto.current = (files) => {
+      const picture = pictureIn(files);
+      if (picture) pick(picture);
+      return Boolean(picture);
+    };
+    return () => {
+      pasteInto.current = null;
+    };
+  }, [pasteInto, pick]);
+
+  function onPaste(event: ClipboardEvent) {
+    const picture = pictureIn(Array.from(event.clipboardData.files));
+    if (!picture) return;
+    event.preventDefault();
+    pick(picture);
+  }
+
   if (adding) {
-    return <AddStickers stickers={stickers} onSend={onSend} onError={onError} onBack={() => setAdding(false)} />;
+    return (
+      <div className="flex min-h-0 flex-1 flex-col" onPaste={onPaste}>
+        <AddStickers stickers={stickers} onPicture={pick} onError={onError} onBack={() => setAdding(false)} />
+      </div>
+    );
   }
   if (!library) return <p className="p-6 text-center text-[13px] text-(--text-secondary)">Loading stickers…</p>;
 
@@ -266,7 +317,39 @@ function StickerTab({ stickers, onSend, onError }: { stickers: StickerShelf; onS
   }
 
   return (
-    <>
+    <div className="flex min-h-0 flex-1 flex-col" onPaste={onPaste}>
+      {picked ? (
+        <PickedSticker
+          url={picked.url}
+          packs={ownPacks}
+          busy={sendingPicked}
+          onSend={() => {
+            const sent = picked;
+            setSendingPicked(true);
+            onSend({ kind: "new-sticker", picture: sent.picture })
+              .then(() => {
+                URL.revokeObjectURL(sent.url);
+                setPicked((prev) => (prev === sent ? null : prev));
+              })
+              .catch(onError)
+              .finally(() => setSendingPicked(false));
+          }}
+          onAddTo={(pack) => {
+            const picture = picked.picture;
+            setPicked(null);
+            URL.revokeObjectURL(picked.url);
+            setMaking(pack.id);
+            stickers
+              .addNewSticker(pack.id, picture)
+              .catch(onError)
+              .finally(() => setMaking(null));
+          }}
+          onCancel={() => {
+            URL.revokeObjectURL(picked.url);
+            setPicked(null);
+          }}
+        />
+      ) : null}
       <input
         type="search"
         value={query}
@@ -456,7 +539,57 @@ function StickerTab({ stickers, onSend, onError }: { stickers: StickerShelf; onS
       {foundMenu ? (
         <PopupMenu x={foundMenu.x} y={foundMenu.y} label="Sticker options" items={foundMenuFor(foundMenu.sticker)} onClose={() => setFoundMenu(null)} />
       ) : null}
-    </>
+    </div>
+  );
+}
+
+/** A picture about to become a sticker: send it, or keep it in one of our packs. */
+function PickedSticker({ url, packs, busy, onSend, onAddTo, onCancel }: {
+  url: string;
+  packs: StickerPack[];
+  busy: boolean;
+  onSend: () => void;
+  onAddTo: (pack: StickerPack) => void;
+  onCancel: () => void;
+}) {
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  return (
+    <div className="mx-2 mt-2 flex shrink-0 items-center gap-3 rounded-xl bg-(--hover-bg) p-2" aria-label="New sticker">
+      <img src={url} alt="New sticker" draggable={false} className="h-16 w-16 shrink-0 object-contain" />
+      <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <span className="text-[14px] text-(--text-primary)">New sticker</span>
+        <span className="flex items-center gap-1">
+          <button type="button" disabled={busy} onClick={onSend} className="flex h-7 items-center justify-center rounded-full bg-(--accent) px-3 disabled:cursor-wait">
+            <span className="text-[13px] font-medium text-white">{busy ? "Sending…" : "Send"}</span>
+          </button>
+          {packs.length ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={(event) => {
+                const box = event.currentTarget.getBoundingClientRect();
+                setMenu({ x: box.left, y: box.bottom + 4 });
+              }}
+              className="h-7 rounded-full px-3 hover:bg-(--panel-bg)"
+            >
+              <span className="text-[13px] font-medium text-(--accent)">Add to pack</span>
+            </button>
+          ) : null}
+        </span>
+      </span>
+      <SmallButton label="Discard the new sticker" onClick={onCancel}>
+        <CloseIcon size={16} />
+      </SmallButton>
+      {menu ? (
+        <PopupMenu
+          x={menu.x}
+          y={menu.y}
+          label="Add to pack"
+          items={packs.map((pack) => ({ label: pack.name, onSelect: () => onAddTo(pack) }))}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
+    </div>
   );
 }
 
@@ -498,9 +631,10 @@ function NameInput({ initial, label, onDone }: { initial: string; label: string;
 }
 
 /** Making stickers, packs, and WhatsApp's sticker store. */
-function AddStickers({ stickers, onSend, onError, onBack }: {
+function AddStickers({ stickers, onPicture, onError, onBack }: {
   stickers: StickerShelf;
-  onSend: (item: OutgoingMedia) => Promise<void>;
+  /** A picture chosen or pasted, to make into a sticker. */
+  onPicture: (picture: Blob) => void;
   onError: (e: unknown) => void;
   onBack: () => void;
 }) {
@@ -508,8 +642,20 @@ function AddStickers({ stickers, onSend, onError, onBack }: {
   const [failed, setFailed] = useState(false);
   const [working, setWorking] = useState<Set<string>>(new Set());
   const [naming, setNaming] = useState(false);
-  const [creating, setCreating] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
+
+  async function paste() {
+    try {
+      for (const item of await navigator.clipboard.read()) {
+        const type = item.types.find((t) => t.startsWith("image/"));
+        if (type) return onPicture(await item.getType(type));
+      }
+      onError("There's no picture in the clipboard.");
+    } catch {
+      // WebKit may refuse to read the clipboard without a paste.
+      onError("The clipboard couldn't be read here. Press Ctrl+V to paste the picture.");
+    }
+  }
 
   const load = useCallback(() => {
     stickers
@@ -548,13 +694,22 @@ function AddStickers({ stickers, onSend, onError, onBack }: {
         <h3 className="text-[14px] font-medium text-(--text-primary)">Add stickers</h3>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        <button type="button" className={`${row} mt-1`} disabled={creating} onClick={() => picker.current?.click()}>
+        <button type="button" className={`${row} mt-1`} onClick={() => picker.current?.click()}>
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-(--hover-bg) text-(--accent)">
-            {creating ? <span className="block h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent" /> : <StickerIcon size={22} />}
+            <StickerIcon size={22} />
           </span>
           <span className="min-w-0">
             <span className="block">Create a sticker</span>
-            <span className="block text-[12.5px] text-(--text-secondary)">From a picture or GIF; it's sent and kept under Recent</span>
+            <span className="block text-[12.5px] text-(--text-secondary)">From a picture or GIF on this computer</span>
+          </span>
+        </button>
+        <button type="button" className={row} onClick={() => void paste()}>
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-(--hover-bg) text-(--accent)">
+            <CopyIcon size={20} />
+          </span>
+          <span className="min-w-0">
+            <span className="block">Paste a picture</span>
+            <span className="block text-[12.5px] text-(--text-secondary)">Or press Ctrl+V with the Stickers tab open</span>
           </span>
         </button>
         {naming ? (
@@ -611,10 +766,10 @@ function AddStickers({ stickers, onSend, onError, onBack }: {
                   onClick={() => toggle(pack)}
                   className={[
                     "flex h-8 min-w-16 shrink-0 items-center justify-center rounded-full px-3 disabled:cursor-wait",
-                    pack.installed ? "bg-(--hover-bg) text-(--text-secondary)" : "bg-(--accent) text-white",
+                    pack.installed ? "bg-(--hover-bg)" : "bg-(--accent)",
                   ].join(" ")}
                 >
-                  <span className="text-[13px] font-medium">{working.has(pack.id) ? "…" : pack.installed ? "Remove" : "Add"}</span>
+                  <span className={`text-[13px] font-medium ${pack.installed ? "text-(--text-secondary)" : "text-white"}`}>{working.has(pack.id) ? "…" : pack.installed ? "Remove" : "Add"}</span>
                 </button>
               </li>
             ))}
@@ -629,12 +784,7 @@ function AddStickers({ stickers, onSend, onError, onBack }: {
         onChange={(event) => {
           const file = event.target.files?.[0];
           event.target.value = "";
-          if (!file) return;
-          setCreating(true);
-          onSend({ kind: "new-sticker", picture: file })
-            .then(onBack)
-            .catch(onError)
-            .finally(() => setCreating(false));
+          if (file) onPicture(file);
         }}
       />
     </>
