@@ -18,7 +18,7 @@ use presage::Manager;
 use presage::libsignal_service::attachment_cipher::decrypt_in_place;
 use presage::libsignal_service::configuration::SignalServers;
 use presage::libsignal_service::content::{Content, ContentBody, DataMessage, GroupContextV2};
-use presage::libsignal_service::proto::{AttachmentPointer, BodyRange, Preview, body_range};
+use presage::libsignal_service::proto::{AttachmentPointer, BodyRange, EditMessage, Preview, body_range};
 use presage::libsignal_service::proto::attachment_pointer::AttachmentIdentifier;
 use presage::libsignal_service::proto::data_message::{Delete, Quote as QuoteProto, Reaction};
 use presage::libsignal_service::push_service::PushService;
@@ -103,6 +103,19 @@ enum Command {
     },
     /// Takes back one of our messages for everyone.
     Delete { id: u64, chat: String, target_ts: u64, ts: u64 },
+    /// Changes what one of our texts says, for everyone. `target_ts` is
+    /// when the message was first sent, however often it was edited since.
+    Edit {
+        id: u64,
+        chat: String,
+        target_ts: u64,
+        text: String,
+        #[serde(default)]
+        ranges: Vec<SendRange>,
+        /// The quote the message was sent with, which an edit has to repeat.
+        quote: Option<SendQuote>,
+        ts: u64,
+    },
     /// Sets or removes our reaction on a message.
     React {
         id: u64,
@@ -244,6 +257,9 @@ enum Event {
     },
     /// Someone took back a message they sent.
     Delete { chat: String, sender: String, target_ts: u64, history: bool },
+    /// Someone changed what a message they sent says. `target_ts` names the
+    /// message as first sent, `ts` is when it was edited.
+    Edit { chat: String, sender: String, target_ts: u64, ts: u64, text: Option<String>, history: bool },
     Reaction {
         chat: String,
         sender: String,
@@ -759,6 +775,28 @@ impl Receiver {
         }
     }
 
+    /// An edit: the message as first sent, and what it says now. Edits
+    /// carry only the new text; anything else in them is ignored.
+    fn edit_message(&self, thread: &Thread, sender: ServiceId, edit: &EditMessage) {
+        let (Some(target_ts), Some(message)) = (edit.target_sent_timestamp, edit.data_message.as_ref()) else {
+            return;
+        };
+        if message.reaction.is_some() || message.delete.is_some() {
+            return;
+        }
+        let Some(ts) = message.timestamp else { return };
+        let text = non_empty(&message.body)
+            .map(|text| with_mentions(&with_markers(&text, &looks(&message.body_ranges)), &mentions(&message.body_ranges)));
+        emit(Event::Edit {
+            chat: chat_id(thread),
+            sender: sender.raw_uuid().to_string(),
+            target_ts,
+            ts,
+            text,
+            history: self.history,
+        });
+    }
+
     /// What our other devices report: the read receipt setting, and what was
     /// read there.
     fn synced(&self, sync: &SyncMessage) {
@@ -789,7 +827,8 @@ impl Receiver {
         }
         // A message we sent from here is stored as our own data message, which
         // names no recipient: only the chat it was filed under says who.
-        let ours = matches!(content.body, ContentBody::DataMessage(_)) && content.metadata.sender.raw_uuid() == self.me;
+        let ours = matches!(content.body, ContentBody::DataMessage(_) | ContentBody::EditMessage(_))
+            && content.metadata.sender.raw_uuid() == self.me;
         let thread = match stored_in {
             Some(thread) if ours => Some(thread.clone()),
             _ => thread_of(content),
@@ -809,6 +848,11 @@ impl Receiver {
             }) => {
                 self.data_message(&thread, content.metadata.sender, true, ts, message).await;
             }
+            ContentBody::EditMessage(edit) => self.edit_message(&thread, content.metadata.sender, edit),
+            ContentBody::SynchronizeMessage(SyncMessage {
+                content: Some(SyncContent::Sent(Sent { edit_message: Some(edit), .. })),
+                ..
+            }) => self.edit_message(&thread, content.metadata.sender, edit),
             ContentBody::ReceiptMessage(ReceiptMessage { r#type, timestamp }) => {
                 let delivery = match receipt_message::Type::try_from(r#type.unwrap_or_default()) {
                     Ok(receipt_message::Type::Delivery) => "delivered",
@@ -898,7 +942,19 @@ impl Receiver {
     }
 }
 
-async fn send(manager: &mut Signal, chat: &str, mut message: DataMessage, ts: u64) -> Result<(), String> {
+async fn send(manager: &mut Signal, chat: &str, message: DataMessage, ts: u64) -> Result<(), String> {
+    send_as(manager, chat, message, ts, ContentBody::DataMessage).await
+}
+
+/// Sends `message` wrapped by `wrap`, as an edit wraps the message it
+/// replaces.
+async fn send_as(
+    manager: &mut Signal,
+    chat: &str,
+    mut message: DataMessage,
+    ts: u64,
+    wrap: impl FnOnce(DataMessage) -> ContentBody,
+) -> Result<(), String> {
     message.timestamp = Some(ts);
     let sending = async {
         if let Some(key) = chat.strip_prefix(GROUP_PREFIX) {
@@ -911,11 +967,11 @@ async fn send(manager: &mut Signal, chat: &str, mut message: DataMessage, ts: u6
                 revision: Some(0),
                 ..Default::default()
             });
-            manager.send_message_to_group(&key, message, ts).await.map_err(|e| e.to_string())
+            manager.send_message_to_group(&key, wrap(message), ts).await.map_err(|e| e.to_string())
         } else {
             let uuid: Uuid = chat.parse().map_err(|_| "Unknown chat.")?;
             manager
-                .send_message(ServiceId::Aci(uuid.into()), message, ts)
+                .send_message(ServiceId::Aci(uuid.into()), wrap(message), ts)
                 .await
                 .map_err(|e| e.to_string())
         }
@@ -1124,6 +1180,21 @@ async fn session(
                     let error = send(&mut sender, &chat, message, ts).await.err();
                     emit(Event::Done { id, error });
                 }
+                Some(Command::Edit { id, chat, target_ts, text, ranges, quote, ts }) => {
+                    let quote = quote.map(|q| QuoteProto {
+                        id: Some(q.ts),
+                        author_aci: Some(q.author),
+                        text: Some(q.text),
+                        ..Default::default()
+                    });
+                    // The whole message again, as it now is, naming the one first sent.
+                    let message = DataMessage { body: Some(text), body_ranges: body_ranges(ranges), quote, ..Default::default() };
+                    let wrap = |message| {
+                        ContentBody::EditMessage(EditMessage { target_sent_timestamp: Some(target_ts), data_message: Some(message) })
+                    };
+                    let error = send_as(&mut sender, &chat, message, ts, wrap).await.err();
+                    emit(Event::Done { id, error });
+                }
                 Some(Command::React { id, chat, target_author, target_ts, emoji, remove, ts }) => {
                     let message = DataMessage {
                         reaction: Some(Reaction {
@@ -1216,6 +1287,7 @@ async fn run(path: String) {
                         Command::Send { id, .. }
                         | Command::SendFile { id, .. }
                         | Command::Delete { id, .. }
+                        | Command::Edit { id, .. }
                         | Command::React { id, .. }
                         | Command::Read { id, .. }
                         | Command::Media { id, .. }

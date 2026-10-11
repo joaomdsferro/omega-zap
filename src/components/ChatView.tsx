@@ -831,7 +831,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
           onEdit
             ? () => {
                 const last = [...messages].reverse().find((m) => m.fromMe && !m.deleted);
-                if (last && canEdit(last)) setEditing(last);
+                if (last && canEdit(last, chat.account)) setEditing(last);
               }
             : undefined
         }

@@ -306,6 +306,9 @@ async fn read(
                     Some(Recipient::Contact(id)) => id.clone(),
                     _ => me.clone(),
                 };
+                // An edited message keeps its earlier versions, oldest first:
+                // the first one names it, as quotes, reactions and edits do.
+                let sent = item.revisions.first().map_or(item.dateSent, |first| first.dateSent);
                 let quote = match &item.item {
                     Some(proto::chat_item::Item::StandardMessage(m)) => m.quote.as_ref().map(|q| Quote {
                         author: match recipients.get(&q.authorId) {
@@ -334,19 +337,28 @@ async fn read(
                             _ => me.clone(),
                         },
                         target_author: sender.clone(),
-                        target_ts: item.dateSent,
+                        target_ts: sent,
                         emoji: reaction.emoji.clone(),
                         remove: false,
                         history: true,
                     })
                     .collect();
+                // After the message, which it marks edited.
+                let edit = (!item.revisions.is_empty()).then(|| Event::Edit {
+                    chat: chat.clone(),
+                    sender: sender.clone(),
+                    target_ts: sent,
+                    ts: item.dateSent.max(sent + 1),
+                    text: text.clone(),
+                    history: true,
+                });
                 messages += 1;
                 emit(Event::Message {
                     chat,
                     is_group,
                     sender,
                     from_me,
-                    ts: item.dateSent,
+                    ts: sent,
                     kind,
                     text,
                     media_label,
@@ -359,6 +371,7 @@ async fn read(
                     history: true,
                     delivery,
                 });
+                edit.into_iter().for_each(&mut *emit);
                 reactions.into_iter().for_each(&mut *emit);
             }
             _ => {}
@@ -491,6 +504,14 @@ mod tests {
         })));
         record(&mut plain, &text(7, 2, 1000, false, "hi"));
         record(&mut plain, &text(7, 1, 2000, true, "hello"));
+        // Sent at 2500, edited at 3000.
+        let mut edited = text(7, 2, 3000, false, "see you at 8");
+        if let Some(proto::frame::Item::ChatItem(item)) = &mut edited.item
+            && let Some(proto::frame::Item::ChatItem(first)) = text(7, 2, 2500, false, "see you at 7").item
+        {
+            item.revisions.push(first);
+        }
+        record(&mut plain, &edited);
 
         let key = archive_key(key, ME);
         let iv = [9; 16];
@@ -508,17 +529,20 @@ mod tests {
         let mut keys = Keys::new();
         let count = futures::executor::block_on(read([5; 32], ME, &archive, &mut |e| events.push(e), &mut keys))
             .expect("the archive decrypts");
-        assert_eq!(count, 2);
+        assert_eq!(count, 3);
 
         let lines: Vec<String> = events
             .iter()
             .filter(|e| !matches!(e, Event::History { .. }))
             .map(|e| serde_json::to_string(e).unwrap())
             .collect();
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 5);
         assert!(lines[0].contains(r#""event":"contact""#) && lines[0].contains("Maya Chen"));
         assert!(lines[1].contains(&format!(r#""chat":"{MAYA}""#)) && lines[1].contains(r#""fromMe":false"#));
         assert!(lines[2].contains(r#""fromMe":true"#) && lines[2].contains(r#""history":true"#));
+        // An edited message is named by when it was first sent, with what it says now.
+        assert!(lines[3].contains(r#""ts":2500"#) && lines[3].contains("at 8"));
+        assert!(lines[4].contains(r#""event":"edit""#) && lines[4].contains(r#""targetTs":2500"#) && lines[4].contains(r#""ts":3000"#));
         assert_eq!(keys, [(MAYA, [3; 32])]);
     }
 

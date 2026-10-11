@@ -34,6 +34,8 @@ const SAVE_INTERVAL: Duration = Duration::from_secs(3);
 pub const MEDIA_DIR: &str = "media";
 pub const AVATAR_DIR: &str = "avatars";
 const SEND_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long after sending a message Signal lets it be edited.
+const EDIT_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 const MEDIA_TIMEOUT: Duration = Duration::from_secs(150);
 /// Uploading a file of up to 100 MB, then sending the message.
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(600);
@@ -100,6 +102,17 @@ enum BridgeEvent {
         chat: String,
         sender: String,
         target_ts: i64,
+        #[serde(default)]
+        history: bool,
+    },
+    /// A message changed by its sender: `target_ts` names it as first sent,
+    /// `ts` is when it was edited.
+    Edit {
+        chat: String,
+        sender: String,
+        target_ts: i64,
+        ts: i64,
+        text: Option<String>,
         #[serde(default)]
         history: bool,
     },
@@ -899,6 +912,50 @@ impl SignalManager {
         Ok(dto.filter(|_| for_everyone))
     }
 
+    /// Changes what one of our texts says, for everyone, within Signal's
+    /// edit window. `styled` is the text as Signal formats it.
+    pub async fn edit_message(&self, chat_id: &str, message_id: &str, text: &str, styled: Option<Styled>) -> Result<MessageDto, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("The message is empty.".into());
+        }
+        self.recall(chat_id, message_id);
+        let (target, reply) = {
+            let store = lock(&self.store);
+            if !store.can_edit(chat_id, message_id, EDIT_WINDOW_MS) {
+                return Err("Only your own texts can be edited, up to 24 hours after sending.".into());
+            }
+            let target = store.quote_source(chat_id, message_id).ok_or("That message is gone.")?;
+            (target, store.reply_of(chat_id, message_id))
+        };
+        // An edit is the whole message again, so it repeats the quote; one
+        // whose quoted message is unknown goes without it.
+        let quote = reply.and_then(|reply| {
+            let ts: i64 = reply.id?.split('-').next()?.parse().ok()?;
+            Some(serde_json::json!({ "ts": ts, "author": reply.author_jid?, "text": reply.text }))
+        });
+        let (body, ranges) = match styled.filter(|s| !s.ranges.is_empty()) {
+            Some(styled) => (styled.body, styled.ranges),
+            None => (text.to_string(), Vec::new()),
+        };
+        let ts = now_ms();
+        let command = serde_json::json!({
+            "cmd": "edit",
+            "chat": chat_id,
+            "targetTs": target.ts_ms,
+            "text": body,
+            "ranges": ranges,
+            "quote": quote,
+            "ts": ts,
+        });
+        self.request(command, SEND_TIMEOUT)
+            .await
+            .map_err(|e| format!("The message was not edited: {e}"))?;
+        let dto = lock(&self.store).edit_message(chat_id, message_id, None, Content::text(text, None), ts);
+        self.mark_dirty();
+        dto.ok_or_else(|| "The message is no longer here.".into())
+    }
+
     /// Sends a text, quoting the message `reply_to` when there is one.
     /// The message `reply_to` names, as the bridge quotes it and as it is
     /// shown here.
@@ -1211,6 +1268,17 @@ impl SignalManager {
                 self.recall(&chat, &id);
                 let deleted = lock(&self.store).delete_message(&chat, &id, Deletion::ForEveryone);
                 if let Some(dto) = deleted {
+                    if !history {
+                        let _ = self.app.emit("signal://message", dto);
+                    }
+                    self.mark_dirty();
+                }
+            }
+            BridgeEvent::Edit { chat, sender, target_ts, ts, text, history } => {
+                let id = self.message_id(&sender, target_ts);
+                self.recall(&chat, &id);
+                let edited = lock(&self.store).edit_message(&chat, &id, Some(&sender), Content::text(text.unwrap_or_default(), None), ts);
+                if let Some(dto) = edited {
                     if !history {
                         let _ = self.app.emit("signal://message", dto);
                     }

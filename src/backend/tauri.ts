@@ -252,11 +252,16 @@ export class TauriBackend implements ChatBackend {
     this.openMedia = async (chatId, messageId, index) => {
       await invoke(`${this.prefix}_open_media`, { chatId, messageId, index });
     };
+    this.editMessage = async (chatId, messageId, text) => {
+      const args: Record<string, unknown> = { chatId, messageId, text };
+      // Signal formats with ranges over the text rather than markers in it.
+      if (account === "signal") args.styled = signalBody(text.trim());
+      return toMessage(await invoke<RawMessage>(`${this.prefix}_edit_message`, args));
+    };
     if (account === "whatsapp") {
       this.linkThumbnailUrl = async (chatId, messageId) =>
         fileUrl(await invoke<string>("wa_link_thumbnail", { chatId, messageId }), "media");
       this.lookupNumber = (phone) => invoke<string | null>("wa_lookup_number", { phone });
-      this.editMessage = async (chatId, messageId, text) => toMessage(await invoke<RawMessage>("wa_edit_message", { chatId, messageId, text }));
       this.groupInfo = async (id) => toGroupInfo(await invoke<RawGroupInfo>("wa_group_info", { id }), account);
       this.groupDetails = async (id) => toGroupInfo(await invoke<RawGroupInfo>("wa_group_details", { id }), account);
       this.pinnedMessages = async (chatId) => {

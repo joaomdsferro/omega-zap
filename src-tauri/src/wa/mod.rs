@@ -1101,7 +1101,7 @@ impl WaManager {
             return Err("The message is empty.".into());
         }
         self.recall(chat_id, message_id);
-        if !lock(&self.store).can_edit(chat_id, message_id) {
+        if !lock(&self.store).can_edit(chat_id, message_id, store::EDIT_WINDOW_MS) {
             return Err("Only your own texts can be edited, up to 15 minutes after sending.".into());
         }
         let client = self.connected_client().await?;

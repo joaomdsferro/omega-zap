@@ -2189,11 +2189,16 @@ impl ChatStore {
     }
 
     /// Whether we can still change what one of our messages says: a text,
-    /// not deleted, sent less than WhatsApp's edit window ago.
-    pub fn can_edit(&self, chat: &str, id: &str) -> bool {
+    /// not deleted, sent less than `window_ms` ago.
+    pub fn can_edit(&self, chat: &str, id: &str, window_ms: i64) -> bool {
         self.find_message(chat, id).is_some_and(|(_, m)| {
-            m.from_me && m.content.kind == MsgKind::Text && m.deleted.is_none() && now_ms() - m.ts_ms < EDIT_WINDOW_MS
+            m.from_me && m.content.kind == MsgKind::Text && m.deleted.is_none() && now_ms() - m.ts_ms < window_ms
         })
+    }
+
+    /// The message a stored message quotes, if any.
+    pub fn reply_of(&self, chat: &str, id: &str) -> Option<ReplyRef> {
+        self.find_message(chat, id)?.1.content.reply_to.clone()
     }
 
     /// Changes what a message says, as its sender edited it at `at_ms`. A
@@ -2893,11 +2898,11 @@ mod tests {
         assert!(store.edit_message(chat, "a", None, Content::text("mine", None), 20).is_none(), "not ours to edit");
         store.ingest(incoming(chat, "a", now_ms(), false), false);
         assert_eq!(store.messages(chat)[0].text.as_deref(), Some("hello"), "history replay keeps the edit");
-        assert!(!store.can_edit(chat, "a"), "only our own texts");
+        assert!(!store.can_edit(chat, "a", EDIT_WINDOW_MS), "only our own texts");
         store.ingest(incoming(chat, "b", now_ms(), true), false);
-        assert!(store.can_edit(chat, "b"));
+        assert!(store.can_edit(chat, "b", EDIT_WINDOW_MS));
         store.ingest(incoming(chat, "c", now_ms() - EDIT_WINDOW_MS - 1, true), false);
-        assert!(!store.can_edit(chat, "c"), "past the window");
+        assert!(!store.can_edit(chat, "c", EDIT_WINDOW_MS), "past the window");
     }
 
     #[test]

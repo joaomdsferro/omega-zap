@@ -1,20 +1,24 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import type { AccountId } from "../accounts/accounts";
 import type { Message } from "../backend";
 import { Formatted } from "../lib/markup";
 import { CheckIcon, CloseIcon } from "./Icons";
 import { MessageInput, type MessageInputHandle } from "./MessageInput";
 
-/** How long after sending WhatsApp lets a message be edited. */
-export const EDIT_WINDOW_MS = 15 * 60 * 1000;
+/** How long after sending each network lets a message be edited. */
+export const EDIT_WINDOW_MS: Record<AccountId, number> = {
+  whatsapp: 15 * 60 * 1000,
+  signal: 24 * 60 * 60 * 1000,
+};
 
-/** Whether one of our messages can still be edited: a text, inside the window. */
-export function canEdit(message: Message, now = Date.now()): boolean {
+/** Whether one of our messages can still be edited: a text, inside its network's window. */
+export function canEdit(message: Message, account: AccountId, now = Date.now()): boolean {
   return (
     message.fromMe &&
     message.kind === "text" &&
     !message.deleted &&
     Boolean(message.text) &&
-    now - new Date(message.sentAt).getTime() < EDIT_WINDOW_MS
+    now - new Date(message.sentAt).getTime() < EDIT_WINDOW_MS[account]
   );
 }
 

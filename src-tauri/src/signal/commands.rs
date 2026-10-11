@@ -90,6 +90,17 @@ pub async fn signal_send_text(
 }
 
 #[tauri::command]
+pub async fn signal_edit_message(
+    mgr: Mgr<'_>,
+    chat_id: String,
+    message_id: String,
+    text: String,
+    styled: Option<super::Styled>,
+) -> Result<MessageDto, String> {
+    mgr.edit_message(&chat_id, &message_id, &text, styled).await
+}
+
+#[tauri::command]
 pub async fn signal_delete_message(
     mgr: Mgr<'_>,
     chat_id: String,

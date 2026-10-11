@@ -365,6 +365,7 @@ pub fn run() {
             signal::commands::signal_send_text,
             signal::commands::signal_send_file,
             signal::commands::signal_delete_message,
+            signal::commands::signal_edit_message,
             signal::commands::signal_fetch_media,
             signal::commands::signal_open_media,
             signal::commands::signal_react,

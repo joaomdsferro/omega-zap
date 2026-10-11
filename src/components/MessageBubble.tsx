@@ -396,7 +396,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
             onSelect: () => onStar(message),
           }
         : null,
-      onEdit && canEdit(message) ? { label: "Edit", icon: <EditIcon size={20} />, onSelect: () => onEdit(message) } : null,
+      onEdit && canEdit(message, account) ? { label: "Edit", icon: <EditIcon size={20} />, onSelect: () => onEdit(message) } : null,
       onSelect ? { label: "Select", icon: <SelectIcon size={20} />, onSelect: () => onSelect(message) } : null,
     ];
     const items: MenuEntry[] = actions.filter((item) => item !== null);
