@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { LinkPreview } from "../backend";
-import { embedUrl, videoLink } from "../lib/links";
+import { embedUrl, videoLink, xVideo, type XVideo } from "../lib/links";
 import { isTauri } from "../lib/platform";
 import { useSettings } from "../settings/settings";
 import { CloseIcon, PlayIcon } from "./Icons";
@@ -22,6 +22,13 @@ export function openLink(event: ReactMouseEvent, url: string) {
 /** Below this width a picture is a thumbnail: it sits beside the title instead of above it. */
 const LARGE_PREVIEW_PX = 300;
 
+// Kept across chat switches, by link, so a card reopens at its final size
+// with its picture instead of growing once the picture is fetched again.
+/** The full-size pictures fetched so far. */
+const largeUrls = new Map<string, string>();
+/** Whether a link's small picture turned out wide enough to sit above the title. */
+const wideThumbs = new Map<string, boolean>();
+
 interface LinkCardProps {
   preview: LinkPreview;
   /** Fetches the full-size picture, when the account can. */
@@ -30,23 +37,42 @@ interface LinkCardProps {
 
 export function LinkCard({ preview, loadLarge }: LinkCardProps) {
   const { settings } = useSettings();
-  const [wide, setWide] = useState(false);
+  const [wide, setWide] = useState(() => wideThumbs.get(preview.url) ?? false);
   const [broken, setBroken] = useState(false);
-  const [largeUrl, setLargeUrl] = useState<string | null>(null);
+  const [largeUrl, setLargeUrl] = useState(() => largeUrls.get(preview.url) ?? null);
+  const [largeFailed, setLargeFailed] = useState(false);
   const [player, setPlayer] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  const video = settings.inlineVideos ? videoLink(preview.url) : null;
-  const wantLarge = Boolean(settings.largeLinkPreviews && preview.hasLarge && loadLarge);
+  const linked = settings.inlineVideos ? videoLink(preview.url) : null;
+  // A post on X is only a video once X says it has one.
+  const [xClip, setXClip] = useState<XVideo | null>(null);
+  const [clip, setClip] = useState<XVideo | null>(null);
+  const post = linked?.post;
+  useEffect(() => {
+    setXClip(null);
+    if (!post) return;
+    let alive = true;
+    void xVideo(post).then((found) => alive && setXClip(found));
+    return () => {
+      alive = false;
+    };
+  }, [post]);
+  const video = linked?.site === "x" && !xClip ? null : linked;
+  const wantLarge = Boolean(settings.largeLinkPreviews && preview.hasLarge && loadLarge) && !largeFailed;
 
   useEffect(() => {
-    setLargeUrl(null);
-    if (!wantLarge || !loadLarge) return;
+    const known = largeUrls.get(preview.url) ?? null;
+    setLargeUrl(known);
+    if (known || !wantLarge || !loadLarge) return;
     let alive = true;
     loadLarge()
-      .then((loaded) => alive && setLargeUrl(loaded))
+      .then((loaded) => {
+        largeUrls.set(preview.url, loaded);
+        if (alive) setLargeUrl(loaded);
+      })
       // The small picture stays.
-      .catch(() => {});
+      .catch(() => alive && setLargeFailed(true));
     return () => {
       alive = false;
     };
@@ -59,9 +85,15 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
     // Keep what the sender's phone matched.
   }
   const picture = largeUrl ?? (broken ? null : preview.thumbnail) ?? null;
-  const stacked = Boolean(player) || (wide && Boolean(picture));
+  // A card that will get the full-size picture is laid out for it from the
+  // start, in a box of fixed shape, so the picture arriving changes nothing
+  // around it.
+  const playing = Boolean(player || clip);
+  const large = wantLarge && !playing;
+  const stacked = playing || large || (wide && Boolean(picture));
 
   async function play() {
+    if (xClip) return setClip(xClip);
     setStarting(true);
     setNote(null);
     try {
@@ -81,11 +113,14 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
         stacked ? "flex-col" : "flex-row",
       ].join(" ")}
     >
-      {player ? (
+      {playing ? (
         <div className="flex justify-end">
           <button
             type="button"
-            onClick={() => setPlayer(null)}
+            onClick={() => {
+              setPlayer(null);
+              setClip(null);
+            }}
             className="flex h-8 items-center gap-1.5 px-2.5 text-[12.5px] text-(--text-secondary) hover:text-(--text-primary)"
           >
             Close video
@@ -93,7 +128,22 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
           </button>
         </div>
       ) : null}
-      {player ? (
+      {clip ? (
+        <video
+          src={clip.url}
+          poster={clip.poster ?? undefined}
+          controls
+          autoPlay
+          playsInline
+          onError={() => {
+            setClip(null);
+            setNote("This video only plays on its own site. It was opened in your browser.");
+            openExternal(preview.url);
+          }}
+          className="max-h-110 w-full bg-black object-contain"
+          style={{ aspectRatio: `${clip.width} / ${clip.height}` }}
+        />
+      ) : player ? (
         <iframe
           src={player}
           title={preview.title ?? "Video"}
@@ -109,7 +159,7 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
           onClick={video ? undefined : () => openExternal(preview.url)}
           className={[
             "relative shrink-0",
-            stacked ? "w-full" : "h-22 w-22",
+            large ? "aspect-video w-full bg-black/40" : stacked ? "w-full" : "h-22 w-22",
             video ? "" : "cursor-pointer",
           ].join(" ")}
         >
@@ -118,9 +168,21 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
               src={picture}
               alt=""
               draggable={false}
-              onLoad={(event) => setWide(event.currentTarget.naturalWidth >= LARGE_PREVIEW_PX)}
-              onError={() => (largeUrl ? setLargeUrl(null) : setBroken(true))}
-              className={stacked ? "block max-h-82.5 w-full object-cover" : "h-full w-full object-cover"}
+              onLoad={(event) => {
+                if (event.currentTarget.getAttribute("src") !== preview.thumbnail) return;
+                const isWide = event.currentTarget.naturalWidth >= LARGE_PREVIEW_PX;
+                wideThumbs.set(preview.url, isWide);
+                setWide(isWide);
+              }}
+              onError={() => {
+                if (!largeUrl) return setBroken(true);
+                largeUrls.delete(preview.url);
+                setLargeUrl(null);
+                setLargeFailed(true);
+              }}
+              className={
+                large ? "h-full w-full object-cover" : stacked ? "block max-h-82.5 w-full object-cover" : "h-full w-full object-cover"
+              }
             />
           ) : (
             <div className="h-full w-full bg-black/40" />
