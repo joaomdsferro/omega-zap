@@ -13,20 +13,55 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # WhatsApp Web protocol. The crates.io 0.7.0 release enables `simd`, which needs
 # nightly Rust. A fork of upstream a214b14 (which builds on stable) that also
 # recovers app-state collections whose snapshot MAC never validates.
-whatsapp-rust = { git = "https://github.com/joaomdsferro/whatsapp-rust", rev = "b938aef12cfe1dfd406be9d01dd39cc8cc00dbc5", default-features = false, features = ["sqlite-storage", "sqlite-storage-bundled", "tokio-transport", "tokio-runtime", "ureq-client", "tokio-native"] }
+whatsapp-rust = { git = "https://github.com/joaomdsferro/whatsapp-rust", rev = "b938aef12cfe1dfd406be9d01dd39cc8cc00dbc5", default-features = false, features = ["sqlite-storage", "tokio-transport", "tokio-runtime", "ureq-client", "tokio-native"] }
 tokio = { version = "1", features = ["time", "process", "io-util", "sync"] }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 log = "0.4"
 base64 = "0.22"
 ureq = "3"
 notify-rust = "4.18"
+# Emoji images resized for notifications. Already built for Tauri's icons.
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Splits text into emoji for notifications. Already built for Tauri.
+unicode-segmentation = "1"
+# Encrypts what is kept on disk. Already built for TLS.
+ring = "0.17"
+# The WhatsApp session store, built as SQLCipher so it is encrypted on disk.
+# Same version whatsapp-rust links; only one SQLite can be linked per binary.
+libsqlite3-sys = { version = "0.38", features = ["bundled-sqlcipher"] }
+diesel = { version = "2.3", default-features = false, features = ["sqlite"] }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+# Keeps the storage key in the desktop's keyring (KWallet, GNOME Keyring).
+secret-service = { version = "5", features = ["rt-async-io-crypto-rust"] }
+# Closes a chat's previous notification before its next one. Already built
+# for notify-rust.
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Ends the page's process when the window closes; WebKitGTK keeps it alive
+# otherwise. The version Tauri already links.
+webkit2gtk = { version = "2.0", features = ["v2_34"] }
+# Hands a notification's activation token to the window. Tauri's version.
+gtk = "0.18"
+# The tray icon over D-Bus (StatusNotifierItem) instead of through
+# libayatana-appindicator, which is deprecated and warns on every start.
+# Tauri's tray-icon picks ksni over libappindicator when both are enabled.
+tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 codegen-units = 1
