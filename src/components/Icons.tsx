@@ -317,3 +317,11 @@ export function Ticks({ status, account, size = 16 }: { status?: TickStatus; acc
     </svg>
   );
 }
+
+/** A filled person, small enough for a tag. */
+export const PersonIcon = ({ size = 24, ...rest }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden {...rest}>
+    <circle cx="12" cy="7.5" r="5" />
+    <path d="M2.5 22a9.5 9.5 0 0 1 19 0z" />
+  </svg>
+);

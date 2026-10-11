@@ -1,17 +1,28 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
-import type { ReplyQuote } from "../backend";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import type { AccountId } from "../accounts/accounts";
+import type { LinkPreview, OutgoingLink, ReplyQuote } from "../backend";
+import { Emoji } from "../lib/emoji";
+import { searchEmoji } from "../lib/emojiSearch";
 import { formatFileSize } from "../lib/format";
-import { CloseIcon, FileIcon, MicIcon, PlusIcon, SendIcon } from "./Icons";
+import { URL_PATTERN, fetchLinkPreview } from "../lib/links";
+import { FormattedLine } from "../lib/markup";
+import { outgoingLink } from "../lib/outgoing";
+import { useSettings } from "../settings/settings";
+import { CloseIcon, FileIcon, MicIcon, PlusIcon, SendIcon, SmileIcon } from "./Icons";
+import { MessageInput, type MessageInputHandle } from "./MessageInput";
+import { EmojiGrid } from "./ReactionPicker";
 
 interface ComposerProps {
   chatId: string;
+  /** Which network's emoji panel to show. */
+  account: AccountId;
   disabled?: boolean;
   disabledReason?: string;
   /** The message being replied to, shown above the text box. */
   replyTo?: ReplyQuote;
   onCancelReply?: () => void;
-  /** Sends the text, or the files with the text as their caption. */
-  onSend: (text: string, files: File[]) => Promise<void>;
+  /** Sends the text, or the files with the text as their caption; a text with a link can carry its card. */
+  onSend: (text: string, files: File[], link?: OutgoingLink) => Promise<void>;
   /** Files waiting to be sent. */
   files?: File[];
   /** Adds files to send; absent where files can't be sent. */
@@ -76,39 +87,106 @@ function PendingFile({ file, state, onRemove }: { file: File; state?: "sending" 
   );
 }
 
-export function Composer({ chatId, disabled, disabledReason, replyTo, onCancelReply, onSend, files = [], onAddFiles, onRemoveFile }: ComposerProps) {
+/** How long typing has to pause before a link in it is looked up. */
+const LINK_PAUSE_MS = 400;
+/** Suggestions shown for ":name". */
+const SUGGESTIONS = 8;
+/** What starts an emoji suggestion: a colon, at the start or after a space, and two letters. */
+const SHORTCODE = /(?:^|\s):([\p{L}\p{N}_+-]{2,})$/u;
+
+/** The card for the link being typed, once it has been read; `undefined` while it is looked up. */
+function useTypedLink(text: string, enabled: boolean) {
+  const url = enabled ? text.match(URL_PATTERN)?.[0] : undefined;
+  const [found, setFound] = useState<{ url: string; preview: LinkPreview | null } | null>(null);
+  useEffect(() => {
+    if (!url) return;
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      void fetchLinkPreview(url).then((preview) => alive && setFound({ url, preview }));
+    }, LINK_PAUSE_MS);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [url]);
+  if (!url) return { url: undefined, preview: null, loading: false };
+  return found?.url === url ? { url, preview: found.preview, loading: false } : { url, preview: null, loading: true };
+}
+
+export function Composer({ chatId, account, disabled, disabledReason, replyTo, onCancelReply, onSend, files = [], onAddFiles, onRemoveFile }: ComposerProps) {
+  const { settings } = useSettings();
   const [text, setText] = useState("");
+  const [caret, setCaret] = useState(0);
   const [sending, setSending] = useState(false);
-  const ref = useRef<HTMLTextAreaElement>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const input = useRef<MessageInputHandle>(null);
   const picker = useRef<HTMLInputElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const emojiButton = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    setText("");
-    ref.current?.focus();
+    input.current?.setText("");
+    setEmojiOpen(false);
+    input.current?.focus();
   }, [chatId]);
 
   // Picking Reply puts the cursor where the answer goes.
   useEffect(() => {
-    if (replyTo) ref.current?.focus();
+    if (replyTo) input.current?.focus();
   }, [replyTo?.author, replyTo?.text]);
 
+  // The emoji panel closes on a click outside it or Escape.
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
-  }, [text]);
+    if (!emojiOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!panel.current?.contains(target) && !emojiButton.current?.contains(target)) setEmojiOpen(false);
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setEmojiOpen(false);
+        input.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [emojiOpen]);
+
+  // ":joy" offers 😂 and its neighbours.
+  const shortcode = SHORTCODE.exec(text.slice(0, caret));
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const query = shortcode && shortcode[1] !== dismissed ? shortcode[1] : null;
+  const suggestions = useMemo(() => (query ? searchEmoji(query, SUGGESTIONS) : []), [query]);
+  const [chosen, setChosen] = useState(0);
+  useEffect(() => setChosen(0), [query]);
+
+  function suggest(emoji: string) {
+    if (!query) return;
+    input.current?.replaceBefore(caret - query.length - 1, emoji);
+  }
+
+  // The link being typed gets its card above the box, as on the phone.
+  const typed = useTypedLink(files.length ? "" : text, settings.fetchLinkPreviews && !disabled);
+  const [hiddenLink, setHiddenLink] = useState<string | null>(null);
+  // A link with nothing to show gets no card, as on the phone.
+  const linkCard = typed.url && typed.url !== hiddenLink && (typed.loading || typed.preview) ? typed : null;
 
   async function submit() {
     const value = text.trim();
     if ((!value && !files.length) || disabled || sending) return;
     setSending(true);
     try {
-      await onSend(value, files);
-      setText("");
+      const card = !files.length && linkCard?.preview ? await outgoingLink(linkCard.preview) : undefined;
+      await onSend(value, files, card);
+      input.current?.setText("");
+      setHiddenLink(null);
     } finally {
       setSending(false);
-      requestAnimationFrame(() => ref.current?.focus());
+      requestAnimationFrame(() => input.current?.focus());
     }
   }
 
@@ -117,20 +195,32 @@ export function Composer({ chatId, disabled, disabledReason, replyTo, onCancelRe
     void submit();
   }
 
-  // A pasted picture or file is added to the ones to send.
-  function onPaste(e: ClipboardEvent<HTMLTextAreaElement>) {
-    if (!onAddFiles || !e.clipboardData.files.length) return;
-    e.preventDefault();
-    onAddFiles(Array.from(e.clipboardData.files));
-  }
-
-  function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+  function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.nativeEvent.isComposing) return;
+    if (suggestions.length) {
+      const move = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+      if (move) {
+        e.preventDefault();
+        setChosen((at) => (at + move + suggestions.length) % suggestions.length);
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        suggest(suggestions[chosen].emoji);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setDismissed(query);
+        return;
+      }
+    }
     if (e.key === "Escape" && replyTo) {
       e.preventDefault();
       onCancelReply?.();
       return;
     }
-    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void submit();
     }
@@ -138,21 +228,83 @@ export function Composer({ chatId, disabled, disabledReason, replyTo, onCancelRe
 
   const hasText = text.trim().length > 0;
   const canSubmit = hasText || files.length > 0;
+  const iconButton =
+    "mb-0.75 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-(--icon) hover:bg-(--hover-bg) disabled:opacity-50";
 
   return (
-    <div className="shrink-0 bg-(--composer-bg)">
+    <div className="relative shrink-0 bg-(--composer-bg)">
+      {emojiOpen ? (
+        <div
+          ref={panel}
+          role="dialog"
+          aria-label="Emoji"
+          className="reaction-pop absolute bottom-full left-3 z-40 mb-2 flex h-[340px] w-[364px] max-w-[calc(100%-24px)] flex-col overflow-hidden rounded-2xl bg-(--panel-bg)"
+          style={{ boxShadow: "0 2px 5px rgba(11,20,26,.26), 0 2px 10px rgba(11,20,26,.16)" }}
+        >
+          <EmojiGrid account={account} autoFocus={false} characters onPick={(emoji) => input.current?.insert(emoji)} />
+        </div>
+      ) : null}
+      {suggestions.length ? (
+        <ul
+          role="listbox"
+          aria-label="Emoji suggestions"
+          className="absolute bottom-full left-16 z-40 mb-2 w-72 overflow-hidden rounded-xl bg-(--panel-bg) py-1"
+          style={{ boxShadow: "0 2px 5px rgba(11,20,26,.26), 0 2px 10px rgba(11,20,26,.16)" }}
+        >
+          {suggestions.map((entry, index) => (
+            <li
+              key={entry.emoji}
+              role="option"
+              aria-selected={index === chosen}
+              // Pressing down here would take the cursor out of the box.
+              onPointerDown={(event) => event.preventDefault()}
+              onClick={() => suggest(entry.emoji)}
+              onPointerEnter={() => setChosen(index)}
+              className={[
+                "flex cursor-pointer items-center gap-3 px-3 py-1.5 text-[14px] text-(--text-primary)",
+                index === chosen ? "bg-(--hover-bg)" : "",
+              ].join(" ")}
+            >
+              <Emoji emoji={entry.emoji} size={22} />
+              <span className="truncate">{entry.name}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {replyTo ? (
         <div className="flex items-center gap-2 px-4 pt-2">
           <div className="min-w-0 flex-1 overflow-hidden rounded-[7.5px] border-l-4 border-(--accent) bg-(--quote-bg) px-3 py-2">
             <p className="text-[12.8px] font-medium text-(--accent)">{replyTo.author}</p>
-            <p className="truncate text-[13.2px] text-(--text-secondary)">{replyTo.text}</p>
+            <p className="truncate text-[13.2px] text-(--text-secondary)">
+              <FormattedLine text={replyTo.text} emojiSize={17} />
+            </p>
           </div>
-          <button
-            type="button"
-            onClick={onCancelReply}
-            aria-label="Cancel reply"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-(--icon) hover:bg-(--hover-bg)"
-          >
+          <button type="button" onClick={onCancelReply} aria-label="Cancel reply" className={iconButton.replace("mb-0.75 ", "")}>
+            <CloseIcon size={20} />
+          </button>
+        </div>
+      ) : null}
+      {linkCard ? (
+        <div className="flex items-center gap-2 px-4 pt-2">
+          <div className="flex h-16 min-w-0 flex-1 items-center overflow-hidden rounded-[7.5px] bg-(--quote-bg)">
+            {linkCard.preview?.thumbnail ? (
+              <img src={linkCard.preview.thumbnail} alt="" draggable={false} className="h-16 w-16 shrink-0 object-cover" />
+            ) : null}
+            <div className="min-w-0 px-3">
+              {linkCard.loading ? (
+                <p className="text-[13px] text-(--text-secondary)">Getting the link's preview…</p>
+              ) : (
+                <>
+                  <p className="truncate text-[14px] font-medium text-(--text-primary)">{linkCard.preview?.title ?? linkCard.url}</p>
+                  {linkCard.preview?.description ? (
+                    <p className="truncate text-[12.5px] text-(--text-secondary)">{linkCard.preview.description}</p>
+                  ) : null}
+                  <p className="truncate text-[12px] text-(--text-secondary)">{hostOf(linkCard.url)}</p>
+                </>
+              )}
+            </div>
+          </div>
+          <button type="button" onClick={() => setHiddenLink(linkCard.url)} aria-label="Send without the preview" className={iconButton.replace("mb-0.75 ", "")}>
             <CloseIcon size={20} />
           </button>
         </div>
@@ -169,15 +321,24 @@ export function Composer({ chatId, disabled, disabledReason, replyTo, onCancelRe
           ))}
         </ul>
       ) : null}
-      <form
-        onSubmit={onSubmit}
-        className="flex min-h-15.5 items-end gap-2 px-4 py-2.5"
-      >
+      <form onSubmit={onSubmit} className="flex min-h-15.5 items-end gap-1 px-4 py-2.5">
+        <button
+          ref={emojiButton}
+          type="button"
+          onClick={() => setEmojiOpen((open) => !open)}
+          disabled={disabled}
+          className={[iconButton, emojiOpen ? "text-(--accent)" : ""].join(" ")}
+          aria-label="Emoji"
+          aria-expanded={emojiOpen}
+          title="Emoji"
+        >
+          <SmileIcon size={24} />
+        </button>
         <button
           type="button"
           onClick={() => picker.current?.click()}
           disabled={disabled || sending || !onAddFiles}
-          className="mb-0.75 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-(--icon) hover:bg-(--hover-bg) disabled:opacity-50"
+          className={`${iconButton} mr-1`}
           aria-label="Attach"
           title={onAddFiles ? "Attach files" : "Files can't be sent here"}
         >
@@ -192,28 +353,30 @@ export function Composer({ chatId, disabled, disabledReason, replyTo, onCancelRe
             onAddFiles?.(Array.from(e.target.files ?? []));
             // The same file can be picked again after it was removed.
             e.target.value = "";
-            ref.current?.focus();
+            input.current?.focus();
           }}
         />
 
-        <textarea
-          ref={ref}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
+        <MessageInput
+          ref={input}
+          onChange={(value, at) => {
+            setText(value);
+            setCaret(at);
+            setDismissed(null);
+          }}
+          onCaret={setCaret}
           onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          rows={1}
+          onPasteFiles={onAddFiles}
           placeholder={disabled ? (disabledReason ?? "Can't send messages right now") : files.length ? "Add a caption" : "Type a message"}
           disabled={disabled}
-          aria-label="Message"
-          className="min-h-10.5 flex-1 resize-none rounded-lg bg-(--composer-input-bg) px-3 py-2.5 text-[15px] leading-5.5 text-(--text-primary) outline-none placeholder:text-(--text-secondary) focus-visible:outline-none disabled:opacity-60"
+          label="Message"
         />
 
         {canSubmit ? (
           <button
             type="submit"
             disabled={disabled || sending}
-            className="mb-0.75 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-(--icon) transition-colors hover:text-(--accent) disabled:opacity-50"
+            className="mb-0.75 ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-(--icon) transition-colors hover:text-(--accent) disabled:opacity-50"
             aria-label={sending ? "Sending" : "Send"}
           >
             {sending ? <Spinner size={20} /> : <SendIcon size={24} />}
@@ -222,7 +385,7 @@ export function Composer({ chatId, disabled, disabledReason, replyTo, onCancelRe
           <button
             type="button"
             disabled
-            className="mb-0.75 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-(--icon) disabled:opacity-50"
+            className="mb-0.75 ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-(--icon) disabled:opacity-50"
             aria-label="Record voice message"
             title="Voice messages are not available yet"
           >
@@ -232,4 +395,12 @@ export function Composer({ chatId, disabled, disabledReason, replyTo, onCancelRe
       </form>
     </div>
   );
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
 }

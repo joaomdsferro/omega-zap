@@ -11,6 +11,7 @@ export type {
   Message,
   MessageKind,
   Notice,
+  OutgoingLink,
   ReactionCount,
   ReplyQuote,
   StarredMessage,

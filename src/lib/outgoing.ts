@@ -1,3 +1,5 @@
+import type { LinkPreview, OutgoingLink } from "../backend";
+
 /** The largest file that can be sent, matching the Rust side. */
 export const MAX_SEND_BYTES = 100 * 1024 * 1024;
 
@@ -23,17 +25,53 @@ function withTimeout<T>(promise: Promise<T>): Promise<T | undefined> {
   ]);
 }
 
-function thumbnail(source: CanvasImageSource, width: number, height: number): string | undefined {
+/** A picture as a base64 JPEG no longer than `side` on its longest side. */
+function jpeg(source: CanvasImageSource, width: number, height: number, side: number, quality: number) {
   if (!width || !height) return undefined;
-  const scale = Math.min(1, THUMBNAIL_SIDE / Math.max(width, height));
+  const scale = Math.min(1, side / Math.max(width, height));
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(width * scale));
   canvas.height = Math.max(1, Math.round(height * scale));
   const context = canvas.getContext("2d");
   if (!context) return undefined;
   context.drawImage(source, 0, 0, canvas.width, canvas.height);
-  const url = canvas.toDataURL("image/jpeg", 0.7);
-  return url.slice(url.indexOf(",") + 1) || undefined;
+  const url = canvas.toDataURL("image/jpeg", quality);
+  const data = url.slice(url.indexOf(",") + 1);
+  return data ? { data, width: canvas.width, height: canvas.height } : undefined;
+}
+
+function thumbnail(source: CanvasImageSource, width: number, height: number): string | undefined {
+  return jpeg(source, width, height, THUMBNAIL_SIDE, 0.7)?.data;
+}
+
+/** The small picture a link card carries in the message, and the large one sent beside it. */
+const LINK_THUMBNAIL_SIDE = 140;
+const LINK_IMAGE_SIDE = 1200;
+/** Narrower than this, a link's picture is only ever shown small. */
+const LINK_LARGE_MIN_WIDTH = 300;
+
+/** The card to send for a link, with its pictures made from the one shown in the composer. */
+export async function outgoingLink(preview: LinkPreview): Promise<OutgoingLink> {
+  const card: OutgoingLink = { url: preview.url, title: preview.title, description: preview.description };
+  if (!preview.thumbnail) return card;
+  try {
+    const picture = new Image();
+    // Kept readable by the canvas: the media protocol allows it.
+    picture.crossOrigin = "anonymous";
+    picture.src = preview.thumbnail;
+    await picture.decode();
+    const { naturalWidth: width, naturalHeight: height } = picture;
+    const large = width >= LINK_LARGE_MIN_WIDTH ? jpeg(picture, width, height, LINK_IMAGE_SIDE, 0.85) : undefined;
+    return {
+      ...card,
+      thumbnail: jpeg(picture, width, height, LINK_THUMBNAIL_SIDE, 0.7)?.data,
+      image: large?.data,
+      width: large?.width,
+      height: large?.height,
+    };
+  } catch {
+    return card;
+  }
 }
 
 async function imageDetails(file: File): Promise<FileDetails> {
@@ -49,15 +87,27 @@ function playerDetails(file: File, video: boolean): Promise<FileDetails> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const player = document.createElement(video ? "video" : "audio");
+    // WebKitGTK only loads and decodes a player that is in the page.
+    player.style.cssText = "position:fixed;left:-10000px;top:0;width:64px;height:64px;opacity:0;pointer-events:none";
+    document.body.append(player);
+    // Given up on by `withTimeout`: nothing is left behind.
+    setTimeout(() => {
+      if (!player.isConnected) return;
+      URL.revokeObjectURL(url);
+      player.removeAttribute("src");
+      player.remove();
+    }, PROBE_TIMEOUT_MS + 100);
     const done = (details: FileDetails) => {
       URL.revokeObjectURL(url);
       player.removeAttribute("src");
+      player.remove();
       resolve(details);
     };
     player.preload = "auto";
     player.muted = true;
     player.onerror = () => {
       URL.revokeObjectURL(url);
+      player.remove();
       reject(new Error("unreadable"));
     };
     player.onloadedmetadata = () => {

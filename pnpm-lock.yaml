@@ -42,6 +42,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^6.0.2
         version: 6.1.1(vite@8.3.1(jiti@2.7.0))
+      emoji-datasource-apple:
+        specifier: 16.0.0
+        version: 16.0.0
       tailwindcss:
         specifier: ^4.3.3
         version: 4.3.3
@@ -384,6 +387,9 @@ packages:
   detect-libc@2.1.2:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
+
+  emoji-datasource-apple@16.0.0:
+    resolution: {integrity: sha512-dVYjsK0FnCry9F+PBtnivhG2K0xdwlmqYaSgiUtztUdAGPYiHYhZcVKvNBqC791g2qyEcFNTBO6utg4eQ3uLTw==}
 
   enhanced-resolve@5.25.1:
     resolution: {integrity: sha512-nGXts5znJzmWPu+mIE9izCOzdg63oJca2mDzGWWTth7sr4aCToKcoyFVBQwN75Ij5Pf6p510EwkTqViTRzDV+w==}
@@ -868,6 +874,8 @@ snapshots:
   csstype@3.2.3: {}
 
   detect-libc@2.1.2: {}
+
+  emoji-datasource-apple@16.0.0: {}
 
   enhanced-resolve@5.25.1:
     dependencies:

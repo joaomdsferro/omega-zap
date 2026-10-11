@@ -1,10 +1,10 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { AccountId } from "../accounts/accounts";
-import type { DeliveryStatus, Message } from "../backend";
+import type { DeliveryStatus, LinkPreview, Message, ReplyQuote } from "../backend";
 import { authorColor } from "../lib/avatar";
 import { formatMessageTime, formatVoiceDuration } from "../lib/format";
-import { URL_PATTERN, isPlayable } from "../lib/links";
+import { URL_PATTERN, fetchLinkPreview, isPlayable, readyLinkPreview } from "../lib/links";
 import { useSettings } from "../settings/settings";
 import { Attachments } from "./Attachments";
 import type { LoadMedia } from "./Attachments";
@@ -15,6 +15,7 @@ import {
   CopyIcon,
   FileIcon,
   ForwardIcon,
+  PersonIcon,
   MoreIcon,
   PlayIcon,
   ReplyIcon,
@@ -25,7 +26,9 @@ import {
 } from "./Icons";
 import { PopupMenu } from "./PopupMenu";
 import type { MenuAction, MenuEntry } from "./PopupMenu";
-import { ReactionPicker } from "./ReactionPicker";
+import { ReactionPicker, type PickerAnchor } from "./ReactionPicker";
+import { Emoji, emojiOnlyCount, withEmoji } from "../lib/emoji";
+import { Formatted, FormattedLine } from "../lib/markup";
 
 interface MessageBubbleProps {
   message: Message;
@@ -47,8 +50,12 @@ interface MessageBubbleProps {
   onReply?: (message: Message) => void;
   /** Sends the message on to other chats. */
   onForward?: (message: Message) => void;
+  /** Words of a search to mark in the text, folded. */
+  highlight?: string[];
   /** Asks how the message should be deleted. */
   onDelete?: (message: Message) => void;
+  /** Scrolls to a quoted message. */
+  onJumpTo?: (messageId: string) => void;
   /** Briefly highlighted: the message was jumped to. */
   flash?: boolean;
 }
@@ -191,28 +198,54 @@ function Photo({ message, loadMedia, onOpen }: Pick<MessageBubbleProps, "message
   );
 }
 
-function Linkified({ text }: { text: string }) {
-  const parts = [];
-  let end = 0;
-  for (const match of text.matchAll(URL_PATTERN)) {
-    const url = match[0];
-    parts.push(text.slice(end, match.index));
-    parts.push(
-      <a
-        key={match.index}
-        href={url}
-        target="_blank"
-        rel="noreferrer"
-        onClick={(event) => openLink(event, url)}
-        className="break-all text-(--accent) underline"
-      >
-        {url}
-      </a>,
-    );
-    end = match.index + url.length;
-  }
-  parts.push(text.slice(end));
-  return <>{parts}</>;
+/** WhatsApp draws a message of one to three emoji and nothing else this big. */
+const BIG_EMOJI = [0, 48, 40, 32];
+
+
+function Quote({ quote, onJumpTo }: { quote: ReplyQuote; onJumpTo?: (messageId: string) => void }) {
+  // Ours stands out with a tag; anyone else's is in the colour of their name.
+  const color = quote.fromMe ? "var(--accent)" : authorColor(quote.author);
+  const body = (
+    <>
+      {quote.fromMe ? (
+        <span className="mb-0.5 inline-flex h-4.5 items-center gap-0.75 rounded-full bg-[color-mix(in_oklab,var(--accent)_22%,transparent)] px-1.75 text-[11.5px] leading-none font-semibold text-(--accent)">
+          <PersonIcon size={11} />
+          You
+        </span>
+      ) : (
+        <p className="text-[12.8px] font-medium" style={{ color }}>
+          {quote.author}
+        </p>
+      )}
+      <p className="line-clamp-2 text-[13.2px] text-(--text-secondary)">
+        <FormattedLine text={quote.text ?? ""} emojiSize={17} />
+      </p>
+    </>
+  );
+  const box = "mb-1 block w-full overflow-hidden rounded-[7.5px] border-l-4 bg-(--quote-bg) px-2 py-1.5 text-left";
+  const id = quote.id;
+  if (!id || !onJumpTo) return <div className={box} style={{ borderColor: color }}>{body}</div>;
+  return (
+    <button type="button" onClick={() => onJumpTo(id)} aria-label={`Go to the message from ${quote.author}`} style={{ borderColor: color }} className={`${box} transition-colors hover:bg-[color-mix(in_oklab,var(--quote-bg),var(--text-primary)_6%)]`}>
+      {body}
+    </button>
+  );
+}
+
+/** The card read from a link's page, once it has come. */
+function useFetchedPreview(url: string | undefined): LinkPreview | null {
+  const [preview, setPreview] = useState(() => (url ? (readyLinkPreview(url) ?? null) : null));
+  useEffect(() => {
+    if (!url) return setPreview(null);
+    const known = readyLinkPreview(url);
+    if (known !== undefined) return setPreview(known);
+    let alive = true;
+    void fetchLinkPreview(url).then((found) => alive && setPreview(found));
+    return () => {
+      alive = false;
+    };
+  }, [url]);
+  return preview;
 }
 
 /** How long a press on a bubble lasts before it opens the reactions, as on the phone. */
@@ -222,14 +255,18 @@ const LONG_PRESS_MS = 450;
  * Memoized: a chat draws hundreds of these, and a change elsewhere in the app
  * should not redraw every one.
  */
-export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, flash }: MessageBubbleProps) {
+/** WhatsApp's forwarding score from which a message counts as forwarded many times. */
+const FORWARDED_MANY = 5;
+
+export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, flash, highlight }: MessageBubbleProps) {
   const { settings } = useSettings();
   const [picking, setPicking] = useState(false);
   /** The full emoji grid instead of the quick row. */
   const [allEmoji, setAllEmoji] = useState(false);
   /** Where the message's menu is open, in viewport pixels. */
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const [below, setBelow] = useState(false);
+  /** What the picker opens next to. */
+  const [anchor, setAnchor] = useState<PickerAnchor>({ x: 0, top: 0, bottom: 0 });
   const row = useRef<HTMLDivElement>(null);
   const bubble = useRef<HTMLDivElement>(null);
   const press = useRef<{ timer: number; x: number; y: number } | null>(null);
@@ -237,12 +274,22 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
   const myReaction = reactions.find((reaction) => reaction.mine)?.emoji;
   const mine = message.fromMe;
   const hasText = Boolean(message.text);
-  // A video link gets a card to play it from even when the sender's phone made none.
+  const bigEmoji = useMemo(
+    () => (message.kind === "text" && !message.attachments?.length ? emojiOnlyCount(message.text ?? "") : 0),
+    [message.kind, message.attachments, message.text],
+  );
+  // A link that came without a card gets one made from the page itself.
+  const bareLink = useMemo(
+    () => (message.linkPreview || message.deleted ? undefined : message.text?.match(URL_PATTERN)?.[0]),
+    [message.linkPreview, message.deleted, message.text],
+  );
+  const fetched = useFetchedPreview(settings.fetchLinkPreviews ? bareLink : undefined);
+  // A video link gets a card to play it from even when there is none to show.
   const linkPreview = useMemo(() => {
-    if (message.linkPreview || !settings.inlineVideos) return message.linkPreview;
-    const url = message.text?.match(URL_PATTERN)?.find(isPlayable);
+    if (message.linkPreview || fetched) return message.linkPreview ?? fetched ?? undefined;
+    const url = settings.inlineVideos ? message.text?.match(URL_PATTERN)?.find(isPlayable) : undefined;
     return url ? { url } : undefined;
-  }, [message.linkPreview, message.text, settings.inlineVideos]);
+  }, [message.linkPreview, fetched, message.text, settings.inlineVideos]);
   // Inline meta: an invisible spacer reserves room so the time sits on the
   // last text line when it fits, as in WhatsApp.
   // The spacer is an invisible copy of the meta, so it always matches its width.
@@ -254,15 +301,26 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
 
   useEffect(() => {
     if (!picking) return;
+    const outside = (event: Event) =>
+      !row.current?.contains(event.target as Node) && !(event.target as Element).closest?.("[data-reaction-picker]");
     const onPointerDown = (event: PointerEvent) => {
-      if (!row.current?.contains(event.target as Node)) setPicking(false);
+      if (outside(event)) setPicking(false);
     };
+    // It stays where it opened, so scrolling the chat away from it closes it.
+    const onWheel = (event: WheelEvent) => {
+      if (outside(event)) setPicking(false);
+    };
+    const close = () => setPicking(false);
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setPicking(false);
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("wheel", onWheel, true);
+    window.addEventListener("resize", close);
     return () => {
+      document.removeEventListener("wheel", onWheel, true);
+      window.removeEventListener("resize", close);
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
@@ -270,18 +328,16 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
 
   useEffect(() => cancelPress, []);
 
-  // The picker opens above the bubble, unless the top of the chat would cut it off.
-  function place(height: number) {
-    const el = bubble.current;
-    if (!el) return;
-    const top = el.closest(".chat-wallpaper")?.getBoundingClientRect().top ?? 0;
-    setBelow(el.getBoundingClientRect().top - top < height);
+  function openPicker(at: PickerAnchor, all = false) {
+    setAnchor(at);
+    setAllEmoji(all);
+    setPicking(true);
   }
 
-  function openPicker() {
-    place(72);
-    setAllEmoji(false);
-    setPicking(true);
+  /** Opens the picker next to the button or pill that was clicked. */
+  function openPickerAt(el: Element) {
+    const box = el.getBoundingClientRect();
+    openPicker({ x: box.left + box.width / 2, top: box.top, bottom: box.bottom });
   }
 
   const deleted = Boolean(message.deleted);
@@ -301,16 +357,12 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
         ? {
             label: "React",
             icon: <SmileIcon size={20} />,
-            onSelect: () => {
-              place(356);
-              setAllEmoji(true);
-              setPicking(true);
-            },
+            onSelect: () => openPicker(menu ? { x: menu.x, top: menu.y, bottom: menu.y } : anchor, true),
           }
         : null,
       whatsapp ? null : copy,
-      // Only text can be sent on: attachments would have to be uploaded again.
-      onForward && text && message.kind === "text" && !message.attachments?.length
+      // Attachments are uploaded again; ones not on this computer yet are fetched first.
+      onForward && !deleted && (message.hasMedia || message.attachments?.length || (text && message.kind === "text"))
         ? { label: "Forward", icon: <ForwardIcon size={20} />, onSelect: () => onForward(message) }
         : null,
       !deleted && onStar
@@ -329,11 +381,11 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
     return items;
   }
 
-  function openMenu(x: number, y: number) {
+  function openMenu(x: number, y: number, at: PickerAnchor = { x, top: y, bottom: y }) {
     if (menuItems().length === 0) return;
     setMenu({ x, y });
-    // WhatsApp offers the reactions over the bubble along with the menu.
-    if (react && whatsapp) openPicker();
+    // WhatsApp offers the reactions above where the menu opened.
+    if (react && whatsapp) openPicker(at);
   }
 
   function cancelPress() {
@@ -347,8 +399,9 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
     cancelPress();
     press.current = {
       timer: window.setTimeout(() => {
+        const at = press.current;
         press.current = null;
-        openPicker();
+        if (at) openPicker({ x: at.x, top: at.y, bottom: at.y });
       }, LONG_PRESS_MS),
       x: event.clientX,
       y: event.clientY,
@@ -382,6 +435,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
     >
       <div
         ref={bubble}
+        data-bubble
         onPointerDown={startPress}
         onPointerMove={movePress}
         onPointerUp={cancelPress}
@@ -415,7 +469,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
             type="button"
             onClick={(event) => {
               const box = event.currentTarget.getBoundingClientRect();
-              openMenu(box.left, box.bottom + 4);
+              openMenu(box.left, box.bottom + 4, { x: box.left + box.width / 2, top: box.top, bottom: box.bottom });
             }}
             aria-label="Message options"
             aria-haspopup="menu"
@@ -432,6 +486,13 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
           </button>
         ) : null}
 
+        {message.forwarded && !deleted ? (
+          <p className="mb-0.5 flex items-center gap-1 px-0.5 text-[12.8px] text-(--bubble-meta) italic">
+            <ForwardIcon size={14} className="shrink-0" />
+            {message.forwarded >= FORWARDED_MANY ? "Forwarded many times" : "Forwarded"}
+          </p>
+        ) : null}
+
         {deleted ? (
           <p className="flex items-center gap-1.5 px-0.5 text-(--text-secondary) italic">
             <BlockedIcon size={16} className="shrink-0" />
@@ -443,10 +504,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
         ) : null}
 
         {message.replyTo ? (
-          <div className="mb-1 overflow-hidden rounded-[7.5px] border-l-4 border-(--accent) bg-(--quote-bg) px-2 py-1.5">
-            <p className="text-[12.8px] font-medium text-(--accent)">{message.replyTo.author}</p>
-            <p className="line-clamp-2 text-[13.2px] text-(--text-secondary)">{message.replyTo.text}</p>
-          </div>
+          <Quote quote={message.replyTo} onJumpTo={onJumpTo} />
         ) : null}
 
         {message.attachments?.length ? (
@@ -497,10 +555,16 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
         ) : null}
 
         {hasText && !deleted ? (
-          <p className="px-0.5 wrap-break-word whitespace-pre-wrap">
-            <Linkified text={message.text ?? ""} />
-            {metaSpacer}
-          </p>
+          bigEmoji ? (
+            <p className="flex gap-0.5 px-0.5 pt-0.5 pb-4">
+              {withEmoji(message.text ?? "", BIG_EMOJI[bigEmoji])}
+            </p>
+          ) : (
+            <p className="px-0.5 wrap-break-word whitespace-pre-wrap">
+              <Formatted text={message.text ?? ""} onLink={openLink} highlight={highlight} />
+              {metaSpacer}
+            </p>
+          )
         ) : null}
 
         <span className={hasText || deleted ? "absolute right-1.75 bottom-1.25" : "flex justify-end"}>
@@ -514,16 +578,15 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
               <button
                 type="button"
                 disabled={!onReact}
-                onClick={() => (picking ? setPicking(false) : openPicker())}
+                onClick={(event) => (picking ? setPicking(false) : openPickerAt(event.currentTarget))}
                 aria-label={`${total} ${total === 1 ? "reaction" : "reactions"}: ${ranked.map((r) => r.emoji).join(" ")}`}
                 className={`${pillClass} ${plainPill} disabled:cursor-default`}
                 style={{ boxShadow: "var(--bubble-shadow)" }}
               >
-                <span className="text-[13px]">
-                  {ranked
-                    .slice(0, 3)
-                    .map((reaction) => reaction.emoji)
-                    .join("")}
+                <span className="flex gap-0.5">
+                  {ranked.slice(0, 3).map((reaction) => (
+                    <Emoji key={reaction.emoji} emoji={reaction.emoji} size={15} />
+                  ))}
                 </span>
                 {total > 1 ? <span className="tabular-nums">{total}</span> : null}
               </button>
@@ -546,7 +609,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
                     ].join(" ")}
                     style={{ boxShadow: "var(--bubble-shadow)" }}
                   >
-                    <span className="text-[13px]">{reaction.emoji}</span>
+                    <Emoji emoji={reaction.emoji} size={15} />
                     {reaction.count > 1 ? <span className="tabular-nums">{reaction.count}</span> : null}
                   </button>
                 ))}
@@ -565,10 +628,8 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
             key={allEmoji ? "all" : "quick"}
             account={account}
             current={myReaction}
-            align={mine ? "right" : "left"}
-            below={below}
+            anchor={anchor}
             expanded={allEmoji}
-            onExpand={() => place(356)}
             onPick={(emoji) => {
               setPicking(false);
               setMenu(null);
@@ -581,7 +642,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
       {react ? (
         <button
           type="button"
-          onClick={() => (picking ? setPicking(false) : openPicker())}
+          onClick={(event) => (picking ? setPicking(false) : openPickerAt(event.currentTarget))}
           aria-label="React"
           aria-expanded={picking}
           className={[
