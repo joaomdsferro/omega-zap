@@ -13,6 +13,8 @@ const PER_PAGE: u32 = 24;
 /// A GIF or sticker bigger than this is not downloaded to send.
 const MAX_BYTES: u64 = 16 * 1024 * 1024;
 const ID_FILE: &str = "klipy-id";
+/// A sticker WebP up to this size is sent as it is, as WhatsApp takes animated stickers this big.
+const STICKER_AS_IS_BYTES: u64 = 500 * 1024;
 
 pub fn key() -> Option<String> {
     std::env::var("KLIPY_API_KEY")
@@ -195,10 +197,18 @@ impl Item {
         let sizes = self.file?;
         let picture = |f: &Formats| f.webp.clone().or_else(|| f.gif.clone()).or_else(|| f.png.clone());
         let preview = [&sizes.sm, &sizes.xs, &sizes.md, &sizes.hd].iter().find_map(|s| s.as_ref().and_then(picture))?;
-        // Stickers are 512 pixels a side: the largest picture that is not too big.
-        let send = [&sizes.hd, &sizes.md, &sizes.sm]
+        // The largest WebP that already is a WhatsApp sticker (at most 512
+        // pixels a side, within the animated size), sent as it is; failing
+        // that, the largest picture, made into one.
+        let sizes_big_first = [&sizes.hd, &sizes.md, &sizes.sm, &sizes.xs];
+        let send = sizes_big_first
             .iter()
-            .find_map(|s| s.as_ref().and_then(picture).filter(|f| f.size <= MAX_BYTES))?;
+            .find_map(|s| {
+                s.as_ref()
+                    .and_then(|f| f.webp.clone())
+                    .filter(|f| f.width <= 512 && f.height <= 512 && f.size <= STICKER_AS_IS_BYTES)
+            })
+            .or_else(|| sizes_big_first.iter().find_map(|s| s.as_ref().and_then(picture).filter(|f| f.size <= MAX_BYTES)))?;
         Some(StickerResult {
             slug: self.slug.clone(),
             title: self.title,
@@ -406,7 +416,8 @@ mod tests {
     fn sticker_results_send_the_largest_picture() {
         let body = r#"{"result":true,"data":{"data":[
             {"id":1,"slug":"cat-1","title":"Cat","type":"sticker","file":{
-                "hd":{"webp":{"url":"https://static.klipy.com/hd.webp","width":512,"height":512,"size":90000}},
+                "hd":{"webp":{"url":"https://static.klipy.com/hd.webp","width":640,"height":640,"size":90000}},
+                "md":{"webp":{"url":"https://static.klipy.com/md.webp","width":400,"height":400,"size":60000}},
                 "sm":{"webp":{"url":"https://static.klipy.com/sm.webp","width":150,"height":150,"size":9000}}}},
             {"id":2,"slug":"ad","type":"ad"},
             {"id":3,"slug":"dog-2","title":"Dog","file":{"md":{"png":{"url":"https://static.klipy.com/md.png","width":300,"height":300,"size":5000}}}}
@@ -415,7 +426,8 @@ mod tests {
         let items: Vec<StickerResult> = response.data.unwrap().data.into_iter().filter_map(Item::sticker).collect();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].preview, "https://static.klipy.com/sm.webp");
-        assert_eq!(items[0].send.url, "https://static.klipy.com/hd.webp");
+        // HD is wider than a sticker, so medium goes as it is.
+        assert_eq!(items[0].send.url, "https://static.klipy.com/md.webp");
         assert_eq!(items[1].send.url, "https://static.klipy.com/md.png");
     }
 

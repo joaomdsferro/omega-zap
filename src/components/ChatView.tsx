@@ -482,12 +482,21 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
     setReplyingTo(null);
   }
 
-  // Which stickers are favorites and which packs are ours, for a sticker's menu in a message.
-  const [library, setLibrary] = useState<StickerLibrary | null>(null);
+  // Which stickers are favorites and which packs are ours, for a sticker's
+  // menu in a message. Kept in a ref and read when a menu opens, so a change
+  // to the library doesn't redraw every message.
+  const library = useRef<StickerLibrary | null>(null);
   useEffect(() => {
+    library.current = null;
     if (!stickers) return;
     let alive = true;
-    const load = () => void stickers.library().then((l) => alive && setLibrary(l)).catch(() => {});
+    const load = () =>
+      void stickers
+        .library()
+        .then((l) => {
+          if (alive) library.current = l;
+        })
+        .catch(() => {});
     load();
     const stop = stickers.subscribe(load);
     return () => {
@@ -496,15 +505,15 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
     };
   }, [stickers]);
   const stickerActions = useMemo(() => {
-    if (!stickers || !library) return undefined;
-    const favorites = new Set(library.favorites.map((s) => s.id));
-    const own = library.packs.filter((p) => !p.store);
-    const fail = (e: unknown) => onError?.(String(e));
+    if (!stickers) return undefined;
+    const fail = (e: unknown) => reportError.current?.(String(e));
     return (message: Message): MenuEntry[] => {
       const id = message.attachments?.find((a) => a.kind === "sticker")?.stickerId;
-      if (!id || message.deleted) return [];
+      const known = library.current;
+      if (!id || message.deleted || !known) return [];
       const target = { chatId: message.chatId, messageId: message.id };
-      const favorite = favorites.has(id);
+      const favorite = known.favorites.some((s) => s.id === id);
+      const own = known.packs.filter((p) => !p.store);
       const items: MenuEntry[] = [
         {
           label: favorite ? "Remove from favorites" : "Add to favorites",
@@ -518,7 +527,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
       }
       return items;
     };
-  }, [stickers, library, onError]);
+  }, [stickers]);
 
   // Files can be added while the account connects; they wait for Send.
   const attaching = Boolean(canAttach);

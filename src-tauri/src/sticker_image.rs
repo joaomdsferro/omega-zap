@@ -1,12 +1,13 @@
 //! Pictures made into stickers: 512×512 WebP on a transparent square, as
 //! the phone makes them. A GIF or an animated WebP becomes an animated sticker.
+//! A WebP that is already a sticker is sent as it is.
 
 use std::io::Cursor;
 
 use image::codecs::gif::GifDecoder;
 use image::codecs::webp::WebPDecoder;
 use image::imageops::{self, FilterType};
-use image::{AnimationDecoder, ImageFormat, RgbaImage};
+use image::{AnimationDecoder, ImageDecoder, ImageFormat, RgbaImage};
 
 /// Stickers are square, this many pixels a side.
 pub const SIDE: u32 = 512;
@@ -22,6 +23,27 @@ const MIN_FRAME_MS: u32 = 1000 / 15;
 pub struct Sticker {
     pub bytes: Vec<u8>,
     pub animated: bool,
+}
+
+/// A picture as a sticker: a WebP that already is one (at most 512 pixels a
+/// side and within WhatsApp's size) as it is, anything else made into one.
+pub fn prepare(bytes: Vec<u8>) -> Result<Sticker, String> {
+    match fits(&bytes) {
+        Some(animated) => Ok(Sticker { bytes, animated }),
+        None => make(&bytes),
+    }
+}
+
+/// Whether a picture can be sent as a sticker untouched, and then whether it moves.
+fn fits(bytes: &[u8]) -> Option<bool> {
+    if image::guess_format(bytes).ok()? != ImageFormat::WebP {
+        return None;
+    }
+    let decoder = WebPDecoder::new(Cursor::new(bytes)).ok()?;
+    let (w, h) = decoder.dimensions();
+    let animated = decoder.has_animation();
+    let max = if animated { ANIMATED_MAX } else { STATIC_MAX };
+    (w <= SIDE && h <= SIDE && bytes.len() <= max).then_some(animated)
 }
 
 /// Makes a sticker from a picture's bytes (PNG, JPEG, GIF or WebP).
@@ -69,7 +91,7 @@ fn frames<'a>(decoder: impl AnimationDecoder<'a>) -> Result<Vec<(RgbaImage, u32)
         match out.last_mut() {
             // Too quick to see on its own: the previous frame takes its time.
             Some((_, last)) if *last < MIN_FRAME_MS => *last += ms,
-            _ => out.push((fit(frame.buffer()), ms)),
+            _ => out.push((fit_with(frame.buffer(), FilterType::Triangle), ms)),
         }
     }
     Ok(out)
@@ -77,10 +99,16 @@ fn frames<'a>(decoder: impl AnimationDecoder<'a>) -> Result<Vec<(RgbaImage, u32)
 
 /// The picture scaled to fit the square, centred on transparency.
 fn fit(picture: &RgbaImage) -> RgbaImage {
+    fit_with(picture, FilterType::Lanczos3)
+}
+
+/// As [`fit`], with a choice of filter: animations take a quicker one, as
+/// they have many frames and each shows briefly.
+fn fit_with(picture: &RgbaImage, filter: FilterType) -> RgbaImage {
     let (w, h) = picture.dimensions();
     let scale = SIDE as f64 / w.max(h).max(1) as f64;
     let (nw, nh) = (((w as f64 * scale).round() as u32).clamp(1, SIDE), ((h as f64 * scale).round() as u32).clamp(1, SIDE));
-    let resized = if (nw, nh) == (w, h) { picture.clone() } else { imageops::resize(picture, nw, nh, FilterType::Lanczos3) };
+    let resized = if (nw, nh) == (w, h) { picture.clone() } else { imageops::resize(picture, nw, nh, filter) };
     let mut square = RgbaImage::new(SIDE, SIDE);
     imageops::overlay(&mut square, &resized, ((SIDE - nw) / 2).into(), ((SIDE - nh) / 2).into());
     square
@@ -115,25 +143,38 @@ fn webp_rgba(picture: &RgbaImage, quality: f32) -> Result<Vec<u8>, String> {
     }
 }
 
+/// Every other frame dropped, each kept one showing for the pair.
+fn halve(frames: &[(RgbaImage, u32)]) -> Vec<(RgbaImage, u32)> {
+    frames
+        .chunks(2)
+        .map(|pair| (pair[0].0.clone(), pair.iter().map(|(_, ms)| ms).sum()))
+        .collect()
+}
+
+/// Lossy animated WebP. When it is too big, half the frames go and the
+/// quality drops, rather than trying many qualities over every frame.
 fn encode_animated(frames: &[(RgbaImage, u32)]) -> Result<Vec<u8>, String> {
     use webp_animation::{Encoder, EncoderOptions, EncodingConfig};
     let fail = |e: webp_animation::Error| format!("The animated sticker could not be made: {e:?}");
+    let mut frames = frames.to_vec();
     let mut best = Vec::new();
-    for quality in [60.0, 45.0, 30.0, 20.0] {
+    for quality in [50.0, 35.0, 25.0] {
         let options = EncoderOptions {
-            encoding_config: Some(EncodingConfig::new_lossy(quality)),
+            // Method 2 of 0–6: much quicker than the default 4, a little bigger.
+            encoding_config: Some(EncodingConfig { method: 2, ..EncodingConfig::new_lossy(quality) }),
             ..Default::default()
         };
         let mut encoder = Encoder::new_with_options((SIDE, SIDE), options).map_err(fail)?;
         let mut at = 0i32;
-        for (frame, ms) in frames {
+        for (frame, ms) in &frames {
             encoder.add_frame(frame.as_raw(), at).map_err(fail)?;
             at += *ms as i32;
         }
         best = encoder.finalize(at).map_err(fail)?.to_vec();
-        if best.len() <= ANIMATED_MAX {
+        if best.len() <= ANIMATED_MAX || frames.len() < 4 {
             break;
         }
+        frames = halve(&frames);
     }
     Ok(best)
 }
@@ -176,7 +217,45 @@ mod tests {
     }
 
     #[test]
+    fn a_small_webp_sticker_goes_untouched() {
+        let made = make(&png(300, 300)).unwrap();
+        let again = prepare(made.bytes.clone()).unwrap();
+        assert_eq!(again.bytes, made.bytes);
+        // A PNG is always made into one.
+        let png = png(100, 100);
+        assert_ne!(prepare(png.clone()).unwrap().bytes, png);
+    }
+
+    #[test]
     fn something_else_is_refused() {
         assert!(make(b"not a picture").is_err());
+    }
+}
+
+#[cfg(test)]
+mod timing {
+    /// Times making real KLIPY stickers; needs the key in `.env` and the network.
+    #[test]
+    #[ignore]
+    fn klipy_stickers_timing() {
+        let dir = std::env::temp_dir();
+        let page = crate::klipy::stickers(&dir, "cat dance", 1).unwrap();
+        for item in page.items.iter().take(4) {
+            let t = std::time::Instant::now();
+            let bytes = crate::klipy::download(&item.send.url).unwrap();
+            let downloaded = t.elapsed();
+            let t = std::time::Instant::now();
+            let made = super::prepare(bytes.clone()).unwrap();
+            println!(
+                "{}: {} KB in, downloaded {:?}, sent {} KB animated={} as-is={} in {:?}",
+                item.slug,
+                bytes.len() / 1024,
+                downloaded,
+                made.bytes.len() / 1024,
+                made.animated,
+                made.bytes == bytes,
+                t.elapsed()
+            );
+        }
     }
 }

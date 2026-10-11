@@ -571,13 +571,30 @@ impl WaManager {
                 return;
             }
             let resync = client.resync_app_state(vec![WAPatchName::RegularLow], AppStateResyncMode::Snapshot);
-            match tokio::time::timeout(Duration::from_secs(120), resync).await {
-                Ok(Ok(_)) => mgr.with_stickers(|lib| {
+            let done = match tokio::time::timeout(Duration::from_secs(120), resync).await {
+                Ok(Ok(_)) => true,
+                // The phone is asked to rebuild that collection in the
+                // background; asking again on every start would download the
+                // whole snapshot each time and fail the same way. Favorites
+                // made from now on still arrive as they change.
+                Ok(Err(e)) if e.to_string().contains("MAC mismatch") => {
+                    log::info!("whatsapp: favorite stickers snapshot does not validate; only new favorites will arrive");
+                    true
+                }
+                Ok(Err(e)) => {
+                    log::warn!("whatsapp: favorite stickers not synced: {e}");
+                    false
+                }
+                Err(_) => {
+                    log::warn!("whatsapp: favorite stickers sync timed out");
+                    false
+                }
+            };
+            if done {
+                mgr.with_stickers(|lib| {
                     lib.favorites_synced = true;
                     ((), true)
-                }),
-                Ok(Err(e)) => log::warn!("whatsapp: favorite stickers not synced: {e}"),
-                Err(_) => log::warn!("whatsapp: favorite stickers sync timed out"),
+                });
             }
         });
     }
@@ -620,7 +637,7 @@ impl WaManager {
 
     /// Makes a sticker from a picture and sends it; it then shows under Recent.
     pub async fn send_new_sticker(&self, chat_id: &str, picture: Vec<u8>, reply_to: Option<&str>) -> Result<MessageDto, String> {
-        let made = tauri::async_runtime::spawn_blocking(move || crate::sticker_image::make(&picture))
+        let made = tauri::async_runtime::spawn_blocking(move || crate::sticker_image::prepare(picture))
             .await
             .map_err(|e| format!("The sticker could not be made: {e}"))??;
         self.send_sticker_bytes(chat_id, made.bytes, Vec::new(), reply_to).await
@@ -628,7 +645,7 @@ impl WaManager {
 
     /// Makes a sticker from a picture and puts it in one of our packs, without sending it.
     pub async fn add_new_sticker(&self, pack_id: &str, picture: Vec<u8>) -> Result<(), String> {
-        let made = tauri::async_runtime::spawn_blocking(move || crate::sticker_image::make(&picture))
+        let made = tauri::async_runtime::spawn_blocking(move || crate::sticker_image::prepare(picture))
             .await
             .map_err(|e| format!("The sticker could not be made: {e}"))??;
         let animated = made.animated;

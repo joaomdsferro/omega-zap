@@ -63,8 +63,13 @@ tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }
 [profile.dev]
 debug = "line-tables-only"
 
+# Dependencies are optimized in development too: SQLCipher, libwebp, image
+# and the crypto run many times slower without it, which made a dev build
+# feel far slower than a release. The app's own crate stays unoptimized, so
+# rebuilding it stays quick.
 [profile.dev.package."*"]
 debug = false
+opt-level = 2
 
 [profile.release]
 codegen-units = 1
