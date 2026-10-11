@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ACCOUNTS, ACCOUNT_IDS, type AccountId } from "./accounts/accounts";
+import { formatLastSeen } from "./lib/format";
 import { useAccount, type Account } from "./accounts/useAccount";
 import {
   MockBackend,
@@ -10,6 +11,7 @@ import {
   type CustomList,
   type Message,
   type OutgoingLink,
+  type PrivacyCategory,
   type StarredMessage,
 } from "./backend";
 import { ChatView } from "./components/ChatView";
@@ -167,6 +169,9 @@ function accountBanner(account: Account, onLink: () => void, onReconnect: () => 
 }
 
 /** Pinned chats first, then the most recent: the order each account already uses. */
+/** Someone typing is forgotten after this long without hearing from them. */
+const TYPING_FORGET_MS = 25_000;
+
 function byRecency(a: Chat, b: Chat) {
   if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
   return b.lastAt.localeCompare(a.lastAt);
@@ -220,6 +225,11 @@ function Shell() {
   /** The chat whose messages `messages` holds. */
   const messagesOf = useRef<string | null>(null);
   const [forwarding, setForwarding] = useState<Message | null>(null);
+  /** Who is typing where, by `account:id`, as the list words it. */
+  const [typing, setTyping] = useState<Map<string, string>>(new Map());
+  const typingTimers = useRef(new Map<string, number>());
+  /** Who is online, or when they last were, by `account:id`. */
+  const [presence, setPresence] = useState<Map<string, { online: boolean; lastSeen?: string }>>(new Map());
   /** A chat asking how long to be muted for, and who waits on the answer. */
   const [muting, setMuting] = useState<{
     chat: Pick<Chat, "account" | "id">;
@@ -295,6 +305,13 @@ function Shell() {
           if (notifications && !event.notice.muted && !looking) {
             showNotification(backend.account, event.notice, notificationPreview);
           }
+        } else if (event.type === "typing") {
+          const key = `${backend.account}:${event.chatId}`;
+          const label = event.recording ? "recording audio…" : "typing…";
+          showTyping(key, event.active ? (event.who ? `${event.who} is ${label}` : label) : null);
+        } else if (event.type === "presence") {
+          const key = `${backend.account}:${event.chatId}`;
+          setPresence((prev) => new Map(prev).set(key, { online: event.online, lastSeen: event.lastSeen ?? prev.get(key)?.lastSeen }));
         } else if (event.type === "history") {
           if (open?.account !== backend.account || open.id !== event.chatId) return;
           setHistoryTick((tick) => tick + 1);
@@ -305,7 +322,13 @@ function Shell() {
               if (messagesOf.current === `${backend.account}:${event.chatId}`) setMessages((prev) => (prev.length ? prev : list));
             })
             .catch(console.error);
-        } else if (open?.account === backend.account && open.id === event.message.chatId) {
+        } else if (event.type !== "message") {
+          return;
+        } else if (!event.message.fromMe && typingTimers.current.has(`${backend.account}:${event.message.chatId}`)) {
+          // Their message is what the typing was for.
+          showTyping(`${backend.account}:${event.message.chatId}`, null);
+        }
+        if (event.type === "message" && open?.account === backend.account && open.id === event.message.chatId) {
           setMessages((prev) => upsert(prev, event.message));
           if (!event.message.fromMe && document.hasFocus()) {
             void backend.markRead(event.message.chatId);
@@ -318,6 +341,29 @@ function Shell() {
       for (const stop of unsubscribe) stop();
     };
   }, [sources]);
+
+  // Kept the same between renders, so the settings don't load them again each time.
+  const whatsappPrivacy = useMemo(
+    () => ({
+      load: () => real.whatsapp.privacy!(),
+      save: (category: PrivacyCategory, value: string) => real.whatsapp.setPrivacy!(category, value),
+    }),
+    [real],
+  );
+
+  /** Shows someone typing in a chat, or stops; it stops by itself if no word follows, as WhatsApp does. */
+  const showTyping = useCallback((key: string, label: string | null) => {
+    window.clearTimeout(typingTimers.current.get(key));
+    typingTimers.current.delete(key);
+    if (label) typingTimers.current.set(key, window.setTimeout(() => showTyping(key, null), TYPING_FORGET_MS));
+    setTyping((prev) => {
+      if ((prev.get(key) ?? null) === label) return prev;
+      const next = new Map(prev);
+      if (label) next.set(key, label);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
 
   const backendFor = useCallback(
     (account: AccountId) => sources.find((b) => b.account === account) ?? null,
@@ -379,6 +425,8 @@ function Shell() {
       })
       .catch(console.error);
     void selectedBackend.markRead(selectedId);
+    // Online and last seen come for the chat on screen, as on WhatsApp Web.
+    selectedBackend.watchPresence?.(selectedId).catch(() => {});
     setChatsBy((prev) => {
       const list = prev.get(selectedBackend);
       if (!list?.some((c) => c.id === selectedId && (c.unread > 0 || c.markedUnread))) return prev;
@@ -617,7 +665,18 @@ function Shell() {
     () => sources.filter((backend) => (unified ? !backend.demo || !anyLinked : backend.account === active)),
     [sources, unified, anyLinked, active],
   );
-  const chats = shown.flatMap((backend) => chatsBy.get(backend) ?? []);
+  const chats = shown.flatMap((backend) => {
+    const list = chatsBy.get(backend) ?? [];
+    if (!typing.size && !presence.size) return list;
+    // Only the chats with something to add are new objects, so the other rows stay as drawn.
+    return list.map((chat) => {
+      const key = `${backend.account}:${chat.id}`;
+      const typed = typing.get(key);
+      const seen = presence.get(key);
+      if (!typed && !seen) return chat;
+      return { ...chat, typing: typed, online: seen?.online, lastSeen: seen?.lastSeen };
+    });
+  });
   if (shown.length > 1) chats.sort(byRecency);
   const showAccount = unified && anyLinked;
 
@@ -897,7 +956,17 @@ function Shell() {
 
   function subtitleFor(chat: Chat) {
     const phone = chat.id.match(/^(\d+)@s\.whatsapp\.net$/)?.[1];
-    const detail = chat.isGroup ? "Group" : chat.online ? "online" : phone ? `+${phone}` : "";
+    const detail = chat.typing
+      ? chat.typing
+      : chat.isGroup
+        ? "Group"
+        : chat.online
+          ? "online"
+          : chat.lastSeen
+            ? formatLastSeen(chat.lastSeen)
+            : phone
+              ? `+${phone}`
+              : "";
     return [showAccount ? ACCOUNTS[chat.account].label : "", detail].filter(Boolean).join(" · ");
   }
 
@@ -953,6 +1022,13 @@ function Shell() {
         onMessagePerson={(person, messageId) => openContact(person, messageId)}
         onOpenChatId={(id) => openChat(selectedChat.account, id)}
         onStarred={() => setPanel("starred")}
+        onTyping={(key, state) => {
+          if (!settings.sendTyping) return;
+          const at = key.indexOf(":");
+          backendFor(key.slice(0, at) as AccountId)
+            ?.setTyping?.(key.slice(at + 1), state)
+            .catch(() => {});
+        }}
         onMuteChat={
           selectedBackend?.setMuted
             ? (chatId, muted) => toggleMuted({ account: selectedChat.account, id: chatId, muted: !muted })
@@ -1074,6 +1150,11 @@ function Shell() {
             accounts={ACCOUNT_IDS.map((id) => accounts[id])}
             onBack={() => setView("chats")}
             onLink={openLinking}
+            privacy={
+              accounts.whatsapp.status.state === "connected" && real.whatsapp.privacy && real.whatsapp.setPrivacy
+                ? whatsappPrivacy
+                : undefined
+            }
           />
         )}
       </aside>

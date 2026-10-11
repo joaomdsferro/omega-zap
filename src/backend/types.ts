@@ -118,6 +118,10 @@ export interface Chat {
   archived?: boolean;
   isGroup?: boolean;
   online?: boolean;
+  /** When they were last online, as an ISO time, if they share it. */
+  lastSeen?: string;
+  /** Who is typing or recording right now, as the list says it ("typing…"). */
+  typing?: string;
   favorite?: boolean;
   /** Ids of the custom lists the chat is in. */
   lists?: string[];
@@ -212,7 +216,26 @@ export type BackendEvent =
   | { type: "message"; message: Message }
   | { type: "notice"; notice: Notice }
   /** Older messages of a chat came from the phone. */
-  | { type: "history"; chatId: string };
+  | { type: "history"; chatId: string }
+  /** Someone started or stopped typing or recording; `who` names them in a group. */
+  | { type: "typing"; chatId: string; who?: string; recording: boolean; active: boolean }
+  /** Someone came online or went away. */
+  | { type: "presence"; chatId: string; online: boolean; lastSeen?: string };
+
+/** What we are doing in the message box, for the other side to see. */
+export type TypingState = "typing" | "recording" | "paused";
+
+/** Who sees our last seen, online and read receipts, as WhatsApp names the values. */
+export interface Privacy {
+  /** "all", "contacts", "contact_blacklist" (contacts except some) or "none". */
+  lastSeen?: string;
+  /** "all" or "match_last_seen". */
+  online?: string;
+  /** "all" or "none". */
+  readReceipts?: string;
+}
+
+export type PrivacyCategory = "last" | "online" | "readreceipts";
 
 export interface ChatBackend {
   readonly account: AccountId;
@@ -268,6 +291,12 @@ export interface ChatBackend {
   setArchived?(chatId: string, archived: boolean): Promise<void>;
   /** Pins a chat to the top of the list, or unpins it. */
   setPinned?(chatId: string, pinned: boolean): Promise<void>;
+  /** Tells the chat we are typing, recording, or stopped. */
+  setTyping?(chatId: string, state: TypingState): Promise<void>;
+  /** Asks to hear when the other person comes online or goes away. */
+  watchPresence?(chatId: string): Promise<void>;
+  privacy?(): Promise<Privacy>;
+  setPrivacy?(category: PrivacyCategory, value: string): Promise<void>;
   /** The chat id for a phone number, or `null` when the number isn't on the network. */
   lookupNumber?(phone: string): Promise<string | null>;
   subscribe(listener: (event: BackendEvent) => void): () => void;

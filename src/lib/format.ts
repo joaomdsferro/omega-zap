@@ -37,6 +37,16 @@ export function formatMessageTime(iso: string): string {
   });
 }
 
+/** When someone was last online, as WhatsApp words it: "last seen today at 14:02". */
+export function formatLastSeen(iso: string): string {
+  const date = new Date(iso);
+  const diff = dayDiff(date);
+  const time = formatMessageTime(iso);
+  if (diff <= 0) return `last seen today at ${time}`;
+  if (diff === 1) return `last seen yesterday at ${time}`;
+  return `last seen ${date.toLocaleDateString([], { day: "2-digit", month: "2-digit", year: "numeric" })} at ${time}`;
+}
+
 export function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;

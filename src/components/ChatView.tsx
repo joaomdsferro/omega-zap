@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Chat, Message, OutgoingLink, Person, PersonDetails, StarredMessage } from "../backend";
+import type { Chat, Message, OutgoingLink, Person, PersonDetails, StarredMessage, TypingState } from "../backend";
 import { ContactInfo } from "./ContactInfo";
 import { listenForFileDrops } from "../lib/dropped";
 import { formatDayLabel, sameDay } from "../lib/format";
@@ -62,6 +62,8 @@ interface ChatViewProps {
   onOpenChatId?: (id: string) => void;
   onStarred?: () => void;
   onMuteChat?: (chatId: string, muted: boolean) => Promise<void>;
+  /** Tells a chat, named `account:id`, that we are typing or stopped. */
+  onTyping?: (chatKey: string, state: TypingState) => void;
   /** Loads the messages from before `before` (an ISO time); false when there are none. */
   onLoadOlder?: (before: string) => Promise<boolean>;
   /** Changes when older messages of this chat came from the phone: there may be more to load. */
@@ -70,7 +72,7 @@ interface ChatViewProps {
   searchMessages?: (query: string, chatId?: string) => Promise<StarredMessage[]>;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onTyping }: ChatViewProps) {
   const [personId, setPersonId] = useState<string | null>(null);
   const closePerson = useCallback(() => setPersonId(null), []);
   const loadShownPerson = useCallback(() => loadPerson!(personId!), [loadPerson, personId]);
@@ -586,6 +588,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
         }
         onCancelReply={() => setReplyingTo(null)}
         onSend={send}
+        onTyping={onTyping}
       />
     </section>
   );

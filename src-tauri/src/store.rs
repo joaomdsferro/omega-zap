@@ -873,7 +873,13 @@ impl ChatStore {
         }
     }
 
-    fn canonical(&self, jid: &str) -> String {
+    /// One of our own ids, on any device.
+    pub fn is_own(&self, jid: &str) -> bool {
+        let jid = self.canonical(jid);
+        self.own_ids.iter().any(|own| self.canonical(own) == jid)
+    }
+
+    pub fn canonical(&self, jid: &str) -> String {
         let jid = strip_device(jid);
         if is_lid(&jid)
             && let Some(pn) = self.lid_to_pn.get(&jid)
@@ -939,7 +945,7 @@ impl ChatStore {
         self.push_names.insert(jid, name.to_string());
     }
 
-    fn display_name(&self, jid: &str) -> String {
+    pub fn display_name(&self, jid: &str) -> String {
         let jid = self.canonical(jid);
         if self.own_ids.contains(&jid) {
             return "You".into();

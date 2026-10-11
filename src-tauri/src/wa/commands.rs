@@ -61,6 +61,26 @@ pub async fn wa_set_muted(mgr: Mgr<'_>, chat_id: String, muted: bool, until_ms: 
 }
 
 #[tauri::command]
+pub async fn wa_set_typing(mgr: Mgr<'_>, chat_id: String, state: String) -> Result<(), String> {
+    mgr.set_typing(&chat_id, &state).await
+}
+
+#[tauri::command]
+pub async fn wa_watch_presence(mgr: Mgr<'_>, chat_id: String) -> Result<(), String> {
+    mgr.watch_presence(&chat_id).await
+}
+
+#[tauri::command]
+pub async fn wa_privacy(mgr: Mgr<'_>) -> Result<super::PrivacyDto, String> {
+    mgr.privacy().await
+}
+
+#[tauri::command]
+pub async fn wa_set_privacy(mgr: Mgr<'_>, category: String, value: String) -> Result<(), String> {
+    mgr.set_privacy(&category, &value).await
+}
+
+#[tauri::command]
 pub async fn wa_set_archived(mgr: Mgr<'_>, chat_id: String, archived: bool) -> Result<(), String> {
     mgr.set_archived(&chat_id, archived).await
 }

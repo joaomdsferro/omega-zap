@@ -22,8 +22,11 @@ import type {
   Person,
   PersonDetails,
   Notice,
+  Privacy,
+  PrivacyCategory,
   ReactionCount,
   StarredMessage,
+  TypingState,
 } from "./types";
 
 interface RawChat {
@@ -181,6 +184,10 @@ export class TauriBackend implements ChatBackend {
   openMedia?: (chatId: string, messageId: string, index: number) => Promise<void>;
   linkThumbnailUrl?: (chatId: string, messageId: string) => Promise<string>;
   lookupNumber?: (phone: string) => Promise<string | null>;
+  setTyping?: (chatId: string, state: TypingState) => Promise<void>;
+  watchPresence?: (chatId: string) => Promise<void>;
+  privacy?: () => Promise<Privacy>;
+  setPrivacy?: (category: PrivacyCategory, value: string) => Promise<void>;
 
   constructor(readonly account: AccountId) {
     this.prefix = COMMAND_PREFIX[account];
@@ -193,6 +200,17 @@ export class TauriBackend implements ChatBackend {
       this.linkThumbnailUrl = async (chatId, messageId) =>
         fileUrl(await invoke<string>("wa_link_thumbnail", { chatId, messageId }), "media");
       this.lookupNumber = (phone) => invoke<string | null>("wa_lookup_number", { phone });
+      this.setTyping = (chatId, state) => invoke("wa_set_typing", { chatId, state });
+      this.watchPresence = (chatId) => invoke("wa_watch_presence", { chatId });
+      this.privacy = async () => {
+        const raw = await invoke<{ lastSeen: string | null; online: string | null; readReceipts: string | null }>("wa_privacy");
+        return {
+          lastSeen: raw.lastSeen ?? undefined,
+          online: raw.online ?? undefined,
+          readReceipts: raw.readReceipts ?? undefined,
+        };
+      };
+      this.setPrivacy = (category, value) => invoke("wa_set_privacy", { category, value });
     }
   }
 
@@ -363,6 +381,17 @@ export class TauriBackend implements ChatBackend {
       listen<string>(`${this.prefix}://history`, (e) => listener({ type: "history", chatId: e.payload })),
       listen<RawMessage>(`${this.prefix}://message`, (e) =>
         listener({ type: "message", message: toMessage(e.payload) }),
+      ),
+      listen<{ chatId: string; who: string | null; recording: boolean; active: boolean }>(`${this.prefix}://typing`, (e) =>
+        listener({ type: "typing", ...e.payload, who: e.payload.who ?? undefined }),
+      ),
+      listen<{ chatId: string; online: boolean; lastSeenMs: number | null }>(`${this.prefix}://presence`, (e) =>
+        listener({
+          type: "presence",
+          chatId: e.payload.chatId,
+          online: e.payload.online,
+          lastSeen: e.payload.lastSeenMs ? new Date(e.payload.lastSeenMs).toISOString() : undefined,
+        }),
       ),
       listen<RawNotice>(`${this.prefix}://notice`, (e) => {
         const notice: Notice = { ...e.payload, avatar: e.payload.avatar ?? undefined };

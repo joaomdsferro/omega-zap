@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -16,13 +17,14 @@ use whatsapp_rust::http::HttpRequest;
 use whatsapp_rust::prelude::*;
 use whatsapp_rust::wacore::store::DevicePropsOverride;
 use whatsapp_rust::wacore::types::events::LazyHistorySync;
-use whatsapp_rust::wacore::types::presence::ReceiptType;
+use whatsapp_rust::wacore::iq::privacy::{PrivacyCategory, PrivacyValue};
+use whatsapp_rust::wacore::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
 use whatsapp_rust::waproto::buffa::MessageField;
 use whatsapp_rust::waproto::whatsapp::sync_action_value::label_edit_action::ListType;
 use whatsapp_rust::waproto::whatsapp::sync_action_value::{FavoritesAction, LabelEditAction, favorites_action};
 use whatsapp_rust::{
-    AppStateResyncMode, ErrorChainExt, MediaRetryResult, MediaReuploadRequest, ProfilePictureLookup, RevokeType, UploadOptions,
-    WAPatchName, message_key, message_range, schemas,
+    AppStateResyncMode, ChatStateType, ErrorChainExt, MediaRetryResult, MediaReuploadRequest, PresencePolicy, PresenceStatus,
+    ProfilePictureLookup, RevokeType, UploadOptions, WAPatchName, message_key, message_range, schemas,
 };
 
 use crate::account::{
@@ -130,6 +132,45 @@ pub struct WaManager {
     backfill_for: AtomicU64,
     /// A chat opened while it had no messages here: fetched next.
     backfill_next: Mutex<Option<String>>,
+    /// The window is open and in front: we show as online, as WhatsApp Web
+    /// does while it is looked at.
+    active: AtomicBool,
+    /// What the server was last told: 0 nothing since connecting, 1 offline, 2 online.
+    announced: std::sync::atomic::AtomicU8,
+}
+
+/// How long the window can be out of focus before we show as offline, so
+/// a menu or a quick switch doesn't flicker it.
+const AWAY_AFTER: Duration = Duration::from_secs(10);
+
+/// Someone typing or recording in a chat, or stopping.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TypingDto {
+    chat_id: String,
+    /// Who, in a group.
+    who: Option<String>,
+    recording: bool,
+    active: bool,
+}
+
+/// Whether someone is online, or when they last were.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PresenceDto {
+    chat_id: String,
+    online: bool,
+    last_seen_ms: Option<i64>,
+}
+
+/// The account's privacy settings that decide what others see of it, as
+/// WhatsApp names their values.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivacyDto {
+    last_seen: Option<String>,
+    online: Option<String>,
+    read_receipts: Option<String>,
 }
 
 impl WaManager {
@@ -166,6 +207,8 @@ impl WaManager {
             on_demand_answered: tokio::sync::Notify::new(),
             backfill_for: AtomicU64::new(u64::MAX),
             backfill_next: Mutex::new(None),
+            active: AtomicBool::new(false),
+            announced: std::sync::atomic::AtomicU8::new(0),
         }))
     }
 
@@ -359,6 +402,9 @@ impl WaManager {
                     .with_platform_type(wa::device_props::PlatformType::CHROME),
             )
             .with_event_delivery(EventDelivery::Ordered { capacity: 8192 })
+            // Online only while the window is in front, not whenever the app
+            // runs in the tray: that would also keep the phone from ringing.
+            .with_presence_policy(PresencePolicy::Manual)
             .on_event(move |event, client| {
                 let mgr = mgr.clone();
                 async move { mgr.handle_event(generation, event, client).await }
@@ -1060,6 +1106,90 @@ impl WaManager {
         Ok(())
     }
 
+    /// Shows us online while the window is in front, and offline otherwise.
+    pub fn set_active(self: &Arc<Self>, active: bool) {
+        if self.active.swap(active, Ordering::AcqRel) == active {
+            return;
+        }
+        let mgr = self.clone();
+        tauri::async_runtime::spawn(async move {
+            if !active {
+                tokio::time::sleep(AWAY_AFTER).await;
+            }
+            // Back in front meanwhile, or gone again: a later call decides.
+            if mgr.active.load(Ordering::Acquire) == active {
+                mgr.announce_presence().await;
+            }
+        });
+    }
+
+    /// Tells the server whether we are online, when that changed since it
+    /// was last told.
+    async fn announce_presence(&self) {
+        let Some(client) = self.client().await else {
+            return;
+        };
+        let active = self.active.load(Ordering::Acquire);
+        if self.announced.swap(if active { 2 } else { 1 }, Ordering::AcqRel) == if active { 2 } else { 1 } {
+            return;
+        }
+        let status = if active { PresenceStatus::Available } else { PresenceStatus::Unavailable };
+        if let Err(e) = client.presence().set(status).await {
+            self.announced.store(0, Ordering::Release);
+            log::warn!("whatsapp: presence not sent: {e}");
+        }
+    }
+
+    /// Tells the chat we are typing, recording, or have stopped.
+    pub async fn set_typing(&self, chat_id: &str, state: &str) -> Result<(), String> {
+        let state = match state {
+            "typing" => ChatStateType::Composing,
+            "recording" => ChatStateType::Recording,
+            _ => ChatStateType::Paused,
+        };
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
+        client.chatstate().send(&jid, state).await.map_err(|e| format!("Typing not sent: {e}"))
+    }
+
+    /// Asks to be told when someone comes online or goes away. Groups have
+    /// no presence of their own.
+    pub async fn watch_presence(&self, chat_id: &str) -> Result<(), String> {
+        if chat_id.ends_with("@g.us") || chat_id.ends_with("@broadcast") || chat_id.ends_with("@newsletter") {
+            return Ok(());
+        }
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
+        client.presence().subscribe(jid).await.map_err(|e| format!("Presence not asked for: {e}"))
+    }
+
+    pub async fn privacy(&self) -> Result<PrivacyDto, String> {
+        let client = self.connected_client().await?;
+        let settings = client.fetch_privacy_settings().await.map_err(|e| format!("Privacy settings not loaded: {e}"))?;
+        let value = |category| settings.get_value(&category).map(|v: &PrivacyValue| v.to_string());
+        Ok(PrivacyDto {
+            last_seen: value(PrivacyCategory::Last),
+            online: value(PrivacyCategory::Online),
+            read_receipts: value(PrivacyCategory::ReadReceipts),
+        })
+    }
+
+    /// Changes who sees our last seen (`last`), online (`online`) or read
+    /// receipts (`readreceipts`), on the account itself.
+    pub async fn set_privacy(&self, category: &str, value: &str) -> Result<(), String> {
+        let category = PrivacyCategory::from(category);
+        let value = PrivacyValue::from(value);
+        if matches!(category, PrivacyCategory::Other(_)) || !category.is_valid_value(&value) {
+            return Err("That privacy setting can't be changed here.".into());
+        }
+        let client = self.connected_client().await?;
+        client
+            .set_privacy_setting(category, value)
+            .await
+            .map_err(|e| format!("The privacy setting was not changed: {e}"))?;
+        Ok(())
+    }
+
     /// Archives a chat or brings it back, here and on the phone. Archiving
     /// unpins it, as the phone does.
     pub async fn set_archived(&self, chat_id: &str, archived: bool) -> Result<(), String> {
@@ -1659,6 +1789,12 @@ impl WaManager {
                     s.error = None;
                 });
                 self.mark_dirty();
+                // A new connection starts offline.
+                self.announced.store(1, Ordering::Release);
+                if self.active.load(Ordering::Acquire) {
+                    let mgr = self.clone();
+                    tauri::async_runtime::spawn(async move { mgr.announce_presence().await });
+                }
                 self.sync_chat_state(generation, client.clone());
                 self.refresh_ticks(generation, client.clone());
                 self.fetch_all_history(generation, client.clone());
@@ -1811,6 +1947,30 @@ impl WaManager {
                     update.action_timestamp.unwrap_or(update.timestamp).timestamp_millis(),
                 );
                 self.mark_dirty();
+            }
+            Event::ChatPresence(update) => {
+                let source = &update.source;
+                let store = lock(&self.store);
+                let sender = source.sender.to_non_ad_string();
+                if source.is_from_me || store.is_own(&sender) {
+                    return;
+                }
+                let typing = TypingDto {
+                    chat_id: store.canonical(&source.chat.to_non_ad_string()),
+                    who: source.is_group.then(|| store.display_name(&sender)),
+                    recording: update.media == ChatPresenceMedia::Audio,
+                    active: update.state == ChatPresence::Composing,
+                };
+                drop(store);
+                let _ = self.app.emit("wa://typing", typing);
+            }
+            Event::Presence(update) => {
+                let presence = PresenceDto {
+                    chat_id: lock(&self.store).canonical(&update.from.to_non_ad_string()),
+                    online: !update.unavailable,
+                    last_seen_ms: update.last_seen.map(|t| t.timestamp_millis()),
+                };
+                let _ = self.app.emit("wa://presence", presence);
             }
             Event::ArchiveUpdate(update) => {
                 lock(&self.store).set_archived(

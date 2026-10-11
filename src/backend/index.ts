@@ -16,9 +16,12 @@ export type {
   Person,
   PersonDetails,
   GroupRef,
+  Privacy,
+  PrivacyCategory,
   ReactionCount,
   ReplyQuote,
   StarredMessage,
+  TypingState,
 } from "./types";
 export { MockBackend } from "./mock";
 export { TauriBackend } from "./tauri";

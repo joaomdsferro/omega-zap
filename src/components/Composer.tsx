@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { AccountId } from "../accounts/accounts";
-import type { LinkPreview, OutgoingLink, ReplyQuote } from "../backend";
+import type { LinkPreview, OutgoingLink, ReplyQuote, TypingState } from "../backend";
 import { Emoji } from "../lib/emoji";
 import { searchEmoji } from "../lib/emojiSearch";
 import { formatFileSize } from "../lib/format";
@@ -28,6 +28,48 @@ interface ComposerProps {
   /** Adds files to send; absent where files can't be sent. */
   onAddFiles?: (files: File[]) => void;
   onRemoveFile?: (index: number) => void;
+  /** Tells the chat we are typing, or stopped; absent where it isn't sent. */
+  onTyping?: (chatId: string, state: TypingState) => void;
+}
+
+/** "Typing" is said again this often while it goes on: the other side forgets it after a while. */
+const TYPING_REPEAT_MS = 10_000;
+/** A pause this long in typing counts as stopping. */
+const TYPING_IDLE_MS = 5_000;
+
+/** Says "typing" while the text changes, and "stopped" after a pause, a send or leaving the chat. */
+function useTypingSignal(chatId: string, onTyping?: (chatId: string, state: TypingState) => void) {
+  const send = useRef(onTyping);
+  send.current = onTyping;
+  const state = useRef<{ chatId: string; sentAt: number; idle?: number } | null>(null);
+
+  const stop = useCallback(() => {
+    const was = state.current;
+    if (!was) return;
+    window.clearTimeout(was.idle);
+    state.current = null;
+    send.current?.(was.chatId, "paused");
+  }, []);
+
+  const typed = useCallback(
+    (hasText: boolean) => {
+      if (!send.current || !hasText) return stop();
+      const now = Date.now();
+      const was = state.current;
+      if (!was || was.chatId !== chatId || now - was.sentAt > TYPING_REPEAT_MS) {
+        if (was && was.chatId !== chatId) stop();
+        send.current(chatId, "typing");
+        state.current = { chatId, sentAt: now };
+      }
+      window.clearTimeout(state.current?.idle);
+      if (state.current) state.current.idle = window.setTimeout(stop, TYPING_IDLE_MS);
+    },
+    [chatId, stop],
+  );
+
+  // Leaving the chat stops it there.
+  useEffect(() => stop, [chatId, stop]);
+  return { typed, stop };
 }
 
 function Spinner({ size }: { size: number }) {
@@ -113,7 +155,7 @@ function useTypedLink(text: string, enabled: boolean) {
   return found?.url === url ? { url, preview: found.preview, loading: false } : { url, preview: null, loading: true };
 }
 
-export function Composer({ chatId, account, disabled, disabledReason, replyTo, onCancelReply, onSend, files = [], onAddFiles, onRemoveFile }: ComposerProps) {
+export function Composer({ chatId, account, disabled, disabledReason, replyTo, onCancelReply, onSend, files = [], onAddFiles, onRemoveFile, onTyping }: ComposerProps) {
   const { settings } = useSettings();
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
@@ -123,6 +165,7 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
   const picker = useRef<HTMLInputElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const emojiButton = useRef<HTMLButtonElement>(null);
+  const typing = useTypingSignal(chatId, onTyping);
 
   useEffect(() => {
     input.current?.setText("");
@@ -179,6 +222,7 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
     const value = text.trim();
     if ((!value && !files.length) || disabled || sending) return;
     setSending(true);
+    typing.stop();
     try {
       const card = !files.length && linkCard?.preview ? await outgoingLink(linkCard.preview) : undefined;
       await onSend(value, files, card);
@@ -360,6 +404,7 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
         <MessageInput
           ref={input}
           onChange={(value, at) => {
+            typing.typed(value.trim().length > 0);
             setText(value);
             setCaret(at);
             setDismissed(null);

@@ -111,12 +111,19 @@ const ChatRow = memo(function ChatRow({
             </time>
           </div>
           <div className="mt-0.5 flex items-center gap-1.5 text-(--text-secondary)">
-            {chat.lastFromMe ? (
-              <span className="shrink-0">
-                <Ticks status={chat.lastStatus} account={chat.account} />
-              </span>
-            ) : null}
-            <p className="min-w-0 flex-1 truncate text-[14px] leading-5"><FormattedLine text={chat.lastMessage ?? ""} emojiSize={18} /></p>
+            {chat.typing ? (
+              // Someone typing takes the place of the last message, as on the phone.
+              <p className="min-w-0 flex-1 truncate text-[14px] leading-5 text-(--accent)">{chat.typing}</p>
+            ) : (
+              <>
+                {chat.lastFromMe ? (
+                  <span className="shrink-0">
+                    <Ticks status={chat.lastStatus} account={chat.account} />
+                  </span>
+                ) : null}
+                <p className="min-w-0 flex-1 truncate text-[14px] leading-5"><FormattedLine text={chat.lastMessage ?? ""} emojiSize={18} /></p>
+              </>
+            )}
             {chat.muted ? <MuteIcon size={16} aria-label="Muted" /> : null}
             {chat.pinned ? <PinIcon size={16} aria-label="Pinned" /> : null}
             {chat.unread > 0 ? (

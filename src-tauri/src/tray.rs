@@ -186,6 +186,17 @@ fn save_window_state(background: &Background, window: &tauri::WebviewWindow) {
 /// Closing the window frees what it holds. WebKitGTK keeps the page's
 /// process running after its view is gone, so it is ended here first.
 pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
+    // We show as online on WhatsApp only while the window is in front.
+    let active = match event {
+        tauri::WindowEvent::Focused(focused) => Some(*focused),
+        tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => Some(false),
+        _ => None,
+    };
+    if let Some(active) = active
+        && let Some(manager) = window.app_handle().try_state::<std::sync::Arc<wa::WaManager>>()
+    {
+        manager.set_active(active);
+    }
     let tauri::WindowEvent::CloseRequested { api, .. } = event else {
         return;
     };
