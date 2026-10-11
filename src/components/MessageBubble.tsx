@@ -16,6 +16,7 @@ import {
   FileIcon,
   ForwardIcon,
   PersonIcon,
+  PinIcon,
   MoreIcon,
   PlayIcon,
   ReplyIcon,
@@ -61,6 +62,8 @@ interface MessageBubbleProps {
   onOpenPerson?: (id: string) => void;
   /** Briefly highlighted: the message was jumped to. */
   flash?: boolean;
+  /** Pinned in the chat for everyone. */
+  pinned?: boolean;
 }
 
 function Tail({ mine }: { mine: boolean }) {
@@ -84,9 +87,10 @@ const STATUS_LABEL: Record<DeliveryStatus, string> = {
   read: "Read",
 };
 
-function Meta({ message, account }: { message: Message; account: AccountId }) {
+function Meta({ message, account, pinned }: { message: Message; account: AccountId; pinned?: boolean }) {
   return (
     <span className="flex items-center gap-1 text-[11px] leading-3.75 whitespace-nowrap text-(--bubble-meta)">
+      {pinned ? <PinIcon size={11} aria-label="Pinned" aria-hidden={false} role="img" /> : null}
       {message.starred ? <StarIcon size={11} filled aria-label="Starred" aria-hidden={false} role="img" /> : null}
       <time dateTime={message.sentAt}>{formatMessageTime(message.sentAt)}</time>
       {message.fromMe && message.status ? (
@@ -261,7 +265,7 @@ const LONG_PRESS_MS = 450;
 /** WhatsApp's forwarding score from which a message counts as forwarded many times. */
 const FORWARDED_MANY = 5;
 
-export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight, pinned }: MessageBubbleProps) {
   const { settings } = useSettings();
   const [picking, setPicking] = useState(false);
   // The reactions' details, opened from their pill.
@@ -301,7 +305,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
   // The spacer is an invisible copy of the meta, so it always matches its width.
   const metaSpacer = (
     <span className="invisible inline-block pl-1 align-top select-none" aria-hidden>
-      <Meta message={message} account={account} />
+      <Meta message={message} account={account} pinned={pinned} />
     </span>
   );
 
@@ -583,7 +587,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
         ) : null}
 
         <span className={hasText || deleted ? "absolute right-1.75 bottom-1.25" : "flex justify-end"}>
-          <Meta message={message} account={account} />
+          <Meta message={message} account={account} pinned={pinned} />
         </span>
 
         {reactions.length > 0 ? (

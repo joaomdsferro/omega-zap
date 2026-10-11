@@ -184,6 +184,7 @@ export class TauriBackend implements ChatBackend {
   openMedia?: (chatId: string, messageId: string, index: number) => Promise<void>;
   linkThumbnailUrl?: (chatId: string, messageId: string) => Promise<string>;
   lookupNumber?: (phone: string) => Promise<string | null>;
+  pinnedMessages?: (chatId: string) => Promise<Message[]>;
   setTyping?: (chatId: string, state: TypingState) => Promise<void>;
   watchPresence?: (chatId: string) => Promise<void>;
   privacy?: () => Promise<Privacy>;
@@ -200,6 +201,7 @@ export class TauriBackend implements ChatBackend {
       this.linkThumbnailUrl = async (chatId, messageId) =>
         fileUrl(await invoke<string>("wa_link_thumbnail", { chatId, messageId }), "media");
       this.lookupNumber = (phone) => invoke<string | null>("wa_lookup_number", { phone });
+      this.pinnedMessages = async (chatId) => (await invoke<RawMessage[]>("wa_pinned_messages", { chatId })).map(toMessage);
       this.setTyping = (chatId, state) => invoke("wa_set_typing", { chatId, state });
       this.watchPresence = (chatId) => invoke("wa_watch_presence", { chatId });
       this.privacy = async () => {
@@ -379,6 +381,7 @@ export class TauriBackend implements ChatBackend {
     const pending: Promise<UnlistenFn>[] = [
       listen(`${this.prefix}://chats`, () => listener({ type: "chats-changed" })),
       listen<string>(`${this.prefix}://history`, (e) => listener({ type: "history", chatId: e.payload })),
+      listen<string>(`${this.prefix}://pins`, (e) => listener({ type: "pins", chatId: e.payload })),
       listen<RawMessage>(`${this.prefix}://message`, (e) =>
         listener({ type: "message", message: toMessage(e.payload) }),
       ),

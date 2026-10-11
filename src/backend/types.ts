@@ -217,6 +217,8 @@ export type BackendEvent =
   | { type: "notice"; notice: Notice }
   /** Older messages of a chat came from the phone. */
   | { type: "history"; chatId: string }
+  /** A message of a chat was pinned or unpinned. */
+  | { type: "pins"; chatId: string }
   /** Someone started or stopped typing or recording; `who` names them in a group. */
   | { type: "typing"; chatId: string; who?: string; recording: boolean; active: boolean }
   /** Someone came online or went away. */
@@ -245,6 +247,8 @@ export interface ChatBackend {
   getMessages(chatId: string): Promise<Message[]>;
   /** Messages from before `beforeMs`, oldest first: the history past what `getMessages` gives. */
   olderMessages?(chatId: string, beforeMs: number): Promise<Message[]>;
+  /** The messages pinned in a chat for everyone, the latest pin first. */
+  pinnedMessages?(chatId: string): Promise<Message[]>;
   /** Puts a chat first in line for its history to be fetched from the phone. */
   fetchHistoryFirst?(chatId: string): Promise<void>;
   /**

@@ -222,6 +222,86 @@ pub fn reaction(message: &wa::Message) -> Option<(String, Option<String>)> {
     Some((target, non_empty(&reaction.text)))
 }
 
+/// A message pinned for everyone, or unpinned.
+pub struct Pin {
+    /// The pinned message.
+    pub target: String,
+    pub at_ms: i64,
+    /// When the pin runs out; `None` for an unpin.
+    pub until_ms: Option<i64>,
+}
+
+/// How long a pin lasts when it doesn't say: WhatsApp's default.
+const DEFAULT_PIN_SECS: u32 = 7 * 24 * 3600;
+
+fn pin_of(
+    kind: Option<bool>,
+    key: &MessageField<wa::MessageKey>,
+    sent_ms: Option<i64>,
+    duration_s: Option<u32>,
+    fallback_ms: i64,
+) -> Option<Pin> {
+    let target = key.as_option()?.id.clone()?;
+    let at_ms = sent_ms.filter(|t| *t > 0).unwrap_or(fallback_ms);
+    let until_ms = match kind? {
+        true => Some(at_ms + duration_s.filter(|d| *d > 0).unwrap_or(DEFAULT_PIN_SECS) as i64 * 1000),
+        false => None,
+    };
+    Some(Pin { target, at_ms, until_ms })
+}
+
+/// A pin or unpin carried by a message. `sent_ms` stands in for the time
+/// when the pin has none of its own.
+pub fn pin(message: &wa::Message, sent_ms: i64) -> Option<Pin> {
+    use wa::message::pin_in_chat_message::Type;
+    let base = message.get_base_message();
+    let pin = base.pin_in_chat_message.as_option()?;
+    let kind = match pin.r#type {
+        Some(Type::PIN_FOR_ALL) => Some(true),
+        Some(Type::UNPIN_FOR_ALL) => Some(false),
+        _ => None,
+    };
+    let duration = [message, base]
+        .into_iter()
+        .find_map(|m| m.message_context_info.as_option().and_then(|c| c.message_add_on_duration_in_secs));
+    pin_of(kind, &pin.key, pin.sender_timestamp_ms, duration, sent_ms)
+}
+
+/// Pins and unpins recorded on a history-sync message: as the message
+/// itself, as what it says about a pin, or as add-ons of a pinned message.
+pub fn history_pins(item: &wa::HistorySyncMsg) -> Vec<Pin> {
+    use wa::message_add_on::MessageAddOnType;
+    use wa::pin_in_chat::Type;
+    let Some(web) = item.message.as_option() else {
+        return Vec::new();
+    };
+    let sent_ms = web.message_timestamp.unwrap_or_default() as i64 * 1000;
+    let mut out = Vec::new();
+    out.extend(web.message.as_option().and_then(|m| pin(m, sent_ms)));
+    if let Some(p) = web.pin_in_chat.as_option() {
+        let kind = match p.r#type {
+            Some(Type::PIN_FOR_ALL) => Some(true),
+            Some(Type::UNPIN_FOR_ALL) => Some(false),
+            _ => None,
+        };
+        let duration = p.message_add_on_context_info.as_option().and_then(|c| c.message_add_on_duration_in_secs);
+        out.extend(pin_of(kind, &p.key, p.sender_timestamp_ms, duration, sent_ms));
+    }
+    for add_on in &web.message_add_ons {
+        if add_on.message_add_on_type != Some(MessageAddOnType::PIN_IN_CHAT) {
+            continue;
+        }
+        let Some(message) = add_on.message_add_on.as_option() else { continue };
+        let Some(mut p) = pin(message, add_on.sender_timestamp_ms.unwrap_or(sent_ms)) else { continue };
+        let duration = add_on.add_on_context_info.as_option().and_then(|c| c.message_add_on_duration_in_secs);
+        if let (Some(_), Some(d)) = (p.until_ms, duration.filter(|d| *d > 0)) {
+            p.until_ms = Some(p.at_ms + d as i64 * 1000);
+        }
+        out.push(p);
+    }
+    out
+}
+
 /// Reactions recorded on a history-sync message: who reacted and with what.
 /// `None` as the author means us.
 pub fn history_reactions(chat_id: &str, item: &wa::HistorySyncMsg) -> Vec<(Option<String>, String)> {

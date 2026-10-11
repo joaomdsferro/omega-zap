@@ -46,6 +46,11 @@ pub fn wa_get_messages(mgr: Mgr<'_>, chat_id: String) -> Vec<MessageDto> {
 }
 
 #[tauri::command]
+pub fn wa_pinned_messages(mgr: Mgr<'_>, chat_id: String) -> Vec<MessageDto> {
+    mgr.pinned_messages(&chat_id)
+}
+
+#[tauri::command]
 pub fn wa_mark_read(mgr: Mgr<'_>, chat_id: String) {
     mgr.mark_read(&chat_id);
 }

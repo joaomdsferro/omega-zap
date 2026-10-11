@@ -48,6 +48,11 @@ export class MockBackend implements ChatBackend {
     return [...(this.messages.get(chatId) ?? [])];
   }
 
+  /** Demo pins: the first two texts of each chat, the later one pinned last. */
+  async pinnedMessages(chatId: string): Promise<Message[]> {
+    return (this.messages.get(chatId) ?? []).filter((m) => m.kind === "text" && !m.deleted).slice(0, 2).reverse();
+  }
+
   async markRead(chatId: string): Promise<void> {
     const chat = this.chats.find((c) => c.id === chatId);
     if (chat && chat.unread > 0) {

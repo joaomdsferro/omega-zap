@@ -13,6 +13,7 @@ import { MediaViewer } from "./MediaViewer";
 import type { ViewerItem } from "./MediaViewer";
 import { DeleteDialog } from "./DeleteDialog";
 import { MessageBubble } from "./MessageBubble";
+import { PinnedBar } from "./PinnedBar";
 import { ChatSearch, searchChat } from "./ChatSearch";
 import { searchWords } from "../lib/search";
 import { SearchIcon } from "./Icons";
@@ -70,9 +71,13 @@ interface ChatViewProps {
   historyTick?: number;
   /** Searches the whole history, for the search in this chat. */
   searchMessages?: (query: string, chatId?: string) => Promise<StarredMessage[]>;
+  /** The messages pinned in a chat, the latest pin first. */
+  loadPinned?: (chatId: string) => Promise<Message[]>;
+  /** Changes when a message of this chat was pinned or unpinned. */
+  pinsTick?: number;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onTyping }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onTyping, loadPinned, pinsTick }: ChatViewProps) {
   const [personId, setPersonId] = useState<string | null>(null);
   const closePerson = useCallback(() => setPersonId(null), []);
   const loadShownPerson = useCallback(() => loadPerson!(personId!), [loadPerson, personId]);
@@ -240,6 +245,26 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
   }, [chatKey]);
   /** A quoted message that was clicked, to scroll to. */
   const [jumpTo, setJumpTo] = useState<string | null>(null);
+
+  // Pinned messages, asked for again when pins change or older history comes.
+  const [pinsOf, setPinsOf] = useState<{ chatKey: string; list: Message[] }>({ chatKey, list: [] });
+  useEffect(() => {
+    if (!loadPinned) return setPinsOf({ chatKey, list: [] });
+    let alive = true;
+    loadPinned(chat.id)
+      .then((list) => alive && setPinsOf({ chatKey, list }))
+      .catch(console.error);
+    return () => {
+      alive = false;
+    };
+  }, [loadPinned, chat.id, chatKey, pinsTick, historyTick]);
+  // A pinned message that is loaded shows as it is now, edited or deleted.
+  const pins = useMemo(() => {
+    if (pinsOf.chatKey !== chatKey) return [];
+    const loaded = new Map(messages.map((m) => [m.id, m]));
+    return pinsOf.list.map((pin) => loaded.get(pin.id) ?? pin).filter((pin) => !pin.deleted);
+  }, [pinsOf, chatKey, messages]);
+  const pinnedIds = useMemo(() => new Set(pins.map((pin) => pin.id)), [pins]);
   const [viewing, setViewing] = useState<string | null>(null);
   const viewable = useMemo(
     () =>
@@ -424,6 +449,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
           {showAccount ? <AccountBadge account={chat.account} size={26} /> : null}
         </span>
       </header>
+      <PinnedBar pins={pins} chatKey={chatKey} onJump={setJumpTo} />
       {searchOpen ? <ChatSearch query={searchQuery} onQuery={setSearchQuery} found={searchFound} onJump={setJumpTo} onClose={() => setSearching(null)} /> : null}
 
       <div
@@ -504,6 +530,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                     onOpenPerson={loadPerson ? setPersonId : undefined}
                     flash={flashed === message.id}
                     highlight={searchHits.has(message.id) ? searchMarks : undefined}
+                    pinned={pinnedIds.has(message.id)}
                   />
                 );
                 if (message.id !== unread.current.id) return bubble;

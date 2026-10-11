@@ -307,6 +307,17 @@ impl WaManager {
         }
     }
 
+    /// The messages pinned in a chat, the latest pin first. Pinned messages
+    /// only the history database has are brought back into memory.
+    pub fn pinned_messages(&self, chat_id: &str) -> Vec<MessageDto> {
+        let ids = lock(&self.store).pinned_ids(chat_id);
+        for id in &ids {
+            self.recall(chat_id, id);
+        }
+        let store = lock(&self.store);
+        ids.iter().filter_map(|id| store.message_dto(chat_id, id)).collect()
+    }
+
     /// Messages of a chat from before `before_ms`, for scrolling back past
     /// what memory keeps.
     pub fn older_messages(&self, chat_id: &str, before_ms: i64, limit: usize) -> Vec<MessageDto> {
@@ -1820,6 +1831,7 @@ impl WaManager {
             Event::Messages(batch) => {
                 let mut dtos: Vec<MessageDto> = Vec::new();
                 let mut notices: Vec<Notice> = Vec::new();
+                let mut pinned_in: Vec<String> = Vec::new();
                 // Reactions and deletions can be for messages only the history has.
                 for m in batch.iter() {
                     let target = convert::revoke(&m.message).or_else(|| convert::reaction(&m.message).map(|(target, _)| target));
@@ -1833,6 +1845,13 @@ impl WaManager {
                         if let Some(target) = convert::revoke(&m.message) {
                             let chat = m.info.source.chat.to_non_ad_string();
                             dtos.extend(store.delete_message(&chat, &target, Deletion::ForEveryone));
+                            continue;
+                        }
+                        if let Some(pin) = convert::pin(&m.message, m.info.timestamp.timestamp_millis()) {
+                            let chat = m.info.source.chat.to_non_ad_string();
+                            if store.set_message_pin(&chat, &pin.target, pin.at_ms, pin.until_ms) {
+                                pinned_in.push(store.chat_key(&chat));
+                            }
                             continue;
                         }
                         match convert::reaction(&m.message) {
@@ -1861,6 +1880,11 @@ impl WaManager {
                 }
                 for dto in dtos {
                     let _ = self.app.emit("wa://message", dto);
+                }
+                pinned_in.sort();
+                pinned_in.dedup();
+                for chat in pinned_in {
+                    let _ = self.app.emit("wa://pins", chat);
                 }
                 for notice in notices {
                     crate::notify::deliver(&self.app, "whatsapp", "wa://notice", notice);
@@ -2074,6 +2098,9 @@ impl WaManager {
                 *answered.entry(store.chat_key(&c.id)).or_default() += c.messages.len() as u32;
             }
             for item in &c.messages {
+                for pin in convert::history_pins(item) {
+                    store.set_message_pin(&c.id, &pin.target, pin.at_ms, pin.until_ms);
+                }
                 if let Some(incoming) = convert::history(&c.id, item) {
                     let id = incoming.message.id.clone();
                     store.ingest(incoming, false);

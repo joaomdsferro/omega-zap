@@ -324,6 +324,7 @@ pub fn run() {
             wa::commands::wa_save_list,
             wa::commands::wa_delete_list,
             wa::commands::wa_set_starred,
+            wa::commands::wa_pinned_messages,
             wa::commands::wa_starred,
             wa::commands::wa_search,
             wa::commands::wa_older_messages,

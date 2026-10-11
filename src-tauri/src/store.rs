@@ -374,7 +374,27 @@ struct StoredChat {
     members_checked_ms: i64,
     /// Who is in the group, once looked up: finds the groups in common.
     participants: Vec<String>,
+    /// Messages pinned for everyone, and unpins kept a while so an older
+    /// pin replayed by history does not bring them back.
+    pins: Vec<StoredPin>,
 }
+
+/// A message pinned in a chat for everyone in it, or unpinned.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct StoredPin {
+    /// The pinned message.
+    id: String,
+    /// When it was pinned or unpinned.
+    at_ms: i64,
+    /// When the pin runs out; `None` once unpinned.
+    until_ms: Option<i64>,
+}
+
+/// The most messages a chat shows pinned, as WhatsApp allows.
+pub const MAX_PINNED_MESSAGES: usize = 3;
+
+/// How long an unpin or a lapsed pin is remembered.
+const PIN_MEMORY_MS: i64 = 30 * 24 * 3600 * 1000;
 
 /// A group message counts as read once everyone else has read it.
 fn everyone_read(message: &StoredMessage, members: Option<u32>) -> bool {
@@ -915,6 +935,7 @@ impl ChatStore {
         let into = self.chats.entry(pn.clone()).or_default();
         into.name = into.name.take().or(from.name);
         into.pinned_at = into.pinned_at.or(from.pinned_at);
+        into.pins.extend(from.pins);
         into.archived |= from.archived;
         into.muted_until_ms = into.muted_until_ms.max(from.muted_until_ms);
         into.unread += from.unread;
@@ -1986,6 +2007,35 @@ impl ChatStore {
         Some(self.to_dto(&chat_id, &message))
     }
 
+    /// Pins a message until `until_ms`, or unpins it without, unless a later
+    /// pin or unpin of it is already known. Whether anything changed.
+    pub fn set_message_pin(&mut self, chat: &str, id: &str, at_ms: i64, until_ms: Option<i64>) -> bool {
+        let Some(chat) = self.chats.get_mut(&self.canonical(chat)) else { return false };
+        if chat.pins.iter().any(|p| p.id == id && p.at_ms >= at_ms) {
+            return false;
+        }
+        chat.pins.retain(|p| p.id != id);
+        chat.pins.push(StoredPin { id: id.to_string(), at_ms, until_ms });
+        let now = now_ms();
+        chat.pins.retain(|p| p.until_ms.is_some_and(|until| until > now) || now - p.at_ms < PIN_MEMORY_MS);
+        true
+    }
+
+    /// The messages pinned in a chat now, the latest pin first.
+    pub fn pinned_ids(&self, chat: &str) -> Vec<String> {
+        let Some(chat) = self.chats.get(&self.canonical(chat)) else { return Vec::new() };
+        let now = now_ms();
+        let mut pins: Vec<&StoredPin> = chat.pins.iter().filter(|p| p.until_ms.is_some_and(|until| until > now)).collect();
+        pins.sort_by_key(|p| std::cmp::Reverse(p.at_ms));
+        pins.into_iter().take(MAX_PINNED_MESSAGES).map(|p| p.id.clone()).collect()
+    }
+
+    /// A message as the UI shows it, unless it was deleted for us.
+    pub fn message_dto(&self, chat: &str, id: &str) -> Option<MessageDto> {
+        let (_, message) = self.find_message(chat, id)?;
+        (message.deleted != Some(Deletion::ForMe)).then(|| self.to_dto(&self.canonical(chat), message))
+    }
+
     /// Counts left behind our own last message, which older history used to
     /// bring back after we had replied.
     pub fn repair_unread(&mut self) {
@@ -2554,6 +2604,25 @@ mod tests {
         assert!(!chats[1].pinned);
         assert!(chats.iter().find(|c| c.id == "2@s.whatsapp.net").is_some_and(|c| c.archived));
         assert!(chats.iter().filter(|c| c.id != "2@s.whatsapp.net").all(|c| !c.archived));
+    }
+
+    #[test]
+    fn pinned_messages_latest_first_and_old_replays_ignored() {
+        let mut store = ChatStore::default();
+        let chat = "1@s.whatsapp.net";
+        for id in ["a", "b", "c", "d"] {
+            store.ingest(incoming(chat, id, 1, false), false);
+        }
+        let now = now_ms();
+        let later = now + 60_000;
+        for (at, id) in ["a", "b", "c", "d"].into_iter().enumerate() {
+            assert!(store.set_message_pin(chat, id, now - 100 + at as i64, Some(later)));
+        }
+        assert_eq!(store.pinned_ids(chat), ["d", "c", "b"], "three at most, latest first");
+        assert!(store.set_message_pin(chat, "d", now - 50, None));
+        assert!(!store.set_message_pin(chat, "d", now - 97, Some(later)), "an older pin replayed by history");
+        assert!(store.set_message_pin(chat, "a", now - 40, Some(now - 1)));
+        assert_eq!(store.pinned_ids(chat), ["c", "b"], "unpinned and lapsed ones left out");
     }
 
     #[test]

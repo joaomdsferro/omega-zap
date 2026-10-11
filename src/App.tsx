@@ -220,6 +220,7 @@ function Shell() {
   const [messages, setMessages] = useState<Message[]>([]);
   /** Counts older messages arriving from the phone for the open chat. */
   const [historyTick, setHistoryTick] = useState(0);
+  const [pinsTick, setPinsTick] = useState(0);
   /** The messages of recently opened chats, most recent last, by `account:id`. */
   const messageCache = useRef(new Map<string, Message[]>());
   /** The chat whose messages `messages` holds. */
@@ -312,6 +313,8 @@ function Shell() {
         } else if (event.type === "presence") {
           const key = `${backend.account}:${event.chatId}`;
           setPresence((prev) => new Map(prev).set(key, { online: event.online, lastSeen: event.lastSeen ?? prev.get(key)?.lastSeen }));
+        } else if (event.type === "pins") {
+          if (open?.account === backend.account && open.id === event.chatId) setPinsTick((tick) => tick + 1);
         } else if (event.type === "history") {
           if (open?.account !== backend.account || open.id !== event.chatId) return;
           setHistoryTick((tick) => tick + 1);
@@ -628,6 +631,8 @@ function Shell() {
     const load = selectedBackend?.linkThumbnailUrl;
     return load ? (message: Message) => load(message.chatId, message.id) : undefined;
   }, [selectedBackend]);
+
+  const loadPinned = useMemo(() => selectedBackend?.pinnedMessages?.bind(selectedBackend), [selectedBackend]);
 
   const star = useMemo(() => {
     const backend = selectedBackend;
@@ -1016,6 +1021,8 @@ function Shell() {
         onLoadOlder={selectedBackend?.olderMessages ? loadOlder : undefined}
         historyTick={historyTick}
         searchMessages={searchMessages}
+        loadPinned={loadPinned}
+        pinsTick={pinsTick}
         onFocused={clearFocus}
         loadPerson={loadPerson}
         loadPersonDetails={loadPersonDetails}
