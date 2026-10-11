@@ -3,7 +3,7 @@ import type { Chat, StarredMessage } from "../backend";
 import { ChatList } from "./ChatList";
 import { MessageResults } from "./MessageResults";
 import { matches } from "../lib/search";
-import { MoreIcon, NewChatIcon, PlusIcon, SearchIcon, SettingsIcon, StarIcon } from "./Icons";
+import { MoreIcon, NewChatIcon, PlusIcon, SearchIcon, SettingsIcon, StarIcon, UnreadIcon } from "./Icons";
 import { PopupMenu, type MenuEntry } from "./PopupMenu";
 
 /** A built-in filter, or `list:` and the name of a custom list. */
@@ -43,6 +43,8 @@ interface SidebarProps {
   onStarred: () => void;
   onSettings: () => void;
   onToggleFavorite: (chat: Chat) => void;
+  /** Marks a chat read, or unread by hand. */
+  onToggleUnread?: (chat: Chat) => void;
   onToggleList: (chat: Chat, list: string) => void;
   /** Opens the list editor, with a chat already in the new list. */
   onNewList: (chat?: Chat) => void;
@@ -130,6 +132,7 @@ export function Sidebar({
   onStarred,
   onSettings,
   onToggleFavorite,
+  onToggleUnread,
   onToggleList,
   onNewList,
   onEditList,
@@ -196,6 +199,15 @@ export function Sidebar({
       y,
       label: `Options for ${chat.name}`,
       items: [
+        ...(onToggleUnread
+          ? [
+              {
+                label: chat.unread > 0 || chat.markedUnread ? "Mark as read" : "Mark as unread",
+                icon: <UnreadIcon size={18} />,
+                onSelect: () => onToggleUnread(chat),
+              },
+            ]
+          : []),
         {
           label: chat.favorite ? "Remove from favorites" : "Add to favorites",
           icon: <StarIcon size={18} filled={chat.favorite} />,

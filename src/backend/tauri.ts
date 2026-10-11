@@ -210,6 +210,10 @@ export class TauriBackend implements ChatBackend {
     return raw ? toMessage(raw) : null;
   }
 
+  async setUnread(chatId: string, unread: boolean): Promise<void> {
+    await invoke(`${this.prefix}_set_unread`, { chatId, unread });
+  }
+
   async markRead(chatId: string): Promise<void> {
     await invoke(`${this.prefix}_mark_read`, { chatId });
   }

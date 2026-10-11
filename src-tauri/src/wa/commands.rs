@@ -51,6 +51,11 @@ pub fn wa_mark_read(mgr: Mgr<'_>, chat_id: String) {
 }
 
 #[tauri::command]
+pub async fn wa_set_unread(mgr: Mgr<'_>, chat_id: String, unread: bool) -> Result<(), String> {
+    mgr.set_unread(&chat_id, unread).await
+}
+
+#[tauri::command]
 pub async fn wa_send_text(
     mgr: Mgr<'_>,
     chat_id: String,

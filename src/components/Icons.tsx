@@ -125,6 +125,14 @@ export const CheckIcon = (p: IconProps) => (
   </Svg>
 );
 
+/** A speech bubble with a dot: a chat with something unread. */
+export const UnreadIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M20 12.5a8 8 0 1 1-3.4-6.55" />
+    <circle cx="19" cy="5" r="2.2" fill="currentColor" stroke="none" />
+  </Svg>
+);
+
 export const NewChatIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M20 11.5a8 8 0 0 1-11.7 7.1L4 20l1.4-4.2A8 8 0 1 1 20 11.5z" />

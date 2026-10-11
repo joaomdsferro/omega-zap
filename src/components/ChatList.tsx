@@ -124,8 +124,12 @@ const ChatRow = memo(function ChatRow({
                 {chat.unread}
               </span>
             ) : chat.markedUnread ? (
-              // Marked unread by hand, as WhatsApp shows it: a dot with no count.
-              <span className="mx-1 size-3 shrink-0 rounded-full bg-(--badge-bg)" aria-label="Marked unread" />
+              // Marked unread by hand: a dot with no count, and a word saying
+              // so, apart from a chat with messages to read.
+              <span className="flex shrink-0 items-center gap-1.5">
+                <span className="text-[12px] text-(--badge-bg)">Marked unread</span>
+                <span className="mr-1 size-3 rounded-full bg-(--badge-bg)" aria-hidden />
+              </span>
             ) : null}
             {/* Room for the options button, which only shows on hover. */}
             {onMenu ? (

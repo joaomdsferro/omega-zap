@@ -585,6 +585,13 @@ impl SignalManager {
 
     /// Clears the unread count and has the bridge pass the news on: to our
     /// other devices, and to the senders when the account sends read receipts.
+    /// Marks a chat unread, or read. Signal keeps no such mark for linked
+    /// devices, so it stays on this computer.
+    pub fn set_unread(&self, chat_id: &str, unread: bool) {
+        lock(&self.store).set_marked_unread(chat_id, unread);
+        self.mark_dirty();
+    }
+
     pub fn mark_read(self: &Arc<Self>, chat_id: &str) {
         // Opening a chat asks for this every time; one with nothing unread
         // changes nothing, and marking it dirty would redraw the chat list.

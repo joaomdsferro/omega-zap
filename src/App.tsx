@@ -637,6 +637,23 @@ function Shell() {
     return (chat: Chat) => (chat.lists ?? []).flatMap((id) => names.get(`${chat.account}:${id}`) ?? []);
   }, [shownLists]);
 
+  function toggleUnread(chat: Chat) {
+    const backend = backendFor(chat.account);
+    if (!backend) return;
+    const unread = !(chat.unread > 0 || chat.markedUnread);
+    // Shown at once; the list that comes back after says the same.
+    setChatsBy((prev) => {
+      const list = prev.get(backend);
+      if (!list) return prev;
+      return new Map(prev).set(
+        backend,
+        list.map((c) => (c.id === chat.id ? { ...c, markedUnread: unread, unread: unread ? c.unread : 0 } : c)),
+      );
+    });
+    const done = unread ? backend.setUnread?.(chat.id, true) : backend.markRead(chat.id);
+    done?.catch((e) => setError(String(e)));
+  }
+
   function toggleFavorite(chat: Chat) {
     backendFor(chat.account)
       ?.setFavorite(chat.id, !chat.favorite)
@@ -979,6 +996,7 @@ function Shell() {
             }}
             onSettings={() => setView("settings")}
             onToggleFavorite={toggleFavorite}
+            onToggleUnread={toggleUnread}
             onToggleList={toggleList}
             onNewList={(chat) => editList(undefined, chat)}
             onEditList={(name) => editList(name)}

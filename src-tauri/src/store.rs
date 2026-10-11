@@ -596,7 +596,7 @@ pub struct ChatStore {
     /// Chats marked unread are kept as such. Before, they were kept as one
     /// unread message, and the phone's marks are asked for again once.
     #[serde(default)]
-    marked_unread_kept: bool,
+    marked_unread_replayed: bool,
     /// Server id of our own profile picture saved on disk.
     #[serde(default)]
     own_avatar_id: Option<String>,
@@ -642,7 +642,7 @@ impl Default for ChatStore {
             lid_to_pn: HashMap::new(),
             own_ids: Vec::new(),
             chat_state_synced: true,
-            marked_unread_kept: true,
+            marked_unread_replayed: true,
             own_avatar_id: None,
             own_avatar_checked_ms: 0,
             ticks_refreshed: false,
@@ -1108,12 +1108,12 @@ impl ChatStore {
     }
 
     pub fn needs_chat_state_sync(&self) -> bool {
-        !self.chat_state_synced || !self.marked_unread_kept
+        !self.chat_state_synced || !self.marked_unread_replayed
     }
 
     pub fn set_chat_state_synced(&mut self, synced: bool) {
         self.chat_state_synced = synced;
-        self.marked_unread_kept |= synced;
+        self.marked_unread_replayed |= synced;
     }
 
     pub fn needs_lists_sync(&self) -> bool {
@@ -1445,9 +1445,11 @@ impl ChatStore {
     /// Read or marked unread on another device. A mutation older than the
     /// chat's newest message is stale: messages came in after it.
     pub fn set_read_elsewhere(&mut self, jid: &str, read: bool, at_ms: i64) {
-        let kept = self.marked_unread_kept;
+        let kept = self.marked_unread_replayed;
         if let Some(chat) = self.chat_for_state(jid)
-            && at_ms >= chat.last_ts_ms
+            // The phone's marks asked for again once stand as they are now,
+            // however old: they are its current state.
+            && (at_ms >= chat.last_ts_ms || !kept && !read)
         {
             if read {
                 chat.unread = 0;
@@ -1797,6 +1799,20 @@ impl ChatStore {
     pub fn repair_unread(&mut self) {
         for chat in self.chats.values_mut() {
             if chat.messages.last().is_some_and(|m| m.from_me) {
+                chat.unread = 0;
+            }
+        }
+    }
+
+    pub fn is_marked_unread(&self, chat: &str) -> bool {
+        self.chats.get(&self.canonical(chat)).is_some_and(|c| c.marked_unread)
+    }
+
+    /// Marks a chat unread by hand, or takes the mark away.
+    pub fn set_marked_unread(&mut self, chat: &str, marked: bool) {
+        if let Some(chat) = self.chats.get_mut(&self.canonical(chat)) {
+            chat.marked_unread = marked;
+            if !marked {
                 chat.unread = 0;
             }
         }

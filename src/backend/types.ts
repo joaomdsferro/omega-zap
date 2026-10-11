@@ -208,6 +208,8 @@ export interface ChatBackend {
    */
   deleteMessage?(chatId: string, messageId: string, forEveryone: boolean): Promise<Message | null>;
   markRead(chatId: string): Promise<void>;
+  /** Marks a chat unread by hand: a dot in the list until it is read. */
+  setUnread?(chatId: string, unread: boolean): Promise<void>;
   /** Downloads one of a message's attachments if needed and returns where to load it from. */
   mediaUrl?(chatId: string, messageId: string, index?: number): Promise<string>;
   /** Downloads an attachment if needed and opens it in the system's app for its type. */

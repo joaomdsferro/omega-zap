@@ -458,14 +458,25 @@ impl WaManager {
     pub fn mark_read(self: &Arc<Self>, chat_id: &str) {
         // Opening a chat asks for this every time; one with nothing unread
         // changes nothing, and marking it dirty would redraw the chat list.
-        let read = {
+        let (read, was_marked) = {
             let mut store = lock(&self.store);
             if !store.has_unread(chat_id) {
                 return;
             }
-            store.mark_read(chat_id)
+            let was_marked = store.is_marked_unread(chat_id);
+            (store.mark_read(chat_id), was_marked)
         };
         self.mark_dirty();
+        // A chat marked unread, here or on the phone, is read everywhere.
+        if was_marked {
+            let mgr = self.clone();
+            let chat_id = chat_id.to_string();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = mgr.send_unread_mark(&chat_id, false).await {
+                    log::warn!("whatsapp: {e}");
+                }
+            });
+        }
         if read.is_empty() {
             return;
         }
@@ -1033,6 +1044,24 @@ impl WaManager {
     }
 
     /// Adds a chat to the favorites or takes it out, on the phone too.
+    /// Marks a chat unread, or read, here and on the phone.
+    pub async fn set_unread(&self, chat_id: &str, unread: bool) -> Result<(), String> {
+        self.send_unread_mark(chat_id, unread).await?;
+        lock(&self.store).set_marked_unread(chat_id, unread);
+        self.mark_dirty();
+        Ok(())
+    }
+
+    async fn send_unread_mark(&self, chat_id: &str, unread: bool) -> Result<(), String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
+        client
+            .chat_actions()
+            .mark_chat_as_read(&jid, !unread, None)
+            .await
+            .map_err(|e| format!("The chat was not marked {}: {e}", if unread { "unread" } else { "read" }))
+    }
+
     pub async fn set_favorite(&self, chat_id: &str, favorite: bool) -> Result<(), String> {
         let client = self.connected_client().await?;
         let ids = lock(&self.store).favorites_with(chat_id, favorite);
