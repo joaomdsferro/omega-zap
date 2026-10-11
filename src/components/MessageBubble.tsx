@@ -420,6 +420,16 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
   // Signal shows the three most picked and folds the rest into a "+N".
   const ranked = [...reactions].sort((a, b) => b.count - a.count);
   const total = reactions.reduce((sum, reaction) => sum + reaction.count, 0);
+  // Signal shows three reactions; yours is always one of them.
+  const shown = ranked.slice(0, 3);
+  const mineRanked = ranked.find((reaction) => reaction.mine);
+  if (mineRanked && !shown.includes(mineRanked)) shown[shown.length - 1] = mineRanked;
+  // WhatsApp: yours in a pill of its own, everyone else's gathered in the next.
+  const others = ranked
+    .map((reaction) => (reaction.mine ? { ...reaction, count: reaction.count - 1 } : reaction))
+    .filter((reaction) => reaction.count > 0);
+  const othersTotal = total - (myReaction ? 1 : 0);
+  const minePill = "border-(--accent) bg-[color-mix(in_oklab,var(--accent)_18%,var(--panel-bg))]";
 
   return (
     <div
@@ -574,25 +584,42 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
         {reactions.length > 0 ? (
           <div className={["absolute -bottom-4.5 flex gap-1", mine ? "right-2" : "left-2"].join(" ")}>
             {account === "whatsapp" ? (
-              // WhatsApp gathers every reaction into one pill; tapping it opens the picker.
-              <button
-                type="button"
-                disabled={!onReact}
-                onClick={(event) => (picking ? setPicking(false) : openPickerAt(event.currentTarget))}
-                aria-label={`${total} ${total === 1 ? "reaction" : "reactions"}: ${ranked.map((r) => r.emoji).join(" ")}`}
-                className={`${pillClass} ${plainPill} disabled:cursor-default`}
-                style={{ boxShadow: "var(--bubble-shadow)" }}
-              >
-                <span className="flex gap-0.5">
-                  {ranked.slice(0, 3).map((reaction) => (
-                    <Emoji key={reaction.emoji} emoji={reaction.emoji} size={15} />
-                  ))}
-                </span>
-                {total > 1 ? <span className="tabular-nums">{total}</span> : null}
-              </button>
+              <>
+                {myReaction ? (
+                  // Yours, on its own so it is never lost among the others; tapping takes it back.
+                  <button
+                    type="button"
+                    disabled={!onReact}
+                    onClick={() => onReact?.(message, myReaction)}
+                    aria-label={`Your reaction: ${myReaction}. Remove it`}
+                    className={`${pillClass} ${minePill} disabled:cursor-default`}
+                    style={{ boxShadow: "var(--bubble-shadow)" }}
+                  >
+                    <Emoji emoji={myReaction} size={15} />
+                  </button>
+                ) : null}
+                {others.length > 0 ? (
+                  // Everyone else's in one pill, as WhatsApp gathers them; tapping it opens the picker.
+                  <button
+                    type="button"
+                    disabled={!onReact}
+                    onClick={(event) => (picking ? setPicking(false) : openPickerAt(event.currentTarget))}
+                    aria-label={`${othersTotal} ${othersTotal === 1 ? "reaction" : "reactions"}: ${others.map((r) => r.emoji).join(" ")}`}
+                    className={`${pillClass} ${plainPill} disabled:cursor-default`}
+                    style={{ boxShadow: "var(--bubble-shadow)" }}
+                  >
+                    <span className="flex gap-0.5">
+                      {others.slice(0, 3).map((reaction) => (
+                        <Emoji key={reaction.emoji} emoji={reaction.emoji} size={15} />
+                      ))}
+                    </span>
+                    {othersTotal > 1 ? <span className="tabular-nums">{othersTotal}</span> : null}
+                  </button>
+                ) : null}
+              </>
             ) : (
               <>
-                {ranked.slice(0, 3).map((reaction) => (
+                {shown.map((reaction) => (
                   <button
                     key={reaction.emoji}
                     type="button"
@@ -603,9 +630,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
                     className={[
                       pillClass,
                       "disabled:cursor-default",
-                      reaction.mine
-                        ? "border-(--accent) bg-[color-mix(in_oklab,var(--accent)_18%,var(--panel-bg))]"
-                        : plainPill,
+                      reaction.mine ? minePill : plainPill,
                     ].join(" ")}
                     style={{ boxShadow: "var(--bubble-shadow)" }}
                   >
@@ -615,7 +640,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
                 ))}
                 {ranked.length > 3 ? (
                   <span className={`${pillClass} ${plainPill}`} style={{ boxShadow: "var(--bubble-shadow)" }}>
-                    +{ranked.slice(3).reduce((sum, reaction) => sum + reaction.count, 0)}
+                    +{ranked.filter((reaction) => !shown.includes(reaction)).reduce((sum, reaction) => sum + reaction.count, 0)}
                   </span>
                 ) : null}
               </>
