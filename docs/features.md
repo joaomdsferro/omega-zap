@@ -22,8 +22,12 @@ Everything Omega Zap does today, network by network. For what is still missing, 
 - **Chat list** with filters: All, Unread, Favorites, Private, Groups and your own lists, each with its
   unread count. Right-click a chat to add it to favorites or a list. On WhatsApp these are the phone's
   own favorites and lists; Signal has none, so they are kept on this computer.
-- **Unread.** Chats open at the first unread message, under an "N unread messages" divider. A chat
-  marked unread shows a dot. Reading on the phone clears it here too.
+- **Unread.** Chats open at the first unread message, under an "N unread messages" divider.
+  Right-click a chat to **Mark as unread** or **Mark as read**; a marked chat shows a dot and "Marked
+  unread". On WhatsApp the mark syncs with the phone both ways.
+- **Contact info.** Click a sender's name in a group, a mention, or the header of a chat with one
+  person: their picture, number, About, media from your chat, starred messages, a mute switch and the
+  groups you share.
 - **Search.** The sidebar search finds chats and then messages across every chat; **Ctrl+F** searches
   inside a chat and marks the words. Case and accents are ignored.
 - **New chat.** Your contacts A to Z, and yourself. On WhatsApp you can also type a full phone number.
@@ -38,7 +42,8 @@ Everything Omega Zap does today, network by network. For what is still missing, 
   `:name` suggestions while typing.
 - **Mentions** show the person's name.
 - **Replies**: clicking a quote jumps to the quoted message.
-- **Reactions** on both networks. Hover a message to react; click a reaction to take yours back.
+- **Reactions** on both networks. Hover a message to react. Each emoji shows its own count, yours
+  highlighted; click them to see who reacted, and to take yours back.
 - **Forwarding**, media included. Forwarded messages say so.
 - **Read receipts and ticks.** Opening a chat marks it read on your phone and tells the senders, unless
   read receipts are off in the account's privacy settings.
@@ -48,6 +53,7 @@ Everything Omega Zap does today, network by network. For what is still missing, 
 - **Photos, videos, GIFs, voice messages, audio, stickers and documents** on both networks. Videos and
   audio play in the chat; documents open in your system's app. A WhatsApp file that expired from the
   server is asked for again from the phone that sent it.
+- **Albums**: four or more photos in a row from the same person show as one grid, as on WhatsApp.
 - **Sending files**: press **+**, drop files on the conversation, or paste a picture. Up to 100 MB.
 - **Link cards** for links that come with one, and for links that don't (fetched from the page's own
   tags; **Settings → Links** turns that off). Your own links go out with a card.
