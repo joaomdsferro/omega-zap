@@ -471,6 +471,12 @@ textarea {
   vertical-align: -0.25em;
 }
 
+/* A person a message mentions ("@Name"), as WhatsApp marks them. */
+.mention {
+  color: var(--mention, var(--accent));
+  font-weight: 500;
+}
+
 /* Words found by a search inside a chat, marked in the bubbles. */
 .search-mark {
   background: color-mix(in oklab, #ffcc00 50%, transparent);

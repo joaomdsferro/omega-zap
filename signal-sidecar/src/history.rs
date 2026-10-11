@@ -207,7 +207,21 @@ fn describe(item: &proto::chat_item::Item) -> Option<(&'static str, Option<Strin
                     _ => None,
                 })
                 .collect();
-            let text = Some(crate::with_markers(&message.text.body, &looks)).filter(|t| !t.trim().is_empty());
+            let mut mentions: Vec<_> = message
+                .text
+                .bodyRanges
+                .iter()
+                .filter_map(|range| match &range.associatedValue {
+                    Some(proto::body_range::AssociatedValue::MentionAci(aci)) => {
+                        Some((range.start, presage::libsignal_service::prelude::Uuid::from_slice(aci).ok()?.to_string()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            mentions.sort_by_key(|(start, _)| *start);
+            let mentions: Vec<_> = mentions.into_iter().map(|(_, aci)| aci).collect();
+            let text = Some(crate::with_mentions(&crate::with_markers(&message.text.body, &looks), &mentions))
+                .filter(|t| !t.trim().is_empty());
             let kinds: Vec<_> = pointers(item)
                 .into_iter()
                 .map(|(pointer, kind)| (kind, pointer.fileName.clone()))

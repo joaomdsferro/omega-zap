@@ -344,6 +344,43 @@ fn looks(ranges: &[BodyRange]) -> Vec<(u32, u32, Look)> {
         .collect()
 }
 
+/// Who a live message mentions, in the order the mentions appear.
+fn mentions(ranges: &[BodyRange]) -> Vec<String> {
+    let mut found: Vec<(u32, String)> = ranges
+        .iter()
+        .filter_map(|range| {
+            let aci = match &range.associated_value {
+                Some(body_range::AssociatedValue::MentionAci(aci)) => aci.clone(),
+                Some(body_range::AssociatedValue::MentionAciBinary(bytes)) => Uuid::from_slice(bytes).ok()?.to_string(),
+                _ => return None,
+            };
+            Some((range.start?, aci))
+        })
+        .collect();
+    found.sort_by_key(|(start, _)| *start);
+    found.into_iter().map(|(_, aci)| aci).collect()
+}
+
+/// Signal writes each mention as U+FFFC and names the person in a range;
+/// the app gets "@<ACI>" there, which it turns into the person's name.
+pub(crate) fn with_mentions(text: &str, acis: &[String]) -> String {
+    if acis.is_empty() {
+        return text.to_string();
+    }
+    let mut acis = acis.iter();
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match (c == '\u{fffc}').then(|| acis.next()).flatten() {
+            Some(aci) => {
+                out.push('@');
+                out.push_str(aci);
+            }
+            None => out.push(c),
+        }
+    }
+    out
+}
+
 /// Signal's looks written into the text with WhatsApp's markers, which is
 /// how the app keeps and shows formatting.
 pub(crate) fn with_markers(text: &str, looks: &[(u32, u32, Look)]) -> String {
@@ -689,7 +726,7 @@ impl Receiver {
             });
         }
         let Some((kind, text, media_label)) = describe(message) else { return };
-        let text = text.map(|text| with_markers(&text, &looks(&message.body_ranges)));
+        let text = text.map(|text| with_mentions(&with_markers(&text, &looks(&message.body_ranges)), &mentions(&message.body_ranges)));
         if let Thread::Group(key) = thread {
             self.announce_group(*key).await;
         }

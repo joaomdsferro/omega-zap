@@ -476,6 +476,8 @@ pub struct MessageDto {
     pub link_preview: Option<LinkPreviewDto>,
     /// Forwarding score: 0 when not forwarded.
     pub forwarded: u32,
+    /// Names `text` mentions as "@Name", for the UI to mark.
+    pub mentions: Vec<String>,
     pub reactions: Vec<ReactionDto>,
     pub starred: bool,
     /// Taken back by its sender: only a placeholder is left.
@@ -651,6 +653,15 @@ fn is_hidden_chat(jid: &str) -> bool {
         || jid.ends_with("@broadcast")
         || jid.ends_with("@newsletter")
         || jid.is_empty()
+}
+
+/// A Signal ACI as the bridge writes it: 8-4-4-4-12 lowercase hex digits.
+fn is_uuid(text: &str) -> bool {
+    text.len() == 36
+        && text.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_digit() || ('a'..='f').contains(&c),
+        })
 }
 
 fn format_phone(jid: &str) -> Option<String> {
@@ -842,6 +853,58 @@ impl ChatStore {
             .cloned()
             .or_else(|| format_phone(&jid))
             .unwrap_or_else(|| "Unknown contact".into())
+    }
+
+    /// `text` with each mention swapped for "@Name", and the names swapped
+    /// in. WhatsApp writes "@<number>" (a phone number or a LID), kept as it
+    /// is when the person has no name here; the Signal bridge writes
+    /// "@<ACI>", always replaced.
+    fn with_mentions(&self, text: &str) -> (String, Vec<String>) {
+        let mut out = String::with_capacity(text.len());
+        let mut names = Vec::new();
+        let mut rest = text;
+        while let Some(at) = rest.find('@') {
+            let (before, after) = rest.split_at(at);
+            out.push_str(before);
+            let starts_word = !before.chars().next_back().is_some_and(char::is_alphanumeric);
+            let aci = after.get(1..37).filter(|id| is_uuid(id));
+            let digits = if aci.is_some() { 36 } else { after[1..].bytes().take_while(u8::is_ascii_digit).count() };
+            let ends_word = !after[1 + digits..].chars().next().is_some_and(char::is_alphanumeric);
+            let name = match aci {
+                Some(aci) if starts_word && ends_word => Some(self.display_name(aci)),
+                _ => (starts_word && ends_word && digits >= 5)
+                    .then(|| self.mention_name(&after[1..1 + digits]))
+                    .flatten(),
+            };
+            match name {
+                Some(name) => {
+                    out.push('@');
+                    out.push_str(&name);
+                    names.push(format!("@{name}"));
+                    rest = &after[1 + digits..];
+                }
+                None => {
+                    out.push('@');
+                    rest = &after[1..];
+                }
+            }
+        }
+        out.push_str(rest);
+        (out, names)
+    }
+
+    /// The name of whoever "@<number>" mentions, if known.
+    fn mention_name(&self, number: &str) -> Option<String> {
+        for server in ["lid", "s.whatsapp.net"] {
+            let jid = self.canonical(&format!("{number}@{server}"));
+            if self.own_ids.contains(&jid) {
+                return Some("You".into());
+            }
+            if let Some(name) = self.contact_names.get(&jid).or_else(|| self.push_names.get(&jid)) {
+                return Some(name.clone());
+            }
+        }
+        None
     }
 
     fn chat_name(&self, id: &str, chat: &StoredChat) -> String {
@@ -1227,7 +1290,7 @@ impl ChatStore {
         if message.from_me {
             return None;
         }
-        let preview = message.content.preview();
+        let preview = self.with_mentions(&message.content.preview()).0;
         let sender = message
             .author_jid
             .as_deref()
@@ -1263,7 +1326,7 @@ impl ChatStore {
         if !message.from_me {
             return None;
         }
-        let quote = shorten(&message.content.preview(), NOTICE_QUOTE_CHARS);
+        let quote = shorten(&self.with_mentions(&message.content.preview()).0, NOTICE_QUOTE_CHARS);
         let body = if stored.is_group {
             format!("{} reacted {emoji} to \u{201c}{quote}\u{201d}", self.display_name(&author))
         } else {
@@ -1721,7 +1784,7 @@ impl ChatStore {
             .filter(|(id, chat)| !chat.archived && !is_hidden_chat(id))
             .map(|(id, chat)| {
                 let last = chat.messages.iter().rev().find(|m| m.deleted != Some(Deletion::ForMe));
-                let preview = last.map(deleted_or_preview).unwrap_or_default();
+                let preview = last.map(|m| self.with_mentions(&deleted_or_preview(m)).0).unwrap_or_default();
                 let last_message = match last {
                     Some(m) if chat.is_group && !m.from_me => match &m.author_jid {
                         Some(author) => format!("{}: {preview}", self.display_name(author)),
@@ -1778,6 +1841,13 @@ impl ChatStore {
             _ => (None, None),
         };
         let photo = m.content.wa_media.as_ref().filter(|r| r.kind.is_none());
+        let (text, mentions) = match &m.content.text {
+            Some(text) => {
+                let (text, names) = self.with_mentions(text);
+                (Some(text), names)
+            }
+            None => (None, Vec::new()),
+        };
         MessageDto {
             id: m.id.clone(),
             chat_id: chat_id.to_string(),
@@ -1787,7 +1857,8 @@ impl ChatStore {
             author: (is_group && !m.from_me)
                 .then(|| m.author_jid.as_deref().map(|j| self.display_name(j)))
                 .flatten(),
-            text: m.content.text.clone(),
+            text,
+            mentions,
             image_label,
             media_label,
             voice_seconds: m.content.voice_seconds,
@@ -1803,7 +1874,7 @@ impl ChatStore {
                     },
                     from_me,
                     id: r.id.clone(),
-                    text: r.text.clone(),
+                    text: self.with_mentions(&r.text).0,
                 }
             }),
             status: m.status,
@@ -1906,6 +1977,24 @@ mod tests {
                 deleted: None,
             },
         }
+    }
+
+    #[test]
+    fn mentions_show_the_name_when_known() {
+        let mut store = ChatStore::default();
+        store.learn_mapping("68689445540020@lid", "351900000000@s.whatsapp.net");
+        store.set_contact_name("351900000000@s.whatsapp.net", "Rui Silva");
+        store.set_push_name("351911111111@s.whatsapp.net", "Maya");
+        store.set_own_ids(["351922222222@s.whatsapp.net".to_string()]);
+        let (text, names) =
+            store.with_mentions("@68689445540020 e @351911111111, @351922222222 @99999999 mail@351911111111");
+        assert_eq!(text, "@Rui Silva e @Maya, @You @99999999 mail@351911111111");
+        assert_eq!(names, ["@Rui Silva", "@Maya", "@You"]);
+
+        let aci = "0a1b2c3d-0000-4000-8000-00000000abcd";
+        store.set_contact_name(aci, "Inês");
+        let (text, _) = store.with_mentions(&format!("olá @{aci}!"));
+        assert_eq!(text, "olá @Inês!");
     }
 
     #[test]

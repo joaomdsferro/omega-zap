@@ -561,7 +561,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
             </p>
           ) : (
             <p className="px-0.5 wrap-break-word whitespace-pre-wrap">
-              <Formatted text={message.text ?? ""} onLink={openLink} highlight={highlight} />
+              <Formatted text={message.text ?? ""} onLink={openLink} highlight={highlight} mentions={message.mentions} />
               {metaSpacer}
             </p>
           )

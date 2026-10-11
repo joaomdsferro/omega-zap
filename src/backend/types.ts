@@ -73,6 +73,8 @@ export interface Message {
   /** Voice duration in seconds */
   voiceSeconds?: number;
   replyTo?: ReplyQuote;
+  /** People `text` mentions, written there as "@Name". */
+  mentions?: string[];
   status?: DeliveryStatus;
   /** The attachment can be fetched with `mediaUrl`. */
   hasMedia?: boolean;

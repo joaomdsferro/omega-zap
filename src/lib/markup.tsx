@@ -170,6 +170,7 @@ function drawRun(
   emojiSize: number,
   onLink?: (event: ReactMouseEvent, url: string) => void,
   words?: string[],
+  mentions?: string[],
 ): ReactNode {
   if (run.kind === "marker") return null;
   const className = styleClass(run.styles);
@@ -187,7 +188,7 @@ function drawRun(
       </a>
     );
   }
-  const content = marked(run.text, emojiSize, words);
+  const content = withMentions(run.text, mentions, (text) => marked(text, emojiSize, words));
   return className ? (
     <span key={key} className={className}>
       {content}
@@ -195,6 +196,35 @@ function drawRun(
   ) : (
     <span key={key}>{content}</span>
   );
+}
+
+/** `text` with each of `mentions` ("@Name") marked as WhatsApp does. */
+function withMentions(text: string, mentions: string[] | undefined, draw: (text: string) => ReactNode): ReactNode {
+  if (!mentions?.length) return draw(text);
+  const parts: ReactNode[] = [];
+  let at = 0;
+  while (at < text.length) {
+    let next = -1;
+    let found = "";
+    for (const mention of mentions) {
+      const index = text.indexOf(mention, at);
+      // The longest wins when two names start alike ("@Ana" and "@Ana Rita").
+      if (index >= 0 && (next < 0 || index < next || (index === next && mention.length > found.length))) {
+        next = index;
+        found = mention;
+      }
+    }
+    if (next < 0) break;
+    if (next > at) parts.push(draw(text.slice(at, next)));
+    parts.push(
+      <span key={next} className="mention">
+        {draw(found)}
+      </span>,
+    );
+    at = next + found.length;
+  }
+  if (at < text.length) parts.push(draw(text.slice(at)));
+  return parts;
 }
 
 /** Drops the first `cut` characters of a line, the marker of its block. */
@@ -218,12 +248,15 @@ export function Formatted({
   emojiSize = 20,
   onLink,
   highlight,
+  mentions,
 }: {
   text: string;
   emojiSize?: number;
   onLink?: (event: ReactMouseEvent, url: string) => void;
   /** Words of a search to mark, already folded. */
   highlight?: string[];
+  /** People the text mentions, as "@Name". */
+  mentions?: string[];
 }) {
   const parts: ReactNode[] = [];
   let key = 0;
@@ -247,12 +280,12 @@ export function Formatted({
     if (block?.block !== "quote") endQuote();
     if (!block) {
       if (previousPlain) parts.push("\n");
-      parts.push(...line.map((run) => drawRun(run, key++, emojiSize, onLink, highlight)));
+      parts.push(...line.map((run) => drawRun(run, key++, emojiSize, onLink, highlight, mentions)));
       if (!line.length && index > 0 && !previousPlain) parts.push("\n");
       previousPlain = true;
       return;
     }
-    const content = cutLine(line, block.cut).map((run) => drawRun(run, key++, emojiSize, onLink, highlight));
+    const content = cutLine(line, block.cut).map((run) => drawRun(run, key++, emojiSize, onLink, highlight, mentions));
     previousPlain = false;
     if (block.block === "quote") {
       if (quote) quote.push(<br key={key++} />);

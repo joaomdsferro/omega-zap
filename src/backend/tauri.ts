@@ -66,6 +66,7 @@ interface RawMessage {
   mediaLabel: string | null;
   voiceSeconds: number | null;
   replyTo: { author: string; fromMe: boolean; id: string | null; text: string } | null;
+  mentions: string[];
   status: DeliveryStatus | null;
   hasMedia: boolean;
   attachments: { kind: Attachment["kind"]; mime: string; fileName: string | null; size: number; width: number | null; height: number | null }[];
@@ -111,6 +112,7 @@ function toMessage(raw: RawMessage): Message {
     imageLabel: raw.imageLabel ?? undefined,
     mediaLabel: raw.mediaLabel ?? undefined,
     voiceSeconds: raw.voiceSeconds ?? undefined,
+    mentions: raw.mentions?.length ? raw.mentions : undefined,
     replyTo: raw.replyTo ? { author: raw.replyTo.author, fromMe: raw.replyTo.fromMe, id: raw.replyTo.id ?? undefined, text: raw.replyTo.text } : undefined,
     status: raw.status ?? undefined,
     hasMedia: raw.hasMedia,
