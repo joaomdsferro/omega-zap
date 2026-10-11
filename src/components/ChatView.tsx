@@ -17,7 +17,7 @@ import { EditDialog, canEdit } from "./EditDialog";
 import { MessageBubble } from "./MessageBubble";
 import { PinnedBar } from "./PinnedBar";
 import { PinDialog } from "./PinDialog";
-import { PinIcon } from "./Icons";
+import { ChevronDownIcon, PinIcon } from "./Icons";
 import { ChatSearch, searchChat } from "./ChatSearch";
 import { searchWords } from "../lib/search";
 import { SearchIcon } from "./Icons";
@@ -195,6 +195,27 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
     el.scrollTop = el.scrollHeight - grownFrom.current;
     grownFrom.current = null;
   }, [count]);
+
+  // Scrolled up from the newest messages: the newest one then, so what came
+  // in since can be counted on the jump-to-present button.
+  const lastId = messages[messages.length - 1]?.id ?? "";
+  const [awayFrom, setAwayFrom] = useState<string | null>(null);
+  useEffect(() => setAwayFrom(null), [chatKey]);
+  const arrived = useMemo(() => {
+    if (awayFrom === null) return 0;
+    const at = messages.findIndex((m) => m.id === awayFrom);
+    return at === -1 ? 0 : messages.slice(at + 1).filter((m) => !m.fromMe).length;
+  }, [awayFrom, messages]);
+
+  function jumpToPresent() {
+    const el = scroller.current;
+    if (!el) return;
+    pinned.current = null;
+    stickToBottom.current = true;
+    const far = el.scrollHeight - el.scrollTop - el.clientHeight > el.clientHeight * 3;
+    el.scrollTo({ top: el.scrollHeight, behavior: far ? "instant" : "smooth" });
+    setAwayFrom(null);
+  }
 
   /** Older history being asked for, so only one page is on its way at a time. */
   const olderLoading = useRef(false);
@@ -413,6 +434,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
     if (!el) return;
     if (pinned.current && placedAt.current !== null && Math.abs(el.scrollTop - placedAt.current) > 2) pinned.current = null;
     stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    setAwayFrom(el.scrollHeight - el.scrollTop - el.clientHeight > el.clientHeight / 2 ? (prev) => prev ?? lastId : null);
     if (el.scrollTop < PAGE_MARGIN && grownFrom.current === null) {
       if (hidden > 0) drawMore(count + PAGE);
       else loadOlder();
@@ -483,6 +505,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
       <PinnedBar pins={pins} chatKey={chatKey} onJump={setJumpTo} />
       {searchOpen ? <ChatSearch query={searchQuery} onQuery={setSearchQuery} found={searchFound} onJump={setJumpTo} onClose={() => setSearching(null)} /> : null}
 
+      <div className="relative flex min-h-0 flex-1 flex-col">
       <div
         ref={scroller}
         onScroll={onScroll}
@@ -587,6 +610,24 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
             </section>
           ))}
         </div>
+      </div>
+      {awayFrom !== null ? (
+        <button
+          type="button"
+          onClick={jumpToPresent}
+          aria-label={arrived ? `Jump to present, ${arrived} new ${arrived === 1 ? "message" : "messages"}` : "Jump to present"}
+          title="Jump to present"
+          className="animate-fade-rise absolute right-5 bottom-4 z-20 flex h-10.5 w-10.5 items-center justify-center rounded-full bg-(--panel-bg) text-(--icon) hover:brightness-110"
+          style={{ boxShadow: "0 1px 3px rgba(11,20,26,.2), 0 2px 8px rgba(11,20,26,.18)" }}
+        >
+          <ChevronDownIcon size={24} />
+          {arrived ? (
+            <span className="absolute -top-1.5 -right-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-(--accent) px-1.5 text-[11px] font-semibold text-(--on-accent) tabular-nums">
+              {arrived > 99 ? "99+" : arrived}
+            </span>
+          ) : null}
+        </button>
+      ) : null}
       </div>
 
       {groupOpen === chatKey && loadGroup ? (
