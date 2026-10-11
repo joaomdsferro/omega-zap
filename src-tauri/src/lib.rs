@@ -8,6 +8,8 @@ mod emoji;
 mod link_preview;
 mod links;
 mod notify;
+#[cfg(target_os = "linux")]
+mod players;
 mod signal;
 mod sqlcipher;
 mod store;
@@ -297,6 +299,11 @@ pub fn run() {
                 log::warn!("could not register with the desktop: {e}");
             }
             tray::setup(app.handle())?;
+            #[cfg(target_os = "linux")]
+            players::allow_autoplay(match &app.config().build.dev_url {
+                Some(url) if cfg!(debug_assertions) => url.to_string(),
+                _ => "tauri://localhost".into(),
+            });
             // Made here rather than from the config, so it never opens on
             // a webview cache the migration above is still clearing.
             tray::bring_up(app.handle());

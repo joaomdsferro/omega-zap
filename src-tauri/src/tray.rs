@@ -161,7 +161,10 @@ fn build_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/dev/128x128.png")) {
         builder = builder.icon(icon).ok()?;
     }
-    builder.build().inspect_err(|e| log::warn!("could not open the window: {e}")).ok()
+    let window = builder.build().inspect_err(|e| log::warn!("could not open the window: {e}")).ok()?;
+    #[cfg(target_os = "linux")]
+    let _ = window.with_webview(|platform| crate::players::fix_tiktok(&platform.inner()));
+    Some(window)
 }
 
 /// Remembers how the window is, for the next time it is made.
