@@ -83,6 +83,7 @@ interface RawMessage {
   imageLabel: string | null;
   mediaLabel: string | null;
   voiceSeconds: number | null;
+  waveform?: number[];
   replyTo: { author: string; fromMe: boolean; id: string | null; text: string } | null;
   mentions: Mention[];
   authorId: string | null;
@@ -209,6 +210,7 @@ function toMessage(raw: RawMessage): Message {
     imageLabel: raw.imageLabel ?? undefined,
     mediaLabel: raw.mediaLabel ?? undefined,
     voiceSeconds: raw.voiceSeconds ?? undefined,
+    waveform: raw.waveform?.length ? raw.waveform : undefined,
     mentions: raw.mentions?.length ? raw.mentions : undefined,
     authorId: raw.authorId ?? undefined,
     replyTo: raw.replyTo ? { author: raw.replyTo.author, fromMe: raw.replyTo.fromMe, id: raw.replyTo.id ?? undefined, text: raw.replyTo.text } : undefined,

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, RefObject } from "react";
 import type { Attachment, Message } from "../backend";
-import { formatFileSize, formatVoiceDuration } from "../lib/format";
-import { FileIcon, PauseIcon, PlayIcon } from "./Icons";
+import { formatFileSize } from "../lib/format";
+import { AudioPlayer } from "./AudioPlayer";
+import { FileIcon, PlayIcon } from "./Icons";
 
 export type LoadMedia = (message: Message, index?: number) => Promise<string>;
 
@@ -335,94 +336,6 @@ function Sticker({ message, index, loadMedia }: { message: Message; index: numbe
       ) : (
         <span className="text-[13px] text-(--text-secondary)">{url === "failed" ? "Sticker unavailable" : "Sticker"}</span>
       )}
-    </div>
-  );
-}
-
-function AudioPlayer({ message, index, attachment, loadMedia }: {
-  message: Message;
-  index: number;
-  attachment: Attachment;
-  loadMedia?: LoadMedia;
-}) {
-  const audio = useRef<HTMLAudioElement>(null);
-  const [wanted, setWanted] = useState(false);
-  const url = useMediaUrl(message, index, loadMedia, wanted, true);
-  const [playing, setPlaying] = useState(false);
-  const [time, setTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const ready = url && url !== "failed";
-  const voice = attachment.kind === "voice";
-
-  // The first press fetches the file; it plays once it has arrived.
-  useEffect(() => {
-    if (ready && wanted) void audio.current?.play().catch(() => setPlaying(false));
-  }, [ready, wanted]);
-
-  function toggle() {
-    const el = audio.current;
-    if (!ready) return setWanted(true);
-    if (!el) return;
-    if (el.paused) void el.play();
-    else el.pause();
-  }
-
-  const loading = wanted && !url;
-  return (
-    <div className="mb-1 flex w-70 max-w-full items-center gap-2 py-1 pr-1">
-      <button
-        type="button"
-        onClick={toggle}
-        disabled={url === "failed" || !loadMedia}
-        aria-label={playing ? "Pause" : voice ? "Play voice message" : "Play audio"}
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-(--icon)"
-      >
-        {playing ? <PauseIcon size={22} /> : <PlayIcon size={22} />}
-      </button>
-      <div className="min-w-0 flex-1">
-        {!voice && attachment.fileName ? (
-          <p className="truncate text-[13px] text-(--text-primary)">{attachment.fileName}</p>
-        ) : null}
-        <input
-          type="range"
-          min={0}
-          max={duration || 1}
-          step="any"
-          value={time}
-          disabled={!ready}
-          onChange={(event) => {
-            const el = audio.current;
-            if (el) el.currentTime = Number(event.target.value);
-          }}
-          aria-label="Position"
-          className="block w-full accent-(--accent)"
-        />
-      </div>
-      <span className="shrink-0 text-[11px] tabular-nums text-(--bubble-meta)">
-        {url === "failed"
-          ? "Unavailable"
-          : loading
-            ? "Loading…"
-            : duration
-              ? formatVoiceDuration(playing || time ? time : duration)
-              : formatFileSize(attachment.size)}
-      </span>
-      {ready ? (
-        <audio
-          ref={audio}
-          src={url}
-          preload="metadata"
-          onPlay={() => setPlaying(true)}
-          onPause={() => setPlaying(false)}
-          onEnded={() => {
-            setPlaying(false);
-            setTime(0);
-          }}
-          onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)}
-          onLoadedMetadata={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
-          onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
-        />
-      ) : null}
     </div>
   );
 }

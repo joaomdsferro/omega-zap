@@ -217,6 +217,9 @@ pub struct Content {
     pub text: Option<String>,
     pub media_label: Option<String>,
     pub voice_seconds: Option<u32>,
+    /// A voice message's loudness over its length (WhatsApp sends 64 values, 0–100).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waveform: Vec<u8>,
     pub reply_to: Option<ReplyRef>,
     /// Signal's attachments, in the order they were sent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -294,6 +297,7 @@ impl Content {
             text: Some(text.into()),
             media_label: None,
             voice_seconds: None,
+            waveform: Vec::new(),
             reply_to,
             attachments: Vec::new(),
             media: None,
@@ -312,6 +316,7 @@ impl Content {
             text: caption.filter(|c| !c.trim().is_empty()),
             media_label: Some(label.into()),
             voice_seconds: None,
+            waveform: Vec::new(),
             reply_to: None,
             attachments: Vec::new(),
             media: None,
@@ -652,6 +657,8 @@ pub struct MessageDto {
     pub image_label: Option<String>,
     pub media_label: Option<String>,
     pub voice_seconds: Option<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub waveform: Vec<u8>,
     pub reply_to: Option<ReplyDto>,
     pub status: Option<Delivery>,
     /// The attachment can be fetched.
@@ -2897,6 +2904,7 @@ impl ChatStore {
             image_label,
             media_label,
             voice_seconds: m.content.voice_seconds,
+            waveform: m.content.waveform.clone(),
             reply_to: m.content.reply_to.as_ref().map(|r| {
                 let from_me = r.author_jid.as_deref().is_some_and(|j| {
                     self.own_ids.iter().any(|own| own == j) || self.own_ids.contains(&self.canonical(j))

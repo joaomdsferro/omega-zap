@@ -159,6 +159,7 @@ pub fn content(message: &wa::Message) -> Option<Content> {
             Content::media(MsgKind::Media, "Audio", None)
         };
         c.voice_seconds = audio.seconds;
+        c.waveform = audio.waveform.clone().unwrap_or_default();
         with_context(&mut c, &audio.context_info);
         c.wa_media = file_ref(fields!(audio), Some(if voice { "voice" } else { "audio" }), None, None);
         return Some(c);

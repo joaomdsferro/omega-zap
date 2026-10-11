@@ -105,6 +105,8 @@ export interface Message {
   mediaLabel?: string;
   /** Voice duration in seconds */
   voiceSeconds?: number;
+  /** A voice message's loudness over its length, 0–100 (WhatsApp). */
+  waveform?: number[];
   replyTo?: ReplyQuote;
   /** People `text` mentions, written there as "@Name". */
   mentions?: Mention[];

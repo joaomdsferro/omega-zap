@@ -7,6 +7,7 @@ import { formatMessageTime, formatVoiceDuration } from "../lib/format";
 import { URL_PATTERN, fetchLinkPreview, isPlayable, readyLinkPreview } from "../lib/links";
 import { useSettings } from "../settings/settings";
 import { Attachments } from "./Attachments";
+import { Waveform } from "./AudioPlayer";
 import type { LoadMedia } from "./Attachments";
 import { LinkCard, openLink } from "./LinkCard";
 import { canEdit } from "./EditDialog";
@@ -119,21 +120,6 @@ function Meta({ message, account, pinned }: { message: Message; account: Account
         </>
       ) : null}
     </span>
-  );
-}
-
-function Waveform() {
-  const bars = [4, 10, 7, 14, 9, 16, 8, 12, 6, 15, 9, 11, 5, 13, 7, 10, 6, 12, 8, 5];
-  return (
-    <div className="flex h-7 flex-1 items-center gap-0.5" aria-hidden>
-      {bars.map((h, i) => (
-        <span
-          key={i}
-          className="w-0.75 rounded-full bg-(--text-secondary) opacity-60"
-          style={{ height: `${h}px` }}
-        />
-      ))}
-    </div>
   );
 }
 
@@ -373,6 +359,10 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
   }
 
   const deleted = Boolean(message.deleted);
+  /** Only voice or audio: the time sits on the line of the player's clock. */
+  const soundOnly =
+    !hasText && !message.linkPreview && Boolean(message.attachments?.length) &&
+    message.attachments!.every((attachment) => attachment.kind === "voice" || attachment.kind === "audio");
   const whatsapp = account === "whatsapp";
   const react = deleted ? undefined : onReact;
 
@@ -595,7 +585,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
             >
               <PlayIcon size={22} />
             </button>
-            <Waveform />
+            <Waveform levels={message.waveform} />
             <span className="text-[11px] tabular-nums text-(--bubble-meta)">
               {formatVoiceDuration(message.voiceSeconds ?? 0)}
             </span>
@@ -624,7 +614,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
         ) : null}
 
         {/* Under a big emoji the time takes its own line, so the bubble is wide enough for it. */}
-        <span className={(hasText && !bigEmoji) || deleted ? "absolute right-1.75 bottom-1.25" : "flex justify-end"}>
+        <span className={(hasText && !bigEmoji) || deleted || soundOnly ? "absolute right-1.75 bottom-1.25" : "flex justify-end"}>
           <Meta message={message} account={account} pinned={pinned} />
         </span>
 

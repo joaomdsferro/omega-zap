@@ -1244,6 +1244,7 @@ impl SignalManager {
                     text,
                     media_label,
                     voice_seconds: None,
+                    waveform: Vec::new(),
                     reply_to,
                     attachments,
                     media: None,
