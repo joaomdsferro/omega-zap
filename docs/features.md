@@ -42,8 +42,8 @@ Everything Omega Zap does today, network by network. For what is still missing, 
   time; click it to go to the message and bring up the next. Pinned messages carry a small pin, and the
   conversation says who pinned or unpinned what, and when. Pin or unpin from the message menu, for
   24 hours, 7 days or 30 days.
-- **Edits.** On WhatsApp an edited message shows its new text with "Edited". Your own texts can be
-  edited from the message menu for 15 minutes after sending.
+- **Edits.** An edited message shows its new text with "Edited". Your own texts can be edited from
+  the message menu for 15 minutes after sending on WhatsApp, and for 24 hours on Signal.
 - **Search.** The sidebar search finds chats and then messages across every chat; **Ctrl+F** searches
   inside a chat and marks the words. Case and accents are ignored.
 - **New chat.** Your contacts A to Z, and yourself. On WhatsApp you can also type a full phone number.
@@ -113,7 +113,7 @@ WhatsApp only, for now.
 
 - Windows and macOS builds
 - Recording voice messages
-- Editing captions from this computer; Signal edits and pinned messages
+- Editing captions from this computer; Signal pinned messages
 - An app lock (a password for the stored data)
 - More than one account per network, WhatsApp Business, Telegram
 - Signal: typing indicators, starting a chat by phone number (saved contacts work), fetching history
