@@ -7,6 +7,7 @@ import { Avatar } from "./Avatar";
 import { Composer } from "./Composer";
 import { isVisual } from "./Attachments";
 import type { LoadMedia } from "./Attachments";
+import { Album, ALBUM_MIN, albumPhoto, continuesAlbum } from "./Album";
 import { MediaViewer } from "./MediaViewer";
 import type { ViewerItem } from "./MediaViewer";
 import { DeleteDialog } from "./DeleteDialog";
@@ -425,8 +426,32 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                   {formatDayLabel(day[0].sentAt)}
                 </span>
               </div>
-              {day.map((message, index) => {
+              {albums(day).map(({ message, index, album }) => {
                 const prev = day[index - 1];
+                if (album) {
+                  const tail = !prev || prev.fromMe !== message.fromMe || (!message.fromMe && prev.author !== message.author);
+                  const grid = (
+                    <Album
+                      key={message.id}
+                      messages={album}
+                      tail={tail}
+                      showAuthor={Boolean(chat.isGroup) && tail && !message.fromMe}
+                      loadMedia={loadMedia}
+                      onOpen={loadMedia ? (photo) => openPhoto(photo, 0) : undefined}
+                    />
+                  );
+                  if (!album.some((photo) => photo.id === unread.current.id)) return grid;
+                  return (
+                    <Fragment key={message.id}>
+                      <div data-unread-divider className="my-3 flex justify-center bg-[color-mix(in_oklab,var(--panel-bg)_45%,transparent)] py-1.25">
+                        <span className="rounded-full bg-(--panel-bg) px-3 py-1 text-[12.5px] text-(--text-secondary)" style={{ boxShadow: "var(--bubble-shadow)" }}>
+                          {unread.current.count === 1 ? "1 unread message" : `${unread.current.count} unread messages`}
+                        </span>
+                      </div>
+                      {grid}
+                    </Fragment>
+                  );
+                }
                 const newRun =
                   !prev ||
                   prev.fromMe !== message.fromMe ||
@@ -546,4 +571,24 @@ function groupByDay(messages: Message[]): Message[][] {
     else days.push([message]);
   }
   return days;
+}
+
+/** A day's messages, with each run of photos long enough to be an album gathered into one. */
+function albums(day: Message[]): { message: Message; index: number; album?: Message[] }[] {
+  const out: { message: Message; index: number; album?: Message[] }[] = [];
+  for (let index = 0; index < day.length; ) {
+    const message = day[index];
+    let end = index + 1;
+    if (albumPhoto(message)) {
+      while (end < day.length && continuesAlbum(day[end - 1], day[end])) end++;
+    }
+    if (end - index >= ALBUM_MIN) {
+      out.push({ message, index, album: day.slice(index, end) });
+      index = end;
+    } else {
+      out.push({ message, index });
+      index++;
+    }
+  }
+  return out;
 }
