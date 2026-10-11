@@ -565,6 +565,10 @@ pub struct ChatStore {
     /// written before that was handled load as `false`.
     #[serde(default)]
     chat_state_synced: bool,
+    /// Chats marked unread are kept as such. Before, they were kept as one
+    /// unread message, and the phone's marks are asked for again once.
+    #[serde(default)]
+    marked_unread_kept: bool,
     /// Server id of our own profile picture saved on disk.
     #[serde(default)]
     own_avatar_id: Option<String>,
@@ -610,6 +614,7 @@ impl Default for ChatStore {
             lid_to_pn: HashMap::new(),
             own_ids: Vec::new(),
             chat_state_synced: true,
+            marked_unread_kept: true,
             own_avatar_id: None,
             own_avatar_checked_ms: 0,
             ticks_refreshed: false,
@@ -1054,11 +1059,12 @@ impl ChatStore {
     }
 
     pub fn needs_chat_state_sync(&self) -> bool {
-        !self.chat_state_synced
+        !self.chat_state_synced || !self.marked_unread_kept
     }
 
     pub fn set_chat_state_synced(&mut self, synced: bool) {
         self.chat_state_synced = synced;
+        self.marked_unread_kept |= synced;
     }
 
     pub fn needs_lists_sync(&self) -> bool {
@@ -1390,10 +1396,14 @@ impl ChatStore {
     /// Read or marked unread on another device. A mutation older than the
     /// chat's newest message is stale: messages came in after it.
     pub fn set_read_elsewhere(&mut self, jid: &str, read: bool, at_ms: i64) {
+        let kept = self.marked_unread_kept;
         if let Some(chat) = self.chat_for_state(jid)
             && at_ms >= chat.last_ts_ms
         {
             if read {
+                chat.unread = 0;
+            } else if !kept && chat.unread == 1 {
+                // The one unread message older stores used for the mark.
                 chat.unread = 0;
             }
             chat.marked_unread = !read;
