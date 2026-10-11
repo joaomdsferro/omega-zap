@@ -109,7 +109,7 @@ WhatsApp only, for now.
 - **Albums**: four or more photos in a row from the same person show as one grid, as on WhatsApp.
 - **Sending files**: press **+**, drop files on the conversation, or paste a picture. Up to 100 MB.
 - **Stickers** (WhatsApp): the emoji panel's **Stickers** tab has Recent (what you sent, here or on
-  the phone), Favorites (in sync with the phone both ways) and your packs. **+** turns a picture or
+  the phone), Favorites (in sync with the phone both ways) and your packs. **+** (or **Ctrl+V** with the tab open) turns a picture or
   GIF into a sticker, makes a pack of your own, or adds packs from WhatsApp's sticker store. Packs
   installed on the phone are not shared with linked devices, so they can't show here. Right-click a
   sticker, or open a sticker message's menu, to star it or add it to a pack. The search box finds
