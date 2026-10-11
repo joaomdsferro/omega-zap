@@ -18,14 +18,16 @@ interface ForwardDialogProps {
   messages: Message[];
   chats: Chat[];
   showAccount?: boolean;
-  /** Sends the messages to every chosen chat. */
-  onForward: (targets: Chat[]) => Promise<void>;
+  /** Sends the messages to every chosen chat, then `note` when one was typed. */
+  onForward: (targets: Chat[], note: string) => Promise<void>;
   onClose: () => void;
 }
 
 export function ForwardDialog({ messages, chats, showAccount, onForward, onClose }: ForwardDialogProps) {
   const [selected, setSelected] = useState<string[]>([]);
   const [query, setQuery] = useState("");
+  /** A message of our own sent after the forwarded ones, as WhatsApp does. */
+  const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dialog = useRef<HTMLFormElement>(null);
@@ -54,7 +56,7 @@ export function ForwardDialog({ messages, chats, showAccount, onForward, onClose
     setBusy(true);
     setError(null);
     try {
-      await onForward(selected.flatMap((key) => chats.filter((c) => chatKey(c) === key)));
+      await onForward(selected.flatMap((key) => chats.filter((c) => chatKey(c) === key)), note.trim());
       onClose();
     } catch (e) {
       setError(String(e));
@@ -187,7 +189,16 @@ export function ForwardDialog({ messages, chats, showAccount, onForward, onClose
         {error ? <p className="px-5 pb-2 text-[13px] text-(--danger)" role="alert">{error}</p> : null}
 
         {selected.length > 0 ? (
-          <footer className="flex items-center gap-3 bg-(--panel-header-bg) px-5 py-3">
+          <footer className="flex flex-col gap-2 bg-(--panel-header-bg) px-5 py-3">
+            <input
+              type="text"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Add a message"
+              aria-label="Add a message"
+              className="h-10 w-full rounded-lg bg-(--composer-input-bg) px-3 text-[14.5px] text-(--text-primary) outline-none placeholder:text-(--text-secondary)"
+            />
+            <div className="flex items-center gap-3">
             <p className="min-w-0 flex-1 truncate text-[14px] text-(--text-primary)">{names.join(", ")}</p>
             <button
               type="submit"
@@ -197,6 +208,7 @@ export function ForwardDialog({ messages, chats, showAccount, onForward, onClose
             >
               <SendIcon size={22} />
             </button>
+            </div>
           </footer>
         ) : null}
       </form>

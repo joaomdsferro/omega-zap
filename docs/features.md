@@ -76,7 +76,8 @@ WhatsApp only, for now.
 - **Replies**: clicking a quote jumps to the quoted message.
 - **Reactions** on both networks. Hover a message to react. Each emoji shows its own count, yours
   highlighted; click them to see who reacted, and to take yours back.
-- **Forwarding**, media included. Forwarded messages say so.
+- **Forwarding**, media included. Forwarded messages say so. A message can be added; it is sent after
+  the forwarded ones, as on WhatsApp.
 - **Selecting messages.** "Select" in a message's menu ticks messages (Shift+click ticks a run) to
   forward, star or delete them together. Escape stops selecting.
 - **Read receipts and ticks.** Opening a chat marks it read on your phone and tells the senders, unless

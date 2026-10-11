@@ -934,8 +934,8 @@ function Shell() {
     (chat) => backendFor(chat.account)?.demo || accounts[chat.account].status.state === "connected",
   );
 
-  /** Sends messages, oldest first, on to each of `targets`. */
-  async function forward(messages: Message[], targets: Chat[]) {
+  /** Sends messages, oldest first, on to each of `targets`, then `note` as a message of our own. */
+  async function forward(messages: Message[], targets: Chat[], note: string) {
     // Attachments are fetched once and uploaded again to each chat.
     const load = selectedBackend?.mediaUrl;
     const parts = await Promise.all(
@@ -975,6 +975,7 @@ function Shell() {
             sent.push(await backend.sendText(target.id, text, undefined, undefined, score));
           }
         }
+        if (note) sent.push(await backend.sendText(target.id, note));
         const open = selectedRef.current;
         if (open?.account === target.account && open.id === target.id) {
           setMessages((prev) => sent.reduce((list, one) => upsert(list, one), prev));
@@ -1336,7 +1337,7 @@ function Shell() {
           messages={forwarding}
           chats={forwardTargets}
           showAccount={showAccount}
-          onForward={(targets) => forward(forwarding, targets)}
+          onForward={(targets, note) => forward(forwarding, targets, note)}
           onClose={() => setForwarding(null)}
         />
       ) : null}
