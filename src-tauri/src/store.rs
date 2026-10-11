@@ -1973,6 +1973,11 @@ impl ChatStore {
                     message.deleted = Some(Deletion::ForMe);
                 }
             }
+            // A chat with ourselves left with nothing to show was made by
+            // those copies alone: it goes from the list.
+            if !chat.messages.is_empty() && chat.messages.iter().all(|m| m.deleted == Some(Deletion::ForMe)) {
+                self.chats.remove(&id);
+            }
         }
     }
 
@@ -2361,6 +2366,16 @@ mod tests {
         let ids: Vec<_> = store.messages("me").into_iter().map(|m| m.id).collect();
         assert_eq!(ids, ["200"]);
         assert_eq!(store.messages("sergio").len(), 1);
+    }
+
+    #[test]
+    fn a_chat_with_ourselves_made_only_of_copies_goes() {
+        let mut store = ChatStore::default();
+        store.set_own_ids(["me".to_string()]);
+        store.ingest(incoming("sergio", "100", 1, true), false);
+        store.ingest(incoming("me", "100", 1, true), false);
+        store.repair_misfiled();
+        assert!(store.list_chats().iter().all(|c| c.id != "me"));
     }
 
     #[test]
