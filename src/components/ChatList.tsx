@@ -74,11 +74,11 @@ const ChatRow = memo(function ChatRow({
         }
         className={[
           "group flex h-18 w-full items-center gap-3 border-l-[3px] pl-2.25 text-left transition-colors duration-100",
-          selected ? "bg-(--selected-bg)" : "hover:bg-(--hover-bg)",
+          selected ? "bg-(--selected-bg)" : chat.typing ? "chat-typing" : "hover:bg-(--hover-bg)",
         ].join(" ")}
         style={{ borderLeftColor: showAccount ? ACCOUNTS[chat.account].color : "transparent" }}
       >
-        <div className="relative shrink-0">
+        <div className={["relative shrink-0", chat.typing ? "typing-ring" : ""].join(" ")}>
           <Avatar
             name={chat.name}
             initials={chat.initials}
@@ -113,7 +113,14 @@ const ChatRow = memo(function ChatRow({
           <div className="mt-0.5 flex items-center gap-1.5 text-(--text-secondary)">
             {chat.typing ? (
               // Someone typing takes the place of the last message, as on the phone.
-              <p className="min-w-0 flex-1 truncate text-[14px] leading-5 text-(--accent)">{chat.typing}</p>
+              <>
+                <span className="typing-bubble" aria-hidden>
+                  <i />
+                  <i />
+                  <i />
+                </span>
+                <p className="min-w-0 flex-1 truncate text-[14px] leading-5 font-semibold text-(--accent)">{chat.typing}</p>
+              </>
             ) : (
               <>
                 {chat.lastFromMe ? (
