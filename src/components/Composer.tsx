@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import type { AccountId } from "../accounts/accounts";
 import type { LinkPreview, OutgoingLink, ReplyQuote, TypingState } from "../backend";
 import { Emoji } from "../lib/emoji";
-import { searchEmoji } from "../lib/emojiSearch";
+import { emojiForShortcode, searchEmoji } from "../lib/emojiSearch";
 import { formatFileSize } from "../lib/format";
 import { URL_PATTERN, fetchLinkPreview } from "../lib/links";
 import { FormattedLine } from "../lib/markup";
@@ -135,6 +135,8 @@ const LINK_PAUSE_MS = 400;
 const SUGGESTIONS = 8;
 /** What starts an emoji suggestion: a colon, at the start or after a space, and two letters. */
 const SHORTCODE = /(?:^|\s):([\p{L}\p{N}_+-]{2,})$/u;
+/** A whole shortcode, closed with a colon: ":laughing:". */
+const CLOSED_SHORTCODE = /(?:^|\s):([\p{L}\p{N}_+-]+):$/u;
 
 /** The card for the link being typed, once it has been read; `undefined` while it is looked up. */
 function useTypedLink(text: string, enabled: boolean) {
@@ -211,6 +213,13 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
     if (!query) return;
     input.current?.replaceBefore(caret - query.length - 1, emoji);
   }
+
+  // Closing the shortcode with a colon puts its emoji in at once.
+  useEffect(() => {
+    const closed = CLOSED_SHORTCODE.exec(text.slice(0, caret));
+    const emoji = closed && emojiForShortcode(closed[1]);
+    if (emoji) input.current?.replaceBefore(caret - closed[1].length - 2, emoji);
+  }, [text, caret]);
 
   // The link being typed gets its card above the box, as on the phone.
   const typed = useTypedLink(files.length ? "" : text, settings.fetchLinkPreviews && !disabled);
@@ -310,7 +319,8 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
               ].join(" ")}
             >
               <Emoji emoji={entry.emoji} size={22} />
-              <span className="truncate">{entry.name}</span>
+              <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+              {entry.code ? <span className="shrink-0 text-[12.5px] text-(--text-secondary)">:{entry.code}:</span> : null}
             </li>
           ))}
         </ul>
