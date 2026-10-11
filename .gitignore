@@ -34,3 +34,6 @@ src-tauri/binaries
 *.pem
 *.key
 target/
+
+# TypeScript build info
+*.tsbuildinfo
