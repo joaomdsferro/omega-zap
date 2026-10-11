@@ -329,7 +329,9 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
     };
     const close = () => setPicking(false);
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPicking(false);
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setPicking(false);
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);

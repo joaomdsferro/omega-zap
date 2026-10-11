@@ -13,6 +13,7 @@ import {
   PinIcon,
   PlusIcon,
   SearchIcon,
+  KeyboardIcon,
   SettingsIcon,
   StarIcon,
   UnarchiveIcon,
@@ -56,6 +57,7 @@ interface SidebarProps {
   onNewChat: () => void;
   onStarred: () => void;
   onSettings: () => void;
+  onShortcuts: () => void;
   onToggleFavorite: (chat: Chat) => void;
   /** Marks a chat read, or unread by hand. */
   onToggleUnread?: (chat: Chat) => void;
@@ -149,6 +151,7 @@ export function Sidebar({
   onNewChat,
   onStarred,
   onSettings,
+  onShortcuts,
   onToggleFavorite,
   onToggleUnread,
   onToggleList,
@@ -299,6 +302,7 @@ export function Sidebar({
       items: [
         { label: "Starred messages", icon: <StarIcon size={18} />, onSelect: onStarred },
         { label: "New list", icon: <PlusIcon size={18} />, onSelect: () => onNewList() },
+        { label: "Keyboard shortcuts", icon: <KeyboardIcon size={18} />, onSelect: onShortcuts },
         { label: "Settings", icon: <SettingsIcon size={18} />, onSelect: onSettings },
       ],
     });
@@ -339,7 +343,8 @@ export function Sidebar({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key !== "Escape") return;
+              if (e.key !== "Escape" || (!query && !inArchived)) return;
+              e.preventDefault();
               if (query) setQuery("");
               else setArchivedOpen(false);
             }}

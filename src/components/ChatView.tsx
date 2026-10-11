@@ -13,7 +13,7 @@ import { Album, ALBUM_MIN, albumPhoto, continuesAlbum } from "./Album";
 import { MediaViewer } from "./MediaViewer";
 import type { ViewerItem } from "./MediaViewer";
 import { DeleteDialog } from "./DeleteDialog";
-import { EditDialog } from "./EditDialog";
+import { EditDialog, canEdit } from "./EditDialog";
 import { MessageBubble } from "./MessageBubble";
 import { PinnedBar } from "./PinnedBar";
 import { PinDialog } from "./PinDialog";
@@ -677,6 +677,14 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
             : undefined
         }
         onCancelReply={() => setReplyingTo(null)}
+        onEditLast={
+          onEdit
+            ? () => {
+                const last = [...messages].reverse().find((m) => m.fromMe && !m.deleted);
+                if (last && canEdit(last)) setEditing(last);
+              }
+            : undefined
+        }
         onSend={send}
         onTyping={onTyping}
       />

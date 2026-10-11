@@ -3,6 +3,7 @@ import type { AccountId } from "../accounts/accounts";
 import type { LinkPreview, OutgoingLink, ReplyQuote, TypingState } from "../backend";
 import { Emoji } from "../lib/emoji";
 import { emojiForShortcode, searchEmoji } from "../lib/emojiSearch";
+import { SHORTCUTS, matches } from "../lib/shortcuts";
 import { formatFileSize } from "../lib/format";
 import { URL_PATTERN, fetchLinkPreview } from "../lib/links";
 import { FormattedLine } from "../lib/markup";
@@ -30,6 +31,8 @@ interface ComposerProps {
   onRemoveFile?: (index: number) => void;
   /** Tells the chat we are typing, or stopped; absent where it isn't sent. */
   onTyping?: (chatId: string, state: TypingState) => void;
+  /** ↑ in an empty box: edits our last message, if one can be. */
+  onEditLast?: () => void;
 }
 
 /** "Typing" is said again this often while it goes on: the other side forgets it after a while. */
@@ -157,7 +160,7 @@ function useTypedLink(text: string, enabled: boolean) {
   return found?.url === url ? { url, preview: found.preview, loading: false } : { url, preview: null, loading: true };
 }
 
-export function Composer({ chatId, account, disabled, disabledReason, replyTo, onCancelReply, onSend, files = [], onAddFiles, onRemoveFile, onTyping }: ComposerProps) {
+export function Composer({ chatId, account, disabled, disabledReason, replyTo, onCancelReply, onSend, files = [], onAddFiles, onRemoveFile, onTyping, onEditLast }: ComposerProps) {
   const { settings } = useSettings();
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
@@ -189,6 +192,7 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
     };
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.preventDefault();
         setEmojiOpen(false);
         input.current?.focus();
       }
@@ -200,6 +204,20 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [emojiOpen]);
+
+  // Ctrl+E opens or closes the emoji panel, from anywhere in the chat.
+  useEffect(() => {
+    if (disabled) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || !SHORTCUTS.emoji.combos.some((combo) => matches(event, combo))) return;
+      if (document.querySelector('[aria-modal="true"], [role="menu"]')) return;
+      event.preventDefault();
+      setEmojiOpen((open) => !open);
+      input.current?.focus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [disabled]);
 
   // ":joy" offers 😂 and its neighbours.
   const shortcode = SHORTCODE.exec(text.slice(0, caret));
@@ -267,6 +285,11 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
         setDismissed(query);
         return;
       }
+    }
+    if (e.key === "ArrowUp" && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !text && !files.length && onEditLast) {
+      e.preventDefault();
+      onEditLast();
+      return;
     }
     if (e.key === "Escape" && replyTo) {
       e.preventDefault();

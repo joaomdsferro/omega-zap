@@ -24,6 +24,8 @@ import { NavRail, type RailAccount, type SidebarView } from "./components/NavRai
 import { NewChatPanel } from "./components/NewChatPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { ShortcutsDialog } from "./components/ShortcutsDialog";
+import { chatNumber, shortcutFor } from "./lib/shortcuts";
 import { Sidebar } from "./components/Sidebar";
 import { StarredPanel } from "./components/StarredPanel";
 import { HistoryProgress } from "./components/HistoryProgress";
@@ -238,6 +240,7 @@ function Shell() {
     reject: (reason: unknown) => void;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
@@ -1005,6 +1008,96 @@ function Shell() {
   const focus = accounts[unified ? "whatsapp" : active];
   const canLink = focus.status.state !== "unsupported";
 
+  // Keyboard shortcuts. The handler is swapped each render so it sees the
+  // chat open now; the listener stays.
+  const onShortcut = useRef<(event: KeyboardEvent) => void>(() => {});
+  onShortcut.current = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.isComposing) return;
+    const chat = selectedChat;
+    const nth = chatNumber(event);
+    if (nth !== null) {
+      event.preventDefault();
+      return openListed((rows) => rows[nth]);
+    }
+    const id = shortcutFor(event);
+    if (!id) return;
+    // Something open over the app answers its own keys.
+    const covered = document.querySelector('[aria-modal="true"], [role="menu"], [role="listbox"][aria-label="Emoji suggestions"], [role="dialog"][aria-label="Emoji"]');
+    if (covered && id !== "help") return;
+    switch (id) {
+      case "newChat":
+        closeLinking();
+        setView("chats");
+        setPanel("new-chat");
+        break;
+      case "search":
+        closeLinking();
+        setView("chats");
+        setPanel("chats");
+        requestAnimationFrame(() => {
+          const box = document.getElementById("chat-search") as HTMLInputElement | null;
+          box?.focus();
+          box?.select();
+        });
+        break;
+      case "nextChat":
+      case "previousChat": {
+        const step = id === "nextChat" ? 1 : -1;
+        openListed((rows, at) => rows[at === -1 ? (step === 1 ? 0 : rows.length - 1) : at + step]);
+        break;
+      }
+      case "closeChat": {
+        // Escape still clears a box with something typed in it.
+        const target = event.target as HTMLElement;
+        const typed = target instanceof HTMLInputElement ? target.value : target.isContentEditable ? target.textContent : "";
+        if (!selected || typed) return;
+        setSelected(null);
+        break;
+      }
+      case "markUnread":
+        if (!chat) return;
+        toggleUnread(chat);
+        break;
+      case "mute":
+        if (!chat) return;
+        void toggleMuted(chat).catch(() => {});
+        break;
+      case "archive":
+        if (!chat) return;
+        toggleArchived(chat);
+        break;
+      case "pin":
+        if (!chat) return;
+        togglePinned(chat);
+        break;
+      case "settings":
+        closeLinking();
+        setView("settings");
+        break;
+      case "help":
+        setShortcutsOpen((open) => !open);
+        break;
+      case "emoji":
+        // The message box opens its own panel.
+        return;
+    }
+    event.preventDefault();
+  };
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => onShortcut.current(event);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
+
+  /** Opens a chat from the list as it shows now (filtered, searched), picked from its rows and the open one's place. */
+  function openListed(pick: (rows: HTMLElement[], at: number) => HTMLElement | undefined) {
+    const rows = [...document.querySelectorAll<HTMLElement>('[aria-label="Chats"] [role="option"]')];
+    const row = pick(rows, rows.findIndex((r) => r.getAttribute("aria-selected") === "true"));
+    if (!row) return;
+    row.click();
+    row.scrollIntoView({ block: "nearest" });
+  }
+
   let main: ReactNode;
   if (linking && !accounts[linking].status.linked) {
     main = (
@@ -1164,6 +1257,7 @@ function Shell() {
               setPanel("starred");
             }}
             onSettings={() => setView("settings")}
+            onShortcuts={() => setShortcutsOpen(true)}
             onToggleFavorite={toggleFavorite}
             onToggleUnread={toggleUnread}
             onToggleList={toggleList}
@@ -1230,6 +1324,7 @@ function Shell() {
           }}
         />
       ) : null}
+      {shortcutsOpen ? <ShortcutsDialog onClose={() => setShortcutsOpen(false)} /> : null}
       {forwarding ? (
         <ForwardDialog
           message={forwarding}

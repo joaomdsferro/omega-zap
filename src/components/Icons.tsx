@@ -366,3 +366,10 @@ export const PersonIcon = ({ size = 24, ...rest }: IconProps) => (
     <path d="M2.5 22a9.5 9.5 0 0 1 19 0z" />
   </svg>
 );
+
+export const KeyboardIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="2.5" y="6" width="19" height="12" rx="2" />
+    <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M18 14h.01M9 14h6" />
+  </Svg>
+);

@@ -283,7 +283,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     const marks: Record<string, string> = { b: "*", i: "_" };
     const shifted: Record<string, string> = { x: "~", m: "```" };
     const mark = event.shiftKey ? shifted[key] : marks[key];
-    if (mod && mark) {
+    // Ctrl+Alt+Shift+M is the app's mute, not monospace.
+    if (mod && mark && !event.altKey) {
       event.preventDefault();
       return wrap(mark);
     }
