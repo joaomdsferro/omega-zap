@@ -100,7 +100,7 @@ in a separate bridge process, since its library is AGPL and links a different SQ
   The key lives in your desktop keyring (KWallet, GNOME Keyring).
 - To make a card for a link that came without one, the app opens the page itself, from public
   addresses only. **Settings → Links** turns that off.
-- GIF searches go to [KLIPY](https://klipy.com) with an anonymous id for this install. WhatsApp's
+- GIF and sticker searches go to [KLIPY](https://klipy.com) with an anonymous id for this install. WhatsApp's
   sticker store is read from WhatsApp's own servers.
 
 ## Build from source

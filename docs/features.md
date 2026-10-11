@@ -112,7 +112,8 @@ WhatsApp only, for now.
   the phone), Favorites (in sync with the phone both ways) and your packs. **+** turns a picture or
   GIF into a sticker, makes a pack of your own, or adds packs from WhatsApp's sticker store. Packs
   installed on the phone are not shared with linked devices, so they can't show here. Right-click a
-  sticker, or open a sticker message's menu, to star it or add it to a pack.
+  sticker, or open a sticker message's menu, to star it or add it to a pack. The search box finds
+  stickers on KLIPY; they are made into WhatsApp stickers as they are sent.
 - **GIFs** (WhatsApp): the **GIFs** tab searches KLIPY and shows what is trending and the GIFs you
   sent.
 - **Link cards** for links that come with one, and for links that don't (fetched from the page's own
