@@ -9,6 +9,7 @@ import {
   type Contact,
   type CustomList,
   type Message,
+  type OutgoingLink,
   type StarredMessage,
 } from "./backend";
 import { ChatView } from "./components/ChatView";
@@ -22,9 +23,16 @@ import { ResizeHandle } from "./components/ResizeHandle";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { Sidebar } from "./components/Sidebar";
 import { StarredPanel } from "./components/StarredPanel";
+import { HistoryProgress } from "./components/HistoryProgress";
 import { ZoomToast } from "./components/ZoomToast";
 import { hueFor, initialsFor } from "./lib/avatar";
-import { onNotificationOpen, showNotification } from "./lib/notify";
+import {
+  dismissNotification,
+  onNotificationOpen,
+  showNotification,
+  syncNotificationPrefs,
+  syncTrayBadge,
+} from "./lib/notify";
 import {
   CHAT_MIN,
   SIDEBAR_DEFAULT,
@@ -36,6 +44,10 @@ import {
 import { useZoom } from "./settings/useZoom";
 
 const RAIL_WIDTH = 64;
+/** How long a chat stays pointed out after its notification was clicked. */
+const HIGHLIGHT_MS = 10_000;
+/** Matches the transition on `.chat-highlight::after`. */
+const HIGHLIGHT_FADE_MS = 600;
 
 function upsert(messages: Message[], message: Message): Message[] {
   const index = messages.findIndex((m) => m.id === message.id);
@@ -200,6 +212,8 @@ function Shell() {
   const [chatsBy, setChatsBy] = useState<Map<ChatBackend, Chat[]>>(new Map());
   const [selected, setSelected] = useState<{ account: AccountId; id: string } | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  /** Counts older messages arriving from the phone for the open chat. */
+  const [historyTick, setHistoryTick] = useState(0);
   /** The messages of recently opened chats, most recent last, by `account:id`. */
   const messageCache = useRef(new Map<string, Message[]>());
   /** The chat whose messages `messages` holds. */
@@ -218,10 +232,27 @@ function Shell() {
     lastSelected.current = selectedKey;
     switchStarted.current = performance.now();
   }
+  // The chat's messages as last seen are put in place during this same
+  // render, so the first frame of the new chat already shows them: no frame
+  // of the previous chat, and no empty one, between the click and them.
+  const [messagesFor, setMessagesFor] = useState<string | null>(null);
+  const openedFromCache = useRef(false);
+  if (messagesFor !== selectedKey) {
+    setMessagesFor(selectedKey);
+    const cached = selectedKey ? messageCache.current.get(selectedKey) : undefined;
+    openedFromCache.current = Boolean(cached);
+    messagesOf.current = selectedKey;
+    setMessages(cached ?? []);
+  }
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   /** A chat to open once the account it is on has been switched to. */
   const pendingOpen = useRef<{ account: AccountId; id: string } | null>(null);
+  /** A chat a clicked notification asked for, until its account's list is in. */
+  const [noticeTarget, setNoticeTarget] = useState<{ account: AccountId; id: string; open: boolean } | null>(null);
+  /** A chat pointed out in the list, as `account:id`, and whether it is fading out. */
+  const [highlight, setHighlight] = useState<string | null>(null);
+  const [highlightFading, setHighlightFading] = useState(false);
   const sidebarRef = useRef<HTMLElement>(null);
 
   const windowWidth = useWindowWidth();
@@ -257,6 +288,16 @@ function Shell() {
           if (notifications && !event.notice.muted && !looking) {
             showNotification(backend.account, event.notice, notificationPreview);
           }
+        } else if (event.type === "history") {
+          if (open?.account !== backend.account || open.id !== event.chatId) return;
+          setHistoryTick((tick) => tick + 1);
+          // A chat opened empty shows what came at once.
+          backend
+            .getMessages(event.chatId)
+            .then((list) => {
+              if (messagesOf.current === `${backend.account}:${event.chatId}`) setMessages((prev) => (prev.length ? prev : list));
+            })
+            .catch(console.error);
         } else if (open?.account === backend.account && open.id === event.message.chatId) {
           setMessages((prev) => upsert(prev, event.message));
           if (!event.message.fromMe && document.hasFocus()) {
@@ -276,6 +317,29 @@ function Shell() {
     [sources],
   );
   const selectedBackend = selected ? backendFor(selected.account) : null;
+
+  // Resting the pointer on a chat fetches its messages ahead of the click,
+  // so a chat not opened yet opens as fast as one that was.
+  const peekTimer = useRef<number | undefined>(undefined);
+  const peek = useCallback(
+    (chat: Chat) => {
+      window.clearTimeout(peekTimer.current);
+      const key = `${chat.account}:${chat.id}`;
+      if (messageCache.current.has(key)) return;
+      peekTimer.current = window.setTimeout(() => {
+        backendFor(chat.account)
+          ?.getMessages(chat.id)
+          .then((list) => {
+            const cache = messageCache.current;
+            if (cache.has(key) || list.length === 0) return;
+            cache.set(key, list);
+            if (cache.size > CACHED_CHATS) cache.delete(cache.keys().next().value!);
+          })
+          .catch(() => {});
+      }, 60);
+    },
+    [backendFor],
+  );
   const selectedId = selected?.id ?? null;
 
   // Keeps the cache up to date with what arrives in the open chat.
@@ -283,24 +347,18 @@ function Shell() {
     const key = messagesOf.current;
     if (!key) return;
     const cache = messageCache.current;
+    // A chat left before its messages arrived has nothing worth keeping.
+    if (messages.length === 0 && !cache.has(key)) return;
     cache.delete(key);
     cache.set(key, messages);
     if (cache.size > CACHED_CHATS) cache.delete(cache.keys().next().value!);
   }, [messages]);
 
   useEffect(() => {
-    if (!selectedBackend || !selectedId) {
-      messagesOf.current = null;
-      setMessages([]);
-      return;
-    }
+    if (!selectedBackend || !selectedId) return;
     const key = `${selectedBackend.account}:${selectedId}`;
     const started = switchStarted.current;
-    // The chat as it was last seen, at once, or nothing: never the chat
-    // that was open before, drawn under this one's name.
-    const cached = messageCache.current.get(key);
-    messagesOf.current = key;
-    setMessages(cached ?? []);
+    const cached = openedFromCache.current;
     if (import.meta.env.DEV && cached) logSwitch(key, started, "cached");
     let alive = true;
     selectedBackend
@@ -308,6 +366,8 @@ function Shell() {
       .then((list) => {
         if (!alive) return;
         setMessages(list);
+        // Nothing here yet: its history is asked for next.
+        if (!list.length) void selectedBackend.fetchHistoryFirst?.(selectedId);
         if (import.meta.env.DEV && !cached) logSwitch(key, started, "loaded");
       })
       .catch(console.error);
@@ -384,17 +444,93 @@ function Shell() {
     [closeLinking, unified, active, setActiveAccount],
   );
 
-  useEffect(() => onNotificationOpen((account, chatId) => openChat(account, chatId)), [openChat]);
+  useEffect(
+    () =>
+      onNotificationOpen((account, id) =>
+        setNoticeTarget({ account, id, open: settingsRef.current.notificationOpensChat }),
+      ),
+    [],
+  );
+
+  // Waits for the chat's list: a window made by the click is still loading
+  // it, and the lists changing under it would drop an earlier selection.
+  useEffect(() => {
+    if (!noticeTarget) return;
+    const { account, id, open } = noticeTarget;
+    if (!unified && active !== account) {
+      setActiveAccount(account);
+      return;
+    }
+    const backend = sources.find((b) => !b.demo && b.account === account);
+    if (!backend || !chatsBy.has(backend)) return;
+    setNoticeTarget(null);
+    closeLinking();
+    setView("chats");
+    setPanel("chats");
+    if (open) {
+      setFocusMessage(null);
+      setSelected({ account, id });
+    } else {
+      setHighlight(`${account}:${id}`);
+    }
+  }, [noticeTarget, unified, active, sources, chatsBy, closeLinking, setActiveAccount]);
+
+  // Pointed out for a while, then faded out.
+  useEffect(() => {
+    setHighlightFading(false);
+    if (!highlight) return;
+    const fade = window.setTimeout(() => setHighlightFading(true), HIGHLIGHT_MS - HIGHLIGHT_FADE_MS);
+    const end = window.setTimeout(() => setHighlight(null), HIGHLIGHT_MS);
+    return () => {
+      window.clearTimeout(fade);
+      window.clearTimeout(end);
+    };
+  }, [highlight]);
+
+  // And no longer once the chat is opened.
+  useEffect(() => {
+    if (selectedKey) setHighlight((current) => (current === selectedKey ? null : current));
+  }, [selectedKey]);
+
+  // An opened chat's notification has been answered.
+  useEffect(() => {
+    if (selected) dismissNotification(selected.account, selected.id);
+  }, [selected]);
+
+  useEffect(
+    () => syncNotificationPrefs(settings.notifications, settings.notificationPreview),
+    [settings.notifications, settings.notificationPreview],
+  );
+
+  useEffect(() => syncTrayBadge(settings.trayBadge), [settings.trayBadge]);
 
   const clearFocus = useCallback(() => setFocusMessage(null), []);
 
-  async function handleSend(text: string, files: File[], replyTo?: string, onFileSent?: () => void) {
+  // The chat's history past what was loaded with it, a page at a time.
+  const loadOlder = useCallback(
+    async (before: string) => {
+      const backend = selectedBackend;
+      const chatId = selectedId;
+      if (!backend?.olderMessages || !chatId) return false;
+      const key = `${backend.account}:${chatId}`;
+      const older = await backend.olderMessages(chatId, Date.parse(before));
+      if (messagesOf.current !== key || !older.length) return false;
+      setMessages((prev) => {
+        const known = new Set(prev.map((m) => m.id));
+        return [...older.filter((m) => !known.has(m.id)), ...prev];
+      });
+      return true;
+    },
+    [selectedBackend, selectedId],
+  );
+
+  async function handleSend(text: string, files: File[], replyTo?: string, onFileSent?: () => void, link?: OutgoingLink) {
     const backend = selectedBackend;
     const chatId = selectedId;
     if (!backend || !chatId) return;
     try {
       if (!files.length || !backend.sendFile) {
-        const message = await backend.sendText(chatId, text, replyTo);
+        const message = await backend.sendText(chatId, text, replyTo, link);
         setMessages((prev) => upsert(prev, message));
         return;
       }
@@ -477,6 +613,14 @@ function Shell() {
   const chats = shown.flatMap((backend) => chatsBy.get(backend) ?? []);
   if (shown.length > 1) chats.sort(byRecency);
   const showAccount = unified && anyLinked;
+
+  const searchMessages = useCallback(
+    (query: string, chatId?: string) =>
+      Promise.all(shown.map((backend) => backend.searchMessages(query, chatId))).then((lists) =>
+        lists.flat().sort((a, b) => b.message.sentAt.localeCompare(a.message.sentAt)),
+      ),
+    [shown],
+  );
 
   const selectedChat =
     chats.find((c) => c.account === selected?.account && c.id === selected.id) ??
@@ -629,15 +773,44 @@ function Shell() {
 
   async function forward(message: Message, targets: Chat[]) {
     const text = message.text;
-    if (!text) return;
+    // Attachments are fetched once and uploaded again to each chat.
+    let files: File[] = [];
+    if (message.hasMedia || message.attachments?.length) {
+      const load = selectedBackend?.mediaUrl;
+      if (!load) throw new Error("The attachment can't be read here.");
+      const count = message.attachments?.length || 1;
+      files = await Promise.all(
+        Array.from({ length: count }, async (_, index) => {
+          const response = await fetch(await load(message.chatId, message.id, index));
+          if (!response.ok) throw new Error("The attachment could not be read.");
+          const blob = await response.blob();
+          const attachment = message.attachments?.[index];
+          const type = attachment?.mime || blob.type || "application/octet-stream";
+          const name = attachment?.fileName || message.mediaLabel?.match(/[^/\\]+\.\w{1,8}$/)?.[0] || `forwarded.${type.split("/")[1]?.split(/[;+]/)[0] || "bin"}`;
+          return new File([blob], name, { type });
+        }),
+      );
+    }
+    if (!text && !files.length) return;
+    const score = (message.forwarded ?? 0) + 1;
     const failed: string[] = [];
     for (const target of targets) {
       const backend = backendFor(target.account);
       try {
         if (!backend) throw new Error("not linked");
-        const sent = await backend.sendText(target.id, text);
+        const sent: Message[] = [];
+        if (files.length) {
+          if (!backend.sendFile) throw new Error("no files here");
+          for (const [index, file] of files.entries()) {
+            sent.push(await backend.sendFile(target.id, file, index === 0 ? text || undefined : undefined, undefined, score));
+          }
+        } else if (text) {
+          sent.push(await backend.sendText(target.id, text, undefined, undefined, score));
+        }
         const open = selectedRef.current;
-        if (open?.account === target.account && open.id === target.id) setMessages((prev) => upsert(prev, sent));
+        if (open?.account === target.account && open.id === target.id) {
+          setMessages((prev) => sent.reduce((list, one) => upsert(list, one), prev));
+        }
       } catch {
         failed.push(target.name);
       }
@@ -694,6 +867,9 @@ function Shell() {
         // Signal deletes for us on this computer only; WhatsApp tells the phone.
         onDelete={canSend || selectedChat.account === "signal" ? deleteMessage : undefined}
         focusMessageId={focusMessage}
+        onLoadOlder={selectedBackend?.olderMessages ? loadOlder : undefined}
+        historyTick={historyTick}
+        searchMessages={searchMessages}
         onFocused={clearFocus}
       />
     );
@@ -771,8 +947,15 @@ function Shell() {
               setFocusMessage(null);
               setSelected({ account: chat.account, id: chat.id });
             }}
+            onPeek={peek}
+            highlighted={highlight}
+            highlightFading={highlightFading}
             showAccount={showAccount}
             banner={banners}
+            footer={bannerAccounts.map((id) => {
+              const backfill = accounts[id].status.backfill;
+              return backfill ? <HistoryProgress key={id} label={ACCOUNTS[id].label} backfill={backfill} /> : null;
+            })}
             emptyText={
               (unified ? anyLinked : focus.status.linked)
                 ? unified
@@ -792,6 +975,8 @@ function Shell() {
             onToggleList={toggleList}
             onNewList={(chat) => editList(undefined, chat)}
             onEditList={(name) => editList(name)}
+            searchMessages={searchMessages}
+            onOpenMessage={(item) => openChat(item.account, item.message.chatId, item.message.id)}
           />
         ) : (
           <SettingsPanel

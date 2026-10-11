@@ -56,8 +56,10 @@ pub async fn wa_send_text(
     chat_id: String,
     text: String,
     reply_to: Option<String>,
+    link: Option<crate::account::OutgoingLink>,
+    forwarded: Option<u32>,
 ) -> Result<MessageDto, String> {
-    mgr.send_text(&chat_id, &text, reply_to.as_deref()).await
+    mgr.send_text(&chat_id, &text, reply_to.as_deref(), link, forwarded.unwrap_or(0)).await
 }
 
 #[tauri::command]
@@ -140,6 +142,24 @@ pub async fn wa_set_starred(
 #[tauri::command]
 pub fn wa_starred(mgr: Mgr<'_>) -> Vec<StarredDto> {
     mgr.starred()
+}
+
+/// Messages with the words of `query` in them, newest first.
+/// Messages of a chat from before `before_ms`, oldest first, past what memory keeps.
+#[tauri::command]
+pub fn wa_older_messages(mgr: Mgr<'_>, chat_id: String, before_ms: i64) -> Vec<MessageDto> {
+    mgr.older_messages(&chat_id, before_ms, crate::store::OLDER_PAGE)
+}
+
+/// Fetches a chat's history from the phone before the others', as when it is opened empty.
+#[tauri::command]
+pub fn wa_fetch_history_first(mgr: Mgr<'_>, chat_id: String) {
+    mgr.fetch_history_first(&chat_id);
+}
+
+#[tauri::command]
+pub fn wa_search(mgr: Mgr<'_>, query: String, chat_id: Option<String>) -> Vec<StarredDto> {
+    mgr.search(&query, chat_id.as_deref())
 }
 
 #[tauri::command]

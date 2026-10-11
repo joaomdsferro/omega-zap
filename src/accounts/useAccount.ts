@@ -18,6 +18,17 @@ export type AccountState =
   | "logged_out"
   | "error";
 
+export interface Backfill {
+  state: "fetching" | "waitingForPhone" | "done";
+  /** The chat being fetched. */
+  chat: string | null;
+  /** Chats with all their history here, of `total`. */
+  done: number;
+  total: number;
+  /** Messages fetched since the app started. */
+  messages: number;
+}
+
 export interface AccountStatus {
   seq: number;
   state: AccountState;
@@ -26,6 +37,8 @@ export interface AccountStatus {
   qrSvg: string | null;
   qrTimeoutSecs: number | null;
   syncProgress: number | null;
+  /** Older history being fetched from the phone, chat by chat. */
+  backfill: Backfill | null;
   error: string | null;
   /** Something that went wrong without breaking the connection. */
   notice: string | null;
@@ -40,6 +53,7 @@ const UNSUPPORTED: AccountStatus = {
   qrSvg: null,
   qrTimeoutSecs: null,
   syncProgress: null,
+  backfill: null,
   error: null,
   notice: null,
   me: null,

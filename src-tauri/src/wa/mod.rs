@@ -1,6 +1,7 @@
 pub mod commands;
 mod convert;
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -25,11 +26,11 @@ use whatsapp_rust::{
 };
 
 use crate::account::{
-    AccountState as WaState, AccountStatus as WaStatus, Me, OutgoingFile, lock, render_qr, secure_dir,
+    AccountState as WaState, AccountStatus as WaStatus, Backfill, BackfillState, Me, OutgoingFile, OutgoingLink, lock, render_qr, secure_dir,
 };
 use crate::store;
 use crate::store::{
-    CdnRef, ChatStore, ContactDto, Content, Deletion, Delivery, ListDto, ReplyRef, MessageDto, Notice, StarredDto, StoredMessage,
+    CdnRef, ChatStore, History, ContactDto, Content, Deletion, Delivery, LinkPreview, ListDto, ReplyRef, MessageDto, Notice, StarredDto, StoredMessage,
     now_ms,
 };
 pub use crate::store::ChatSummary;
@@ -41,6 +42,22 @@ pub const AVATAR_DIR: &str = "avatars";
 pub const LINK_THUMB_DIR: &str = "link-thumbs";
 pub const MEDIA_DIR: &str = "media";
 const SAVE_INTERVAL: Duration = Duration::from_secs(3);
+/// `HistorySyncType::ON_DEMAND`: the phone answering a request for older messages.
+const ON_DEMAND: i32 = 6;
+/// Fetching all history waits this long after connecting before it begins…
+const BACKFILL_START: Duration = Duration::from_secs(30);
+/// …asks for this many messages at a time…
+const BACKFILL_PAGE: i32 = 50;
+/// …and lets this much time pass between requests, to stay light.
+const BACKFILL_PACE: Duration = Duration::from_secs(4);
+/// How long the phone has to answer a request.
+const BACKFILL_TIMEOUT: Duration = Duration::from_secs(40);
+/// Unanswered requests after which a chat counts as complete.
+const BACKFILL_STRIKES: u32 = 2;
+/// Chats in a row without an answer after which the phone counts as away.
+const BACKFILL_SILENT: u32 = 3;
+/// How long to wait for a phone that is away before trying again.
+const BACKFILL_RETRY: Duration = Duration::from_secs(5 * 60);
 /// Pause between profile picture lookups, to stay clear of the rate limit.
 const AVATAR_PACE: Duration = Duration::from_millis(150);
 /// How many chats the phone is asked about when old ticks are refreshed, how
@@ -94,23 +111,35 @@ pub struct WaManager {
     dir: PathBuf,
     status: Mutex<WaStatus>,
     store: Mutex<ChatStore>,
+    /// Every message, and the store, on disk.
+    history: History,
     bot: tokio::sync::Mutex<Option<BotHandle>>,
     /// Bumped whenever a bot is started or torn down, so events from a bot we
     /// already abandoned are ignored.
     generation: AtomicU64,
     chats_dirty: AtomicBool,
     save_dirty: AtomicBool,
+    /// Wakes the refresh / save loop, which otherwise sleeps.
+    wake: tokio::sync::Notify,
     avatars_running: AtomicBool,
+    /// Messages each chat got from the phone on request, since last looked at.
+    on_demand: Mutex<HashMap<String, u32>>,
+    /// Rung when the phone answers a request for older messages.
+    on_demand_answered: tokio::sync::Notify,
+    /// The session whose history is being fetched, so a reconnect doesn't start a second run.
+    backfill_for: AtomicU64,
+    /// A chat opened while it had no messages here: fetched next.
+    backfill_next: Mutex<Option<String>>,
 }
 
 impl WaManager {
     pub fn new(app: AppHandle, dir: PathBuf) -> std::io::Result<Arc<Self>> {
         secure_dir(&dir)?;
         let linked = dir.join(LINKED_MARKER).exists();
+        let history = History::new(&dir, "whatsapp history", CACHE_FILE);
         let store = if linked {
-            fs::read(dir.join(CACHE_FILE))
-                .ok()
-                .and_then(|bytes| ChatStore::from_json(&bytes))
+            history
+                .load()
                 .unwrap_or_else(|| {
                     // The session already applied its app state, so a rebuilt
                     // cache has to ask for pins, mutes and archives again.
@@ -126,11 +155,17 @@ impl WaManager {
             dir,
             status: Mutex::new(WaStatus::idle(linked)),
             store: Mutex::new(store),
+            history,
             bot: tokio::sync::Mutex::new(None),
             generation: AtomicU64::new(0),
             chats_dirty: AtomicBool::new(false),
             save_dirty: AtomicBool::new(false),
+            wake: tokio::sync::Notify::new(),
             avatars_running: AtomicBool::new(false),
+            on_demand: Mutex::new(HashMap::new()),
+            on_demand_answered: tokio::sync::Notify::new(),
+            backfill_for: AtomicU64::new(u64::MAX),
+            backfill_next: Mutex::new(None),
         }))
     }
 
@@ -139,16 +174,23 @@ impl WaManager {
         let mgr = self.clone();
         tauri::async_runtime::spawn(async move {
             let mut last_save = Instant::now();
+            // Idle until something changes, so a quiet background costs no
+            // wake-ups; then tick until the change is shown and saved.
             loop {
-                tokio::time::sleep(Duration::from_millis(350)).await;
-                if mgr.chats_dirty.swap(false, Ordering::AcqRel) {
-                    let _ = mgr.app.emit("wa://chats", ());
-                }
-                if last_save.elapsed() >= SAVE_INTERVAL
-                    && mgr.save_dirty.swap(false, Ordering::AcqRel)
-                {
-                    mgr.save_now();
-                    last_save = Instant::now();
+                mgr.wake.notified().await;
+                loop {
+                    tokio::time::sleep(Duration::from_millis(350)).await;
+                    if mgr.chats_dirty.swap(false, Ordering::AcqRel) {
+                        let _ = mgr.app.emit("wa://chats", ());
+                        crate::tray::refresh(&mgr.app);
+                    }
+                    if !mgr.save_dirty.load(Ordering::Acquire) {
+                        break;
+                    }
+                    if last_save.elapsed() >= SAVE_INTERVAL && mgr.save_dirty.swap(false, Ordering::AcqRel) {
+                        mgr.save_now();
+                        last_save = Instant::now();
+                    }
                 }
             }
         });
@@ -161,6 +203,10 @@ impl WaManager {
                 }
             });
         }
+    }
+
+    pub fn unread_total(&self) -> u32 {
+        lock(&self.store).unread_total()
     }
 
     fn is_linked(&self) -> bool {
@@ -193,29 +239,36 @@ impl WaManager {
     fn mark_dirty(&self) {
         self.chats_dirty.store(true, Ordering::Release);
         self.save_dirty.store(true, Ordering::Release);
+        self.wake.notify_one();
     }
 
     pub fn save_now(&self) {
         if !self.is_linked() {
             return;
         }
-        let bytes = match lock(&self.store).to_json() {
-            Ok(bytes) => bytes,
-            Err(e) => return log::warn!("whatsapp: could not serialize chats: {e}"),
-        };
-        let path = self.dir.join(CACHE_FILE);
-        let tmp = path.with_extension("json.tmp");
-        let result = fs::write(&tmp, bytes).and_then(|_| {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+        self.history.save(&self.store);
+    }
+
+    /// Brings a message that only the history database has back into
+    /// memory, before something is done with it.
+    fn recall(&self, chat_id: &str, message_id: &str) {
+        let chat = {
+            let store = lock(&self.store);
+            if store.has_message(chat_id, message_id) {
+                return;
             }
-            fs::rename(&tmp, &path)
-        });
-        if let Err(e) = result {
-            log::warn!("whatsapp: could not save chats: {e}");
+            store.chat_key(chat_id)
+        };
+        if let Some(message) = self.history.message(&chat, message_id) {
+            lock(&self.store).restore(&chat, message);
         }
+    }
+
+    /// Messages of a chat from before `before_ms`, for scrolling back past
+    /// what memory keeps.
+    pub fn older_messages(&self, chat_id: &str, before_ms: i64, limit: usize) -> Vec<MessageDto> {
+        let older = self.history.older(chat_id, before_ms, limit);
+        lock(&self.store).dtos(chat_id, &older)
     }
 
     fn write_marker(&self) {
@@ -231,10 +284,9 @@ impl WaManager {
             format!("{SESSION_FILE}-shm"),
             format!("{SESSION_FILE}-journal"),
             LINKED_MARKER.to_string(),
-            CACHE_FILE.to_string(),
         ];
-        for name in names {
-            let path = self.dir.join(name);
+        self.history.close();
+        for path in names.into_iter().map(|name| self.dir.join(name)).chain(self.history.files()) {
             if path.exists()
                 && let Err(e) = fs::remove_file(&path)
             {
@@ -263,6 +315,7 @@ impl WaManager {
         *lock(&self.store) = store;
         self.save_dirty.store(false, Ordering::Release);
         self.chats_dirty.store(true, Ordering::Release);
+        self.wake.notify_one();
     }
 
     async fn client(&self) -> Option<Arc<Client>> {
@@ -284,7 +337,16 @@ impl WaManager {
         });
 
         let session = self.dir.join(SESSION_FILE);
-        let backend = SqliteStore::new(&session.to_string_lossy())
+        let key = crate::sqlcipher::key("whatsapp session");
+        {
+            let (session, key) = (session.clone(), key.clone());
+            tauri::async_runtime::spawn_blocking(move || crate::sqlcipher::encrypt_in_place(&session, &key))
+                .await
+                .map_err(|e| e.to_string())??;
+        }
+        let config = whatsapp_rust::store::SqliteStoreConfig::default()
+            .with_connection_init(move |conn| crate::sqlcipher::unlock(conn, &key));
+        let backend = SqliteStore::with_config(&session.to_string_lossy(), config)
             .await
             .map_err(|e| format!("Could not open the WhatsApp session store: {e}"))?;
 
@@ -443,6 +505,7 @@ impl WaManager {
         let Some(id) = reply_to else {
             return Ok(None);
         };
+        self.recall(chat_id, id);
         let (source, me) = {
             let store = lock(&self.store);
             (
@@ -463,7 +526,7 @@ impl WaManager {
             quoted_message: MessageField::some(wa::Message::text(source.text.clone())),
             ..Default::default()
         };
-        Ok(Some((context, ReplyRef { author_jid: Some(sender), text: source.text })))
+        Ok(Some((context, ReplyRef { author_jid: Some(sender), id: Some(id.to_string()), text: source.text })))
     }
 
     /// Files a message we just sent and returns it as the UI shows it.
@@ -496,22 +559,97 @@ impl WaManager {
         Ok(dto)
     }
 
-    pub async fn send_text(&self, chat_id: &str, text: &str, reply_to: Option<&str>) -> Result<MessageDto, String> {
+    pub async fn send_text(
+        &self,
+        chat_id: &str,
+        text: &str,
+        reply_to: Option<&str>,
+        link: Option<OutgoingLink>,
+        forwarded: u32,
+    ) -> Result<MessageDto, String> {
         let text = text.trim();
         if text.is_empty() {
             return Err("The message is empty.".into());
         }
         let client = self.connected_client().await?;
         let jid: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
-        let (outgoing, quoted) = match self.quote(chat_id, reply_to)? {
-            Some((context, reply)) => (wa::Message::text_with_context(text, context), Some(reply)),
-            None => (wa::Message::text(text), None),
+        let (context, quoted) = self.quote(chat_id, reply_to)?.unzip();
+        let context = forwarding(context, forwarded);
+        let (outgoing, card) = match link.filter(|l| text.contains(&l.url)) {
+            Some(link) => {
+                let (ext, card) = self.link_message(&client, text, link).await;
+                let mut ext = ext;
+                ext.context_info = context.map(MessageField::some).unwrap_or_default();
+                (wa::Message { extended_text_message: MessageField::some(ext), ..Default::default() }, Some(card))
+            }
+            None => match context {
+                Some(context) => (wa::Message::text_with_context(text, context), None),
+                None => (wa::Message::text(text), None),
+            },
         };
         let sent = client
             .send_message(jid, outgoing)
             .await
             .map_err(|e| format!("The message was not sent: {e}"))?;
-        self.store_sent(chat_id, sent.message_id, Content::text(text, quoted))
+        let mut content = Content::text(text, quoted);
+        content.link = card;
+        content.forwarded = forwarded;
+        self.store_sent(chat_id, sent.message_id, content)
+    }
+
+    /// A text with its link card, as WhatsApp's apps send it: the small
+    /// picture inside the message, the full one uploaded beside it. A
+    /// picture that fails to upload leaves the small one.
+    async fn link_message(
+        &self,
+        client: &Arc<Client>,
+        text: &str,
+        link: OutgoingLink,
+    ) -> (wa::message::ExtendedTextMessage, LinkPreview) {
+        let thumbnail = OutgoingLink::decoded(&link.thumbnail);
+        let mut ext = wa::message::ExtendedTextMessage {
+            text: Some(text.to_string()),
+            matched_text: Some(link.url.clone()),
+            title: link.title.clone(),
+            description: link.description.clone(),
+            jpeg_thumbnail: thumbnail.clone(),
+            ..Default::default()
+        };
+        let mut large = None;
+        if let Some(image) = OutgoingLink::decoded(&link.image) {
+            match client.upload(image, MediaType::LinkThumbnail, UploadOptions::default()).await {
+                Ok(upload) => {
+                    ext.thumbnail_direct_path = Some(upload.direct_path.clone());
+                    ext.thumbnail_sha256 = Some(upload.file_sha256.to_vec());
+                    ext.thumbnail_enc_sha256 = Some(upload.file_enc_sha256.to_vec());
+                    ext.media_key = Some(upload.media_key.to_vec());
+                    ext.media_key_timestamp = Some(upload.media_key_timestamp);
+                    ext.thumbnail_width = link.width;
+                    ext.thumbnail_height = link.height;
+                    large = Some(CdnRef {
+                        path: upload.direct_path.clone(),
+                        key: BASE64.encode(upload.media_key),
+                        sha256: BASE64.encode(upload.file_sha256),
+                        enc_sha256: BASE64.encode(upload.file_enc_sha256),
+                        size: 0,
+                        mime: None,
+                        width: link.width.unwrap_or_default(),
+                        height: link.height.unwrap_or_default(),
+                        kind: None,
+                        file_name: None,
+                    });
+                }
+                Err(e) => log::warn!("the link picture was not uploaded: {e}"),
+            }
+        }
+        let card = LinkPreview {
+            url: link.url,
+            title: link.title,
+            description: link.description,
+            thumbnail: thumbnail.map(|bytes| format!("data:image/jpeg;base64,{}", BASE64.encode(bytes))),
+            large,
+        };
+        (ext, card)
     }
 
     /// Uploads a file and sends it: a photo, video or audio when WhatsApp
@@ -534,7 +672,9 @@ impl WaManager {
         let dir = self.dir.join(MEDIA_DIR);
         secure_dir(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
         let staged = dir.join(format!(".outgoing-{}", now_ms()));
-        fs::write(&staged, &bytes).map_err(|e| format!("could not keep a copy of the file: {e}"))?;
+        crate::vault::get()
+            .write(&staged, &bytes)
+            .map_err(|e| format!("could not keep a copy of the file: {e}"))?;
         let uploaded = client.upload(bytes, media_type, UploadOptions::default()).await;
         let upload = match uploaded {
             Ok(upload) => upload,
@@ -546,7 +686,7 @@ impl WaManager {
 
         let caption = file.caption();
         let thumbnail = file.thumbnail.as_deref().and_then(|t| BASE64.decode(t).ok());
-        let context_info = context.map(MessageField::some).unwrap_or_default();
+        let context_info = forwarding(context, file.forwarded).map(MessageField::some).unwrap_or_default();
         let mut outgoing = wa::Message::default();
         match media_type {
             MediaType::Image => {
@@ -693,18 +833,21 @@ impl WaManager {
         let mut partial = path.clone().into_os_string();
         partial.push(format!(".{}.part", DOWNLOADS.fetch_add(1, Ordering::Relaxed)));
         let partial = PathBuf::from(partial);
-        let sink = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&partial)
+        // Encrypted as it streams in; nothing plain reaches the disk.
+        let sink = crate::vault::Writer::create(crate::vault::get(), &partial)
             .map_err(|e| format!("could not save {name}: {e}"))?;
-        if let Err(e) = client.download_from_params_to_writer(&params, sink).await {
+        let sink = match client.download_from_params_to_writer(&params, sink).await {
+            Ok(sink) => sink,
+            Err(e) => {
+                let _ = fs::remove_file(&partial);
+                let rejected = matches!(e.http_status(), Some(401 | 403 | 404 | 410));
+                let message = format!("Could not download the file: {e}");
+                return Err(if rejected { CdnError::Rejected(message) } else { CdnError::Failed(message) });
+            }
+        };
+        if let Err(e) = sink.finish() {
             let _ = fs::remove_file(&partial);
-            let rejected = matches!(e.http_status(), Some(401 | 403 | 404 | 410));
-            let message = format!("Could not download the file: {e}");
-            return Err(if rejected { CdnError::Rejected(message) } else { CdnError::Failed(message) });
+            return Err(format!("could not save {name}: {e}").into());
         }
         fs::rename(&partial, &path).map_err(|e| format!("could not save {name}: {e}"))?;
         Ok(name)
@@ -712,6 +855,7 @@ impl WaManager {
 
     /// Fetches a message's file and returns its path inside the media directory.
     pub async fn fetch_media(&self, chat_id: &str, message_id: &str) -> Result<String, String> {
+        self.recall(chat_id, message_id);
         let file = lock(&self.store)
             .wa_media(chat_id, message_id)
             .ok_or("This message has no attachment to fetch.")?;
@@ -741,9 +885,13 @@ impl WaManager {
     /// Downloads a message's file if needed and opens it with the system's app
     /// for its type.
     pub async fn open_media(&self, chat_id: &str, message_id: &str) -> Result<(), String> {
+        self.recall(chat_id, message_id);
         use tauri_plugin_opener::OpenerExt;
         let name = self.fetch_media(chat_id, message_id).await?;
-        let path = self.dir.join(MEDIA_DIR).join(name);
+        let file_name = Path::new(&name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let path = crate::vault::get()
+            .export(&self.dir.join(MEDIA_DIR).join(&name), &file_name)
+            .map_err(|e| format!("The file could not be opened: {e}"))?;
         self.app
             .opener()
             .open_path(path.to_string_lossy(), None::<&str>)
@@ -780,6 +928,7 @@ impl WaManager {
     /// Fetches the full-size picture of a message's link card and returns its
     /// file name inside the thumbnail directory.
     pub async fn link_thumbnail(&self, chat_id: &str, message_id: &str) -> Result<String, String> {
+        self.recall(chat_id, message_id);
         let file = lock(&self.store)
             .link_thumbnail(chat_id, message_id)
             .ok_or("This link has no larger picture.")?;
@@ -788,6 +937,7 @@ impl WaManager {
 
     /// Reacts to a message, or takes the reaction back when it is already there.
     pub async fn react(&self, chat_id: &str, message_id: &str, emoji: &str) -> Result<MessageDto, String> {
+        self.recall(chat_id, message_id);
         let client = self
             .client()
             .await
@@ -824,6 +974,7 @@ impl WaManager {
     /// Deletes a message on our devices, or for everyone when `for_everyone`
     /// and it is ours. Returns what is left of it, if anything is shown.
     pub async fn delete_message(&self, chat_id: &str, message_id: &str, for_everyone: bool) -> Result<Option<MessageDto>, String> {
+        self.recall(chat_id, message_id);
         let client = self.connected_client().await?;
         let jid: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
         let (source, ts) = {
@@ -862,6 +1013,11 @@ impl WaManager {
 
     pub fn starred(&self) -> Vec<StarredDto> {
         lock(&self.store).starred()
+    }
+
+    pub fn search(&self, query: &str, chat: Option<&str>) -> Vec<StarredDto> {
+        let saved = self.history.search(query, chat, crate::store::SEARCH_LIMIT);
+        lock(&self.store).search(query, chat, crate::store::SEARCH_LIMIT, saved)
     }
 
     pub fn contacts(&self) -> Vec<ContactDto> {
@@ -981,6 +1137,7 @@ impl WaManager {
 
     /// Stars a message or takes the star away, on the phone too.
     pub async fn set_starred(&self, chat_id: &str, message_id: &str, starred: bool) -> Result<MessageDto, String> {
+        self.recall(chat_id, message_id);
         let client = self.connected_client().await?;
         let jid: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
         let (sender, from_me) = lock(&self.store)
@@ -1136,6 +1293,7 @@ impl WaManager {
                 stale
             };
             mgr.save_dirty.store(true, Ordering::Release);
+            mgr.wake.notify_one();
             for (chat, id, from_me, ts_ms) in stale {
                 if mgr.generation.load(Ordering::SeqCst) != generation {
                     return;
@@ -1216,7 +1374,8 @@ impl WaManager {
                     return Ok(on_disk.map(str::to_string));
                 }
                 let file = dir.join(store::avatar_file(owner, &picture.id));
-                fs::write(&file, &response.body)
+                crate::vault::get()
+                    .write(&file, &response.body)
                     .map_err(|e| format!("could not save {}: {e}", file.display()))?;
                 if let Some(old) = stored.filter(|old| *old != picture.id) {
                     let _ = fs::remove_file(dir.join(store::avatar_file(owner, old)));
@@ -1328,6 +1487,7 @@ impl WaManager {
                 self.mark_dirty();
                 self.sync_chat_state(generation, client.clone());
                 self.refresh_ticks(generation, client.clone());
+                self.fetch_all_history(generation, client.clone());
                 self.sync_avatars(generation, client);
             }
             Event::Disconnected(_) if self.is_linked() => {
@@ -1349,6 +1509,13 @@ impl WaManager {
             Event::Messages(batch) => {
                 let mut dtos: Vec<MessageDto> = Vec::new();
                 let mut notices: Vec<Notice> = Vec::new();
+                // Reactions and deletions can be for messages only the history has.
+                for m in batch.iter() {
+                    let target = convert::revoke(&m.message).or_else(|| convert::reaction(&m.message).map(|(target, _)| target));
+                    if let Some(target) = target {
+                        self.recall(&m.info.source.chat.to_non_ad_string(), &target);
+                    }
+                }
                 {
                     let mut store = lock(&self.store);
                     for m in batch.iter() {
@@ -1385,7 +1552,7 @@ impl WaManager {
                     let _ = self.app.emit("wa://message", dto);
                 }
                 for notice in notices {
-                    let _ = self.app.emit("wa://notice", notice);
+                    crate::notify::deliver(&self.app, "whatsapp", "wa://notice", notice);
                 }
                 self.mark_dirty();
             }
@@ -1414,6 +1581,7 @@ impl WaManager {
                     };
                     // Who has read so far is worth keeping even when no tick changed.
                     self.save_dirty.store(true, Ordering::Release);
+                    self.wake.notify_one();
                     if !changed.is_empty() {
                         for dto in changed {
                             let _ = self.app.emit("wa://message", dto);
@@ -1459,6 +1627,14 @@ impl WaManager {
                     }
                 });
                 lock(&self.store).set_muted(&update.jid.to_non_ad_string(), until);
+                self.mark_dirty();
+            }
+            Event::MarkChatAsReadUpdate(update) => {
+                lock(&self.store).set_read_elsewhere(
+                    &update.jid.to_non_ad_string(),
+                    update.action.read.unwrap_or(true),
+                    update.action_timestamp.unwrap_or(update.timestamp).timestamp_millis(),
+                );
                 self.mark_dirty();
             }
             Event::ArchiveUpdate(update) => {
@@ -1511,7 +1687,8 @@ impl WaManager {
                 self.sync_avatars(generation, client);
             }
             Event::HistorySync(lazy) => {
-                if let Some(progress) = lazy.progress() {
+                // Answers to our own requests for older messages aren't the first sync.
+                if let Some(progress) = lazy.progress().filter(|_| lazy.sync_type() != ON_DEMAND) {
                     self.set_status(|s| {
                         s.sync_progress = (progress < 100).then_some(progress);
                     });
@@ -1534,6 +1711,8 @@ impl WaManager {
     }
 
     fn ingest_history(&self, lazy: &LazyHistorySync) -> Result<(), String> {
+        let on_demand = lazy.sync_type() == ON_DEMAND;
+        let mut answered: HashMap<String, u32> = HashMap::new();
         let mut stream = lazy.stream();
         let mut conversation = wa::Conversation::default();
         while stream
@@ -1548,11 +1727,15 @@ impl WaManager {
                 pn_jid: c.pn_jid.as_deref(),
                 lid_jid: c.lid_jid.as_deref(),
                 unread: c.unread_count,
+                marked_unread: c.marked_as_unread,
                 pinned_at_s: c.pinned,
                 archived: c.archived,
                 mute_end: c.mute_end_time,
                 conversation_ts_s: c.conversation_timestamp.or(c.last_msg_timestamp),
             });
+            if on_demand {
+                *answered.entry(store.chat_key(&c.id)).or_default() += c.messages.len() as u32;
+            }
             for item in &c.messages {
                 if let Some(incoming) = convert::history(&c.id, item) {
                     let id = incoming.message.id.clone();
@@ -1578,6 +1761,168 @@ impl WaManager {
                 store.set_push_name(id, name);
             }
         }
+        drop(store);
+        if on_demand {
+            let mut got = lock(&self.on_demand);
+            for (chat, count) in answered {
+                *got.entry(chat).or_default() += count;
+            }
+            drop(got);
+            self.on_demand_answered.notify_one();
+        }
         Ok(())
     }
+
+    /// Asks the phone for every chat's older messages, a page at a time and
+    /// slowly, newest chats first, until it has nothing older. Chats found
+    /// complete stay so across restarts. Shows where it is in the status.
+    fn fetch_all_history(self: &Arc<Self>, generation: u64, client: Arc<Client>) {
+        if self.backfill_for.swap(generation, Ordering::SeqCst) == generation {
+            return;
+        }
+        let mgr = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let current = || mgr.generation.load(Ordering::SeqCst) == generation;
+            // Let the first sync and the messages missed while offline land.
+            tokio::time::sleep(BACKFILL_START).await;
+            let mut fetched = 0u32;
+            let mut silent = 0u32;
+            // Chats the phone did not answer for, this run.
+            let mut strikes: HashMap<String, u32> = HashMap::new();
+            loop {
+                if !current() {
+                    return;
+                }
+                if lock(&mgr.status).sync_progress.is_some() {
+                    tokio::time::sleep(BACKFILL_PACE).await;
+                    continue;
+                }
+                // What came in is written first, so the oldest message is known.
+                mgr.save_now();
+                let (queue, (done, total)) = {
+                    let store = lock(&mgr.store);
+                    (store.history_queue(), store.history_counts())
+                };
+                let first = lock(&mgr.backfill_next).take();
+                let mut queue: Vec<(String, String)> =
+                    queue.into_iter().filter(|(chat, _)| strikes.get(chat).is_none_or(|n| *n < BACKFILL_STRIKES)).collect();
+                if let Some(at) = first.and_then(|first| queue.iter().position(|(chat, _)| *chat == first)) {
+                    let opened = queue.remove(at);
+                    queue.insert(0, opened);
+                }
+                let Some((chat, name)) = queue.into_iter().next() else {
+                    mgr.set_backfill(BackfillState::Done, None, fetched);
+                    return;
+                };
+                let in_memory = lock(&mgr.store).oldest_message(&chat).cloned();
+                let oldest = match (in_memory, mgr.history.oldest(&chat)) {
+                    (Some(a), Some(b)) => Some(if b.ts_ms < a.ts_ms { b } else { a }),
+                    (a, b) => a.or(b),
+                };
+                let Ok(jid) = chat.parse::<Jid>() else {
+                    lock(&mgr.store).mark_history_complete(&chat);
+                    continue;
+                };
+                // A chat with no message here yet is asked for what came
+                // before the last time it was active, with nothing to count from.
+                let anchor = match &oldest {
+                    Some(m) => (m.id.clone(), m.from_me, m.ts_ms),
+                    None => {
+                        let last = lock(&mgr.store).chat_last_ts(&chat);
+                        (String::new(), false, if last > 0 { last + 1 } else { now_ms() })
+                    }
+                };
+                let oldest_ts = anchor.2;
+                mgr.set_status(|s| {
+                    s.backfill = Some(Backfill { state: BackfillState::Fetching, chat: Some(name.clone()), done, total, messages: fetched });
+                });
+                lock(&mgr.on_demand).remove(&chat);
+                let asked = client
+                    .fetch_message_history(&jid, &anchor.0, anchor.1, anchor.2, BACKFILL_PAGE)
+                    .await;
+                if let Err(e) = asked {
+                    log::warn!("whatsapp: could not ask for older messages of {chat}: {e}");
+                    mgr.set_backfill(BackfillState::WaitingForPhone, Some(name), fetched);
+                    tokio::time::sleep(BACKFILL_RETRY).await;
+                    continue;
+                }
+                let got = mgr.wait_for_answer(&chat).await;
+                match got {
+                    // The phone answered with nothing older: this chat is all here.
+                    Some(0) => {
+                        lock(&mgr.store).mark_history_complete(&chat);
+                        silent = 0;
+                    }
+                    Some(count) => {
+                        fetched += count;
+                        silent = 0;
+                        mgr.save_now();
+                        let _ = mgr.app.emit("wa://history", &chat);
+                        // Anything already known means the phone has no more before it.
+                        let older = mgr.history.oldest(&chat).is_some_and(|now| now.ts_ms < oldest_ts)
+                            || lock(&mgr.store).oldest_message(&chat).is_some_and(|now| now.ts_ms < oldest_ts);
+                        if !older {
+                            lock(&mgr.store).mark_history_complete(&chat);
+                        }
+                        mgr.mark_dirty();
+                    }
+                    None => {
+                        let strike = strikes.entry(chat.clone()).or_default();
+                        *strike += 1;
+                        // A phone that answers nothing for a chat it was asked
+                        // about twice has nothing older for it.
+                        if *strike >= BACKFILL_STRIKES {
+                            lock(&mgr.store).mark_history_complete(&chat);
+                        }
+                        silent += 1;
+                        if silent >= BACKFILL_SILENT {
+                            // Several chats in a row without an answer: the phone is away.
+                            mgr.set_backfill(BackfillState::WaitingForPhone, None, fetched);
+                            tokio::time::sleep(BACKFILL_RETRY).await;
+                            silent = 0;
+                            strikes.clear();
+                        }
+                    }
+                }
+                tokio::time::sleep(BACKFILL_PACE).await;
+            }
+        });
+    }
+
+    /// Fetches this chat's history before the others'.
+    pub fn fetch_history_first(&self, chat_id: &str) {
+        let chat = lock(&self.store).chat_key(chat_id);
+        *lock(&self.backfill_next) = Some(chat);
+    }
+
+    /// Messages the phone sent for `chat` after being asked, or `None` if it
+    /// didn't answer in time.
+    async fn wait_for_answer(&self, chat: &str) -> Option<u32> {
+        let deadline = Instant::now() + BACKFILL_TIMEOUT;
+        loop {
+            if let Some(count) = lock(&self.on_demand).remove(chat) {
+                return Some(count);
+            }
+            let left = deadline.checked_duration_since(Instant::now())?;
+            let _ = tokio::time::timeout(left, self.on_demand_answered.notified()).await;
+        }
+    }
+
+    fn set_backfill(&self, state: BackfillState, chat: Option<String>, messages: u32) {
+        let (done, total) = lock(&self.store).history_counts();
+        self.set_status(|s| s.backfill = Some(Backfill { state, chat, done, total, messages }));
+    }
+}
+
+/// Marks a message as forwarded, as the phones do: `score` is how many
+/// times it has been sent on, 0 for one written here.
+fn forwarding(context: Option<wa::ContextInfo>, score: u32) -> Option<wa::ContextInfo> {
+    if score == 0 {
+        return context;
+    }
+    Some(wa::ContextInfo {
+        is_forwarded: Some(true),
+        forwarding_score: Some(score),
+        ..context.unwrap_or_default()
+    })
 }

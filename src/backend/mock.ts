@@ -1,5 +1,6 @@
+import { matches } from "../lib/search";
 import { DEMO_CHATS, DEMO_MESSAGES } from "../data/demo-chats";
-import type { BackendEvent, Chat, ChatBackend, Contact, CustomList, Message, StarredMessage } from "./types";
+import type { BackendEvent, Chat, ChatBackend, Contact, CustomList, Message, OutgoingLink, StarredMessage } from "./types";
 
 function cloneChats(): Chat[] {
   return DEMO_CHATS.map((c) => ({ ...c, account: "whatsapp" }));
@@ -55,7 +56,7 @@ export class MockBackend implements ChatBackend {
     }
   }
 
-  async sendText(chatId: string, text: string, replyTo?: string): Promise<Message> {
+  async sendText(chatId: string, text: string, replyTo?: string, link?: OutgoingLink, forwarded?: number): Promise<Message> {
     const trimmed = text.trim();
     if (!trimmed) {
       throw new Error("Empty message");
@@ -70,8 +71,17 @@ export class MockBackend implements ChatBackend {
       fromMe: true,
       text: trimmed,
       status: "sent",
+      forwarded,
+      linkPreview: link
+        ? {
+            url: link.url,
+            title: link.title,
+            description: link.description,
+            thumbnail: link.thumbnail ? `data:image/jpeg;base64,${link.thumbnail}` : undefined,
+          }
+        : undefined,
       replyTo: quoted
-        ? { author: quoted.fromMe ? "You" : (quoted.author ?? this.chats.find((c) => c.id === chatId)?.name ?? ""), text: quoted.text ?? quoted.mediaLabel ?? "Message" }
+        ? { author: quoted.fromMe ? "You" : (quoted.author ?? this.chats.find((c) => c.id === chatId)?.name ?? ""), fromMe: quoted.fromMe, id: quoted.id, text: quoted.text ?? quoted.mediaLabel ?? "Message" }
         : undefined,
     };
 
@@ -139,6 +149,18 @@ export class MockBackend implements ChatBackend {
     if (!message) throw new Error("That message is gone.");
     message.starred = starred;
     return { ...message };
+  }
+
+  async searchMessages(query: string, only?: string): Promise<StarredMessage[]> {
+    return [...this.messages.entries()]
+      .filter(([chatId]) => !only || chatId === only)
+      .flatMap(([chatId, thread]) => {
+        const chatName = this.chats.find((c) => c.id === chatId)?.name ?? "Chat";
+        return thread
+          .filter((m) => !m.deleted && matches(m.text ?? m.mediaLabel ?? "", query))
+          .map((m) => ({ account: this.account, chatName, message: { ...m } }));
+      })
+      .sort((a, b) => b.message.sentAt.localeCompare(a.message.sentAt));
   }
 
   async listStarred(): Promise<StarredMessage[]> {

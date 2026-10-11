@@ -319,6 +319,12 @@ textarea {
   }
 }
 
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
 @keyframes toast {
   0% {
     opacity: 0;
@@ -335,17 +341,29 @@ textarea {
   }
 }
 
+/* A message jumped to: its bubble alone gets a thin accent ring and a faint
+   tint that come in quickly and fade out. */
 @keyframes message-flash {
-  0%,
-  60% {
-    background-color: color-mix(in oklab, var(--accent) 22%, transparent);
+  0% {
+    opacity: 0;
+  }
+  12%,
+  55% {
+    opacity: 1;
   }
   100% {
-    background-color: transparent;
+    opacity: 0;
   }
 }
 
-.message-flash {
+.message-flash [data-bubble]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: color-mix(in oklab, var(--accent) 10%, transparent);
+  box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--accent) 65%, transparent);
   animation: message-flash 1600ms ease-out both;
 }
 
@@ -373,6 +391,10 @@ textarea {
   animation: fade-rise 160ms ease both;
 }
 
+.animate-fade-in {
+  animation: fade-in 120ms ease-out both;
+}
+
 .reaction-pop {
   animation: reaction-pop 140ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
 }
@@ -381,11 +403,78 @@ textarea {
   animation: toast 1400ms ease both;
 }
 
+/* A chat pointed out after its notification was clicked: an accent border
+ * that pulses to catch the eye, holds, and fades when App.tsx adds
+ * .chat-highlight-out. Drawn over the row, so it does not move it. */
+.chat-highlight::after {
+  content: "";
+  position: absolute;
+  inset: 3px 6px;
+  border: 2px solid var(--accent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 40%, transparent);
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 600ms ease;
+  animation: chat-highlight-pulse 1100ms ease-in-out 3;
+}
+
+.chat-highlight-out::after {
+  opacity: 0;
+}
+
+@keyframes chat-highlight-pulse {
+  50% {
+    box-shadow: 0 0 22px color-mix(in srgb, var(--accent) 75%, transparent);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .chat-highlight::after {
+    animation: none;
+    transition: none;
+  }
   .animate-fade-rise,
+  .animate-fade-in,
   .reaction-pop,
-  .message-flash,
+  .message-flash [data-bubble]::after,
   .animate-toast {
     animation-duration: 1ms;
   }
+}
+
+/* The composer's text box: an editable element that draws formatting and
+   Apple's emoji as they are typed (see MessageInput). */
+.composer-input:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
+.composer-input[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+/* The * and _ that make the formatting stay, faded, so they can be edited. */
+.composer-marker {
+  color: var(--text-secondary);
+  font-weight: normal;
+  font-style: normal;
+}
+
+.composer-emoji {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  vertical-align: -0.25em;
+}
+
+/* Words found by a search inside a chat, marked in the bubbles. */
+.search-mark {
+  background: color-mix(in oklab, #ffcc00 50%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px color-mix(in oklab, #ffcc00 50%, transparent);
 }

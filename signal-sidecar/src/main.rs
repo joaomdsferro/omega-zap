@@ -18,11 +18,12 @@ use presage::Manager;
 use presage::libsignal_service::attachment_cipher::decrypt_in_place;
 use presage::libsignal_service::configuration::SignalServers;
 use presage::libsignal_service::content::{Content, ContentBody, DataMessage, GroupContextV2};
-use presage::libsignal_service::proto::AttachmentPointer;
+use presage::libsignal_service::proto::{AttachmentPointer, BodyRange, Preview, body_range};
 use presage::libsignal_service::proto::attachment_pointer::AttachmentIdentifier;
 use presage::libsignal_service::proto::data_message::{Delete, Quote as QuoteProto, Reaction};
 use presage::libsignal_service::push_service::PushService;
 use presage::libsignal_service::sender::AttachmentSpec;
+use presage::libsignal_service::utils::parse_service_id_with_fallback;
 use presage::libsignal_service::prelude::{ProfileKey, Uuid};
 use presage::libsignal_service::proto::sync_message::{Content as SyncContent, Sent};
 use presage::libsignal_service::proto::{ReceiptMessage, SyncMessage, receipt_message, sync_message};
@@ -73,7 +74,18 @@ pub(crate) static READ_RECEIPTS: AtomicBool = AtomicBool::new(false);
 #[serde(rename_all_fields = "camelCase")]
 enum Command {
     Link,
-    Send { id: u64, chat: String, text: String, ts: u64, quote: Option<SendQuote> },
+    Send {
+        id: u64,
+        chat: String,
+        text: String,
+        ts: u64,
+        quote: Option<SendQuote>,
+        #[serde(default)]
+        preview: Option<SendPreview>,
+        /// Formatting over `text`, which comes without markers.
+        #[serde(default)]
+        ranges: Vec<SendRange>,
+    },
     /// Uploads the file at `path` and sends it. Answered with `uploaded`.
     SendFile {
         id: u64,
@@ -133,6 +145,48 @@ struct Media {
     height: u32,
 }
 
+/// The card for a link in a message we send. Its picture, a JPEG, waits at `path`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SendPreview {
+    url: String,
+    title: Option<String>,
+    description: Option<String>,
+    path: Option<PathBuf>,
+    width: Option<u32>,
+    height: Option<u32>,
+}
+
+/// A link card as Signal's apps send it. A picture that fails to upload
+/// leaves the card without one.
+async fn link_preview(manager: &mut Signal, preview: SendPreview, ts: u64) -> Preview {
+    let mut image = None;
+    if let Some(bytes) = match &preview.path {
+        Some(path) => tokio::fs::read(path).await.ok(),
+        None => None,
+    } {
+        let spec = AttachmentSpec {
+            content_type: "image/jpeg".into(),
+            length: bytes.len(),
+            width: preview.width,
+            height: preview.height,
+            ..Default::default()
+        };
+        match tokio::time::timeout(SEND_TIMEOUT, manager.upload_attachments(vec![(spec, bytes)])).await {
+            Ok(Ok(mut uploaded)) => image = uploaded.pop().and_then(Result::ok),
+            Ok(Err(e)) => eprintln!("the link picture was not uploaded: {e}"),
+            Err(_) => eprintln!("the link picture took too long to upload"),
+        }
+    }
+    Preview {
+        url: Some(preview.url),
+        title: preview.title,
+        description: preview.description,
+        image,
+        date: Some(ts),
+    }
+}
+
 /// The message a reply quotes.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -153,6 +207,8 @@ struct ReadRef {
 #[serde(rename_all = "camelCase")]
 struct Quote {
     author: Option<String>,
+    /// When the quoted message was sent, which names it with its author.
+    ts: Option<u64>,
     text: String,
 }
 
@@ -231,6 +287,143 @@ fn chat_id(thread: &Thread) -> String {
         Thread::Contact(id) => id.raw_uuid().to_string(),
         Thread::Group(key) => format!("{GROUP_PREFIX}{}", hex::encode(key)),
     }
+}
+
+/// The chat a message belongs in. A message we sent from another device
+/// can name its recipient only in the delivery list, and presage then files
+/// it under the sender, us, as if it were a note to self.
+fn thread_of(content: &Content) -> Option<Thread> {
+    let thread = Thread::try_from(content).ok()?;
+    let ContentBody::SynchronizeMessage(SyncMessage { content: Some(SyncContent::Sent(sent)), .. }) = &content.body
+    else {
+        return Some(thread);
+    };
+    if matches!(thread, Thread::Group(_)) || sent.parse_destination_service_id().is_some() {
+        return Some(thread);
+    }
+    let [only] = sent.unidentified_status.as_slice() else { return None };
+    let id = parse_service_id_with_fallback(
+        only.destination_service_id_binary.as_deref(),
+        only.destination_service_id.as_deref(),
+    )?;
+    Some(Thread::Contact(id))
+}
+
+/// A look over part of a message's text, as Signal sends it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Look {
+    Bold,
+    Italic,
+    Strike,
+    Mono,
+}
+
+impl Look {
+    /// From the number the protocol gives each style; spoilers have no marker.
+    pub(crate) fn from_style(style: i32) -> Option<Look> {
+        match style {
+            1 => Some(Look::Bold),
+            2 => Some(Look::Italic),
+            4 => Some(Look::Strike),
+            5 => Some(Look::Mono),
+            _ => None,
+        }
+    }
+}
+
+/// The looks of a live message's text: (start, length, look), in UTF-16 units.
+fn looks(ranges: &[BodyRange]) -> Vec<(u32, u32, Look)> {
+    ranges
+        .iter()
+        .filter_map(|range| match range.associated_value {
+            Some(body_range::AssociatedValue::Style(style)) => {
+                Some((range.start?, range.length?, Look::from_style(style)?))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Signal's looks written into the text with WhatsApp's markers, which is
+/// how the app keeps and shows formatting.
+pub(crate) fn with_markers(text: &str, looks: &[(u32, u32, Look)]) -> String {
+    if looks.is_empty() {
+        return text.to_string();
+    }
+    // UTF-16 offsets to char positions.
+    let mut unit_to_char = Vec::with_capacity(text.len() + 1);
+    let chars: Vec<char> = text.chars().collect();
+    for (index, c) in chars.iter().enumerate() {
+        for _ in 0..c.len_utf16() {
+            unit_to_char.push(index);
+        }
+    }
+    unit_to_char.push(chars.len());
+    let at = |unit: u32| unit_to_char.get(unit as usize).copied().unwrap_or(chars.len());
+    // (opens at, closes at, marker), trimmed: a marker beside a space doesn't count.
+    let mut spans: Vec<(usize, usize, &str)> = looks
+        .iter()
+        .filter_map(|&(start, length, look)| {
+            let (mut from, mut to) = (at(start), at(start.saturating_add(length)));
+            while from < to && chars[from].is_whitespace() {
+                from += 1;
+            }
+            while to > from && chars[to - 1].is_whitespace() {
+                to -= 1;
+            }
+            let marker = match look {
+                Look::Bold => "*",
+                Look::Italic => "_",
+                Look::Strike => "~",
+                Look::Mono if chars[from..to].contains(&'\n') => "```",
+                Look::Mono => "`",
+            };
+            (from < to).then_some((from, to, marker))
+        })
+        .collect();
+    // Outer ones first, so they open before and close after the ones inside.
+    spans.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    let mut out = String::with_capacity(text.len() + spans.len() * 2);
+    for (index, c) in chars.iter().enumerate().chain(std::iter::once((chars.len(), &'\0'))) {
+        for span in spans.iter().rev().filter(|s| s.1 == index) {
+            out.push_str(span.2);
+        }
+        for span in spans.iter().filter(|s| s.0 == index) {
+            out.push_str(span.2);
+        }
+        if index < chars.len() {
+            out.push(*c);
+        }
+    }
+    out
+}
+
+/// What the app sends: a look over part of the text, with markers taken out.
+#[derive(Deserialize)]
+struct SendRange {
+    start: u32,
+    length: u32,
+    style: String,
+}
+
+fn body_ranges(ranges: Vec<SendRange>) -> Vec<BodyRange> {
+    ranges
+        .into_iter()
+        .filter_map(|range| {
+            let style = match range.style.as_str() {
+                "bold" => body_range::Style::Bold,
+                "italic" => body_range::Style::Italic,
+                "strikethrough" => body_range::Style::Strikethrough,
+                "monospace" => body_range::Style::Monospace,
+                _ => return None,
+            };
+            Some(BodyRange {
+                start: Some(range.start),
+                length: Some(range.length),
+                associated_value: Some(body_range::AssociatedValue::Style(style as i32)),
+            })
+        })
+        .collect()
 }
 
 fn non_empty(text: &Option<String>) -> Option<String> {
@@ -496,6 +689,7 @@ impl Receiver {
             });
         }
         let Some((kind, text, media_label)) = describe(message) else { return };
+        let text = text.map(|text| with_markers(&text, &looks(&message.body_ranges)));
         if let Thread::Group(key) = thread {
             self.announce_group(*key).await;
         }
@@ -505,6 +699,7 @@ impl Receiver {
         }
         let quote = message.quote.as_ref().map(|q| Quote {
             author: aci(&q.author_aci, &q.author_aci_binary),
+            ts: q.id,
             text: non_empty(&q.text).unwrap_or_else(|| "Message".into()),
         });
         emit(Event::Message {
@@ -554,7 +749,7 @@ impl Receiver {
         if let ContentBody::SynchronizeMessage(sync) = &content.body {
             self.synced(sync);
         }
-        let Ok(thread) = Thread::try_from(content) else { return };
+        let Some(thread) = thread_of(content) else { return };
         let ts = content.timestamp();
         match &content.body {
             // Only stored messages we sent from here come as our own data messages.
@@ -847,14 +1042,19 @@ async fn session(
         tokio::select! {
             ended = &mut receiving => return ended.unwrap_or(Ok(())),
             command = commands.recv() => match command {
-                Some(Command::Send { id, chat, text, ts, quote }) => {
+                Some(Command::Send { id, chat, text, ts, quote, preview, ranges }) => {
                     let quote = quote.map(|q| QuoteProto {
                         id: Some(q.ts),
                         author_aci: Some(q.author),
                         text: Some(q.text),
                         ..Default::default()
                     });
-                    let message = DataMessage { body: Some(text), quote, ..Default::default() };
+                    let preview = match preview {
+                        Some(preview) => vec![link_preview(&mut sender, preview, ts).await],
+                        None => Vec::new(),
+                    };
+                    let body_ranges = body_ranges(ranges);
+                    let message = DataMessage { body: Some(text), quote, preview, body_ranges, ..Default::default() };
                     let error = send(&mut sender, &chat, message, ts).await.err();
                     emit(Event::Done { id, error });
                 }
@@ -932,7 +1132,9 @@ async fn session(
 }
 
 async fn run(path: String) {
-    let store = match SqliteStore::open(&path, OnNewIdentity::Trust).await {
+    // The app keeps the store encrypted (SQLCipher) under a key it passes here.
+    let key = std::env::var("OMEGA_ZAP_DB_KEY").ok();
+    let store = match SqliteStore::open_with_passphrase(&path, key.as_deref(), OnNewIdentity::Trust).await {
         Ok(store) => store,
         Err(e) => return state("error", Some(format!("Could not open the Signal store: {e}"))),
     };
@@ -1031,5 +1233,20 @@ mod tests {
         assert_eq!(aci(&None, &Some(uuid.as_bytes().to_vec())), Some(uuid.to_string()));
         assert_eq!(aci(&Some("x".into()), &None).as_deref(), Some("x"));
         assert_eq!(aci(&None, &Some(vec![1, 2])), None);
+    }
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::*;
+
+    #[test]
+    fn writes_looks_as_markers() {
+        assert_eq!(with_markers("hi bold both x", &[(3, 9, Look::Bold), (8, 4, Look::Italic), (13, 1, Look::Strike)]), "hi *bold _both_* ~x~");
+        // A look that starts or ends on a space keeps its marker beside the word.
+        assert_eq!(with_markers("a big one", &[(1, 5, Look::Bold)]), "a *big* one");
+        assert_eq!(with_markers("x = 1", &[(0, 5, Look::Mono)]), "`x = 1`");
+        // Offsets count UTF-16 units: the emoji takes two.
+        assert_eq!(with_markers("😅 ok", &[(3, 2, Look::Italic)]), "😅 _ok_");
     }
 }

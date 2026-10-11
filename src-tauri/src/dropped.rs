@@ -46,3 +46,4 @@ pub async fn read_dropped_file(dropped: State<'_, Dropped>, path: String) -> Res
     .map_err(|e| e.to_string())??;
     Ok(tauri::ipc::Response::new(bytes))
 }
+

@@ -4,6 +4,7 @@ import type { AccountId } from "../accounts/accounts";
 import { COMMAND_PREFIX } from "../accounts/useAccount";
 import { hueFor, initialsFor } from "../lib/avatar";
 import { fileUrl } from "../lib/files";
+import { signalBody } from "../lib/markup";
 import { MAX_SEND_BYTES, base64Json, fileDetails } from "../lib/outgoing";
 import type {
   Attachment,
@@ -15,6 +16,7 @@ import type {
   DeliveryStatus,
   Message,
   MessageKind,
+  OutgoingLink,
   Notice,
   ReactionCount,
   StarredMessage,
@@ -63,12 +65,13 @@ interface RawMessage {
   imageLabel: string | null;
   mediaLabel: string | null;
   voiceSeconds: number | null;
-  replyTo: { author: string; text: string } | null;
+  replyTo: { author: string; fromMe: boolean; id: string | null; text: string } | null;
   status: DeliveryStatus | null;
   hasMedia: boolean;
   attachments: { kind: Attachment["kind"]; mime: string; fileName: string | null; size: number; width: number | null; height: number | null }[];
   mediaWidth: number | null;
   mediaHeight: number | null;
+  forwarded: number;
   linkPreview: { url: string; title: string | null; description: string | null; thumbnail: string | null; hasLarge: boolean } | null;
   reactions: ReactionCount[];
   starred: boolean;
@@ -108,7 +111,7 @@ function toMessage(raw: RawMessage): Message {
     imageLabel: raw.imageLabel ?? undefined,
     mediaLabel: raw.mediaLabel ?? undefined,
     voiceSeconds: raw.voiceSeconds ?? undefined,
-    replyTo: raw.replyTo ?? undefined,
+    replyTo: raw.replyTo ? { author: raw.replyTo.author, fromMe: raw.replyTo.fromMe, id: raw.replyTo.id ?? undefined, text: raw.replyTo.text } : undefined,
     status: raw.status ?? undefined,
     hasMedia: raw.hasMedia,
     attachments: raw.attachments.length
@@ -132,6 +135,7 @@ function toMessage(raw: RawMessage): Message {
           hasLarge: raw.linkPreview.hasLarge,
         }
       : undefined,
+    forwarded: raw.forwarded || undefined,
     reactions: raw.reactions,
     starred: raw.starred,
     deleted: raw.deleted,
@@ -175,14 +179,17 @@ export class TauriBackend implements ChatBackend {
     return (await invoke<RawMessage[]>(`${this.prefix}_get_messages`, { chatId })).map(toMessage);
   }
 
-  async sendText(chatId: string, text: string, replyTo?: string): Promise<Message> {
-    return toMessage(await invoke<RawMessage>(`${this.prefix}_send_text`, { chatId, text, replyTo: replyTo ?? null }));
+  async sendText(chatId: string, text: string, replyTo?: string, link?: OutgoingLink, forwarded?: number): Promise<Message> {
+    const args: Record<string, unknown> = { chatId, text, replyTo: replyTo ?? null, link: link ?? null, forwarded: forwarded ?? null };
+    // Signal formats with ranges over the text rather than markers in it.
+    if (this.account === "signal") args.styled = signalBody(text.trim());
+    return toMessage(await invoke<RawMessage>(`${this.prefix}_send_text`, args));
   }
 
-  async sendFile(chatId: string, file: File, caption?: string, replyTo?: string): Promise<Message> {
+  async sendFile(chatId: string, file: File, caption?: string, replyTo?: string, forwarded?: number): Promise<Message> {
     if (file.size > MAX_SEND_BYTES) throw new Error(`${file.name} is larger than ${MAX_SEND_BYTES / 1024 / 1024} MB.`);
     const details = await fileDetails(file);
-    const description = { chatId, name: file.name, mime: file.type, caption, replyTo, ...details };
+    const description = { chatId, name: file.name, mime: file.type, caption, replyTo, forwarded: forwarded ?? 0, ...details };
     const bytes = new Uint8Array(await file.arrayBuffer());
     const raw = await invoke<RawMessage>(`${this.prefix}_send_file`, bytes, {
       headers: { "x-file": base64Json(description) },
@@ -224,6 +231,21 @@ export class TauriBackend implements ChatBackend {
     return raw.map((s) => ({ account: this.account, chatName: s.chatName, message: toMessage(s.message) }));
   }
 
+  async fetchHistoryFirst(chatId: string): Promise<void> {
+    // Only WhatsApp can ask the phone for older messages.
+    if (this.account === "whatsapp") await invoke("wa_fetch_history_first", { chatId });
+  }
+
+  async olderMessages(chatId: string, beforeMs: number): Promise<Message[]> {
+    const raw = await invoke<RawMessage[]>(`${this.prefix}_older_messages`, { chatId, beforeMs: Math.floor(beforeMs) });
+    return raw.map(toMessage);
+  }
+
+  async searchMessages(query: string, chatId?: string): Promise<StarredMessage[]> {
+    const raw = await invoke<{ chatName: string; message: RawMessage }[]>(`${this.prefix}_search`, { query, chatId: chatId ?? null });
+    return raw.map((s) => ({ account: this.account, chatName: s.chatName, message: toMessage(s.message) }));
+  }
+
   async listContacts(): Promise<Contact[]> {
     const raw = await invoke<RawContact[]>(`${this.prefix}_contacts`);
     return raw.map((c) => ({
@@ -241,6 +263,7 @@ export class TauriBackend implements ChatBackend {
   subscribe(listener: (event: BackendEvent) => void): () => void {
     const pending: Promise<UnlistenFn>[] = [
       listen(`${this.prefix}://chats`, () => listener({ type: "chats-changed" })),
+      listen<string>(`${this.prefix}://history`, (e) => listener({ type: "history", chatId: e.payload })),
       listen<RawMessage>(`${this.prefix}://message`, (e) =>
         listener({ type: "message", message: toMessage(e.payload) }),
       ),

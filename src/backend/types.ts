@@ -6,7 +6,24 @@ export type DeliveryStatus = "sent" | "delivered" | "read";
 
 export interface ReplyQuote {
   author: string;
+  /** The quoted message is ours: `author` is then "You". */
+  fromMe?: boolean;
+  /** The quoted message, when the network named it. */
+  id?: string;
   text: string;
+}
+
+/** The card sent with a text for its link. Pictures are base64 JPEGs. */
+export interface OutgoingLink {
+  url: string;
+  title?: string;
+  description?: string;
+  /** Small, carried in the message. */
+  thumbnail?: string;
+  /** Full size, uploaded beside it. */
+  image?: string;
+  width?: number;
+  height?: number;
 }
 
 /** The card shown for the link in a message. */
@@ -61,6 +78,8 @@ export interface Message {
   hasMedia?: boolean;
   /** Every attachment, when the network sends several (Signal). */
   attachments?: Attachment[];
+  /** Forwarded this many times on the way here (WhatsApp); absent when written by its sender. */
+  forwarded?: number;
   /** The attachment's size in pixels, when known before it is fetched. */
   mediaWidth?: number;
   mediaHeight?: number;
@@ -132,7 +151,9 @@ export interface Notice {
 export type BackendEvent =
   | { type: "chats-changed" }
   | { type: "message"; message: Message }
-  | { type: "notice"; notice: Notice };
+  | { type: "notice"; notice: Notice }
+  /** Older messages of a chat came from the phone. */
+  | { type: "history"; chatId: string };
 
 export interface ChatBackend {
   readonly account: AccountId;
@@ -140,10 +161,18 @@ export interface ChatBackend {
   readonly demo: boolean;
   listChats(): Promise<Chat[]>;
   getMessages(chatId: string): Promise<Message[]>;
-  /** Sends a text, quoting the message `replyTo` when given. */
-  sendText(chatId: string, text: string, replyTo?: string): Promise<Message>;
+  /** Messages from before `beforeMs`, oldest first: the history past what `getMessages` gives. */
+  olderMessages?(chatId: string, beforeMs: number): Promise<Message[]>;
+  /** Puts a chat first in line for its history to be fetched from the phone. */
+  fetchHistoryFirst?(chatId: string): Promise<void>;
+  /**
+   * Sends a text, quoting the message `replyTo` when given, with a card for
+   * its link when given. `forwarded` is the forwarding score of a message
+   * sent on from another chat.
+   */
+  sendText(chatId: string, text: string, replyTo?: string, link?: OutgoingLink, forwarded?: number): Promise<Message>;
   /** Uploads a file and sends it, with `caption` under it. */
-  sendFile?(chatId: string, file: File, caption?: string, replyTo?: string): Promise<Message>;
+  sendFile?(chatId: string, file: File, caption?: string, replyTo?: string, forwarded?: number): Promise<Message>;
   /**
    * Deletes a message for us, or for everyone when it is ours. Returns the
    * placeholder left behind, or `null` when nothing is shown any more.
@@ -165,6 +194,8 @@ export interface ChatBackend {
   deleteList(id: string): Promise<void>;
   setStarred(chatId: string, messageId: string, starred: boolean): Promise<Message>;
   listStarred(): Promise<StarredMessage[]>;
+  /** Messages with every word of `query` in them, ignoring case and accents, newest first; only `chatId`'s when given. */
+  searchMessages(query: string, chatId?: string): Promise<StarredMessage[]>;
   listContacts(): Promise<Contact[]>;
   /** The chat id for a phone number, or `null` when the number isn't on the network. */
   lookupNumber?(phone: string): Promise<string | null>;

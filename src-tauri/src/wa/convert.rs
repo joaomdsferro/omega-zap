@@ -15,8 +15,19 @@ fn reply_ref(ctx: &wa::ContextInfo) -> Option<ReplyRef> {
     let text = content(quoted).map(|c| c.preview()).unwrap_or_else(|| "Message".into());
     Some(ReplyRef {
         author_jid: ctx.participant.clone(),
+        id: ctx.stanza_id.clone(),
         text,
     })
+}
+
+/// What a message's context says: the message it answers, and whether it
+/// was forwarded.
+fn with_context(c: &mut Content, ctx: &MessageField<wa::ContextInfo>) {
+    let Some(ctx) = ctx.as_option() else { return };
+    c.reply_to = reply_ref(ctx);
+    if ctx.is_forwarded == Some(true) {
+        c.forwarded = ctx.forwarding_score.unwrap_or(0).max(1);
+    }
 }
 
 fn encoded(field: &Option<Vec<u8>>) -> Option<String> {
@@ -116,27 +127,27 @@ pub fn content(message: &wa::Message) -> Option<Content> {
     }
     if let Some(ext) = base.extended_text_message.as_option() {
         let text = non_empty(&ext.text)?;
-        let reply = ext.context_info.as_option().and_then(reply_ref);
-        let mut c = Content::text(text, reply);
+        let mut c = Content::text(text, None);
+        with_context(&mut c, &ext.context_info);
         c.link = link_preview(ext);
         return Some(c);
     }
     if let Some(image) = base.image_message.as_option() {
         let mut c = Content::media(MsgKind::Image, "Photo", non_empty(&image.caption));
-        c.reply_to = image.context_info.as_option().and_then(reply_ref);
+        with_context(&mut c, &image.context_info);
         c.wa_media = image_ref(image);
         return Some(c);
     }
     if let Some(video) = base.video_message.as_option() {
         let gif = video.gif_playback == Some(true);
         let mut c = Content::media(MsgKind::Media, if gif { "GIF" } else { "Video" }, non_empty(&video.caption));
-        c.reply_to = video.context_info.as_option().and_then(reply_ref);
+        with_context(&mut c, &video.context_info);
         c.wa_media = video_ref(video, if gif { "gif" } else { "video" });
         return Some(c);
     }
     if let Some(video) = base.ptv_message.as_option() {
         let mut c = Content::media(MsgKind::Media, "Video message", None);
-        c.reply_to = video.context_info.as_option().and_then(reply_ref);
+        with_context(&mut c, &video.context_info);
         c.wa_media = video_ref(video, "video");
         return Some(c);
     }
@@ -148,7 +159,7 @@ pub fn content(message: &wa::Message) -> Option<Content> {
             Content::media(MsgKind::Media, "Audio", None)
         };
         c.voice_seconds = audio.seconds;
-        c.reply_to = audio.context_info.as_option().and_then(reply_ref);
+        with_context(&mut c, &audio.context_info);
         c.wa_media = file_ref(fields!(audio), Some(if voice { "voice" } else { "audio" }), None, None);
         return Some(c);
     }
@@ -157,13 +168,13 @@ pub fn content(message: &wa::Message) -> Option<Content> {
             .or_else(|| non_empty(&doc.title))
             .unwrap_or_else(|| "Document".into());
         let mut c = Content::media(MsgKind::Media, name.clone(), non_empty(&doc.caption));
-        c.reply_to = doc.context_info.as_option().and_then(reply_ref);
+        with_context(&mut c, &doc.context_info);
         c.wa_media = file_ref(fields!(doc), Some("file"), None, None).map(|r| CdnRef { file_name: Some(name), ..r });
         return Some(c);
     }
     if let Some(sticker) = base.sticker_message.as_option() {
         let mut c = Content::media(MsgKind::Media, "Sticker", None);
-        c.reply_to = sticker.context_info.as_option().and_then(reply_ref);
+        with_context(&mut c, &sticker.context_info);
         c.wa_media = file_ref(fields!(sticker), Some("sticker"), sticker.width, sticker.height);
         return Some(c);
     }

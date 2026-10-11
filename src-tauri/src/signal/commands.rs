@@ -56,8 +56,10 @@ pub async fn signal_send_text(
     chat_id: String,
     text: String,
     reply_to: Option<String>,
+    link: Option<crate::account::OutgoingLink>,
+    styled: Option<super::Styled>,
 ) -> Result<MessageDto, String> {
-    mgr.send_text(&chat_id, &text, reply_to.as_deref()).await
+    mgr.send_text(&chat_id, &text, reply_to.as_deref(), link, styled).await
 }
 
 #[tauri::command]
@@ -145,6 +147,18 @@ pub fn signal_set_starred(
 #[tauri::command]
 pub fn signal_starred(mgr: Mgr<'_>) -> Vec<StarredDto> {
     mgr.starred()
+}
+
+/// Messages with the words of `query` in them, newest first.
+/// Messages of a chat from before `before_ms`, oldest first, past what memory keeps.
+#[tauri::command]
+pub fn signal_older_messages(mgr: Mgr<'_>, chat_id: String, before_ms: i64) -> Vec<MessageDto> {
+    mgr.older_messages(&chat_id, before_ms, crate::store::OLDER_PAGE)
+}
+
+#[tauri::command]
+pub fn signal_search(mgr: Mgr<'_>, query: String, chat_id: Option<String>) -> Vec<StarredDto> {
+    mgr.search(&query, chat_id.as_deref())
 }
 
 #[tauri::command]
