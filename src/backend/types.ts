@@ -418,11 +418,28 @@ export interface GifResult {
   send: GifPick;
 }
 
+/** A sticker found by search; its picture is made into a sticker when sent. */
+export interface StickerPick {
+  slug: string;
+  url: string;
+}
+
+export interface StickerResult {
+  slug: string;
+  title: string;
+  preview: string;
+  width: number;
+  height: number;
+  send: StickerPick;
+}
+
 /** A sticker or GIF to send. */
 export type OutgoingMedia =
   | { kind: "sticker"; id: string }
   /** A picture made into a sticker as it is sent. */
   | { kind: "new-sticker"; picture: Blob }
+  /** A sticker found on KLIPY. */
+  | { kind: "found-sticker"; pick: StickerPick }
   | { kind: "gif"; pick: GifPick }
   | { kind: "recent-gif"; id: string };
 
@@ -446,6 +463,8 @@ export interface StickerShelf {
   removeFromPack(packId: string, id: string): Promise<void>;
   /** Makes a sticker from a picture and puts it in one of our packs. */
   addNewSticker(packId: string, picture: Blob): Promise<void>;
+  /** Puts a sticker found by search in one of our packs. */
+  addFoundSticker(packId: string, pick: StickerPick): Promise<void>;
   /** Called whenever the library changes, here or on the phone. */
   subscribe(listener: () => void): () => void;
 }

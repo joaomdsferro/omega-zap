@@ -1,4 +1,4 @@
-//! GIF search through KLIPY. The app's key is built in (`KLIPY_API_KEY` at
+//! GIF and sticker search through KLIPY. The app's key is built in (`KLIPY_API_KEY` at
 //! build time; the same variable at run time overrides it for development),
 //! so nobody installing the app needs one. Without a key there is no search.
 //! What is searched goes to KLIPY with an anonymous id for this install.
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 const API: &str = "https://api.klipy.com/api/v1";
 const PER_PAGE: u32 = 24;
-/// A GIF bigger than this is not downloaded to send.
+/// A GIF or sticker bigger than this is not downloaded to send.
 const MAX_BYTES: u64 = 16 * 1024 * 1024;
 const ID_FILE: &str = "klipy-id";
 
@@ -47,11 +47,50 @@ pub struct GifPick {
     pub still: Option<String>,
 }
 
+/// A sticker found: what the picker shows, and the picture made into a sticker to send.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StickerResult {
+    pub slug: String,
+    pub title: String,
+    pub preview: String,
+    pub width: u32,
+    pub height: u32,
+    pub send: StickerPick,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StickerPick {
+    pub slug: String,
+    /// A WebP, GIF or PNG, animated or not.
+    pub url: String,
+}
+
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct GifPage {
-    pub items: Vec<GifResult>,
+pub struct ResultPage<T> {
+    pub items: Vec<T>,
     pub next: Option<u32>,
+}
+
+pub type GifPage = ResultPage<GifResult>;
+pub type StickerPage = ResultPage<StickerResult>;
+
+/// What KLIPY calls its kinds of content in its addresses.
+#[derive(Clone, Copy)]
+pub enum Kind {
+    Gifs,
+    Stickers,
+}
+
+impl Kind {
+    fn path(self) -> &'static str {
+        match self {
+            Kind::Gifs => "gifs",
+            Kind::Stickers => "stickers",
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -95,6 +134,7 @@ struct Formats {
     gif: Option<Format>,
     webp: Option<Format>,
     jpg: Option<Format>,
+    png: Option<Format>,
     mp4: Option<Format>,
 }
 
@@ -132,6 +172,28 @@ impl Item {
             send: GifPick { slug: self.slug, mp4: mp4.url, width: mp4.width, height: mp4.height, still },
         })
     }
+
+    fn sticker(self) -> Option<StickerResult> {
+        // Ads are left out.
+        if self.kind.as_deref() == Some("ad") || self.slug.is_empty() {
+            return None;
+        }
+        let sizes = self.file?;
+        let picture = |f: &Formats| f.webp.clone().or_else(|| f.gif.clone()).or_else(|| f.png.clone());
+        let preview = [&sizes.sm, &sizes.xs, &sizes.md, &sizes.hd].iter().find_map(|s| s.as_ref().and_then(picture))?;
+        // Stickers are 512 pixels a side: the largest picture that is not too big.
+        let send = [&sizes.hd, &sizes.md, &sizes.sm]
+            .iter()
+            .find_map(|s| s.as_ref().and_then(picture).filter(|f| f.size <= MAX_BYTES))?;
+        Some(StickerResult {
+            slug: self.slug.clone(),
+            title: self.title,
+            preview: preview.url,
+            width: preview.width,
+            height: preview.height,
+            send: StickerPick { slug: self.slug, url: send.url },
+        })
+    }
 }
 
 /// This install's anonymous id for KLIPY, made the first time.
@@ -166,13 +228,14 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
-/// Trending GIFs without a query, otherwise a search. Blocking.
-pub fn gifs(dir: &Path, query: &str, page: u32) -> Result<GifPage, String> {
-    let key = key().ok_or("GIF search isn't set up in this build.")?;
+/// A page of trending items without a query, otherwise a search. Blocking.
+fn page(dir: &Path, kind: Kind, query: &str, page: u32) -> Result<(Vec<Item>, Option<u32>), String> {
+    let key = key().ok_or("Search isn't set up in this build.")?;
     let customer = customer_id(dir);
     let page = page.max(1);
     let query = query.trim();
-    let url = if query.is_empty() { format!("{API}/{key}/gifs/trending") } else { format!("{API}/{key}/gifs/search") };
+    let path = kind.path();
+    let url = if query.is_empty() { format!("{API}/{key}/{path}/trending") } else { format!("{API}/{key}/{path}/search") };
     let mut request = agent()
         .get(&url)
         .query("page", page.to_string())
@@ -189,18 +252,27 @@ pub fn gifs(dir: &Path, query: &str, page: u32) -> Result<GifPage, String> {
         .read_to_vec()
         .map_err(|e| format!("KLIPY did not answer: {e}"))?;
     let response: Response = serde_json::from_slice(&body).map_err(|e| format!("KLIPY's answer could not be read: {e}"))?;
-    let page_data = response.data.ok_or("KLIPY's answer could not be read.")?;
-    Ok(GifPage {
-        next: page_data.has_next.then_some(page_data.current_page.max(page) + 1),
-        items: page_data.data.into_iter().filter_map(Item::result).collect(),
-    })
+    let data = response.data.ok_or("KLIPY's answer could not be read.")?;
+    Ok((data.data, data.has_next.then_some(data.current_page.max(page) + 1)))
 }
 
-/// Tells KLIPY a GIF was sent, as it asks, so its ranking learns. Blocking; failures don't matter.
-pub fn shared(dir: &Path, slug: &str) {
+/// Trending GIFs without a query, otherwise a search. Blocking.
+pub fn gifs(dir: &Path, query: &str, at: u32) -> Result<GifPage, String> {
+    let (items, next) = page(dir, Kind::Gifs, query, at)?;
+    Ok(ResultPage { items: items.into_iter().filter_map(Item::result).collect(), next })
+}
+
+/// Trending stickers without a query, otherwise a search. Blocking.
+pub fn stickers(dir: &Path, query: &str, at: u32) -> Result<StickerPage, String> {
+    let (items, next) = page(dir, Kind::Stickers, query, at)?;
+    Ok(ResultPage { items: items.into_iter().filter_map(Item::sticker).collect(), next })
+}
+
+/// Tells KLIPY a GIF or sticker was sent, as it asks, so its ranking learns. Blocking; failures don't matter.
+pub fn shared(dir: &Path, kind: Kind, slug: &str) {
     let Some(key) = key() else { return };
     let customer = customer_id(dir);
-    let url = format!("{API}/{key}/gifs/share/{slug}");
+    let url = format!("{API}/{key}/{}/share/{slug}", kind.path());
     if let Err(e) = agent()
         .post(&url)
         .header("Content-Type", "application/json")
@@ -209,22 +281,22 @@ pub fn shared(dir: &Path, slug: &str) {
     }
 }
 
-/// Downloads a GIF's file to send it. Only KLIPY's own servers. Blocking.
+/// Downloads a GIF's or sticker's file to send it. Only KLIPY's own servers. Blocking.
 pub fn download(url: &str) -> Result<Vec<u8>, String> {
     let host_ok = url
         .strip_prefix("https://")
         .and_then(|rest| rest.split('/').next())
         .is_some_and(|host| host == "klipy.com" || host.ends_with(".klipy.com"));
     if !host_ok {
-        return Err("That GIF is not from KLIPY.".into());
+        return Err("That file is not from KLIPY.".into());
     }
-    let mut response = agent().get(url).call().map_err(|e| format!("The GIF could not be downloaded: {e}"))?;
+    let mut response = agent().get(url).call().map_err(|e| format!("The file could not be downloaded: {e}"))?;
     response
         .body_mut()
         .with_config()
         .limit(MAX_BYTES)
         .read_to_vec()
-        .map_err(|e| format!("The GIF could not be downloaded: {e}"))
+        .map_err(|e| format!("The file could not be downloaded: {e}"))
 }
 
 /// An MP4's length in whole seconds (at least 1), from its movie header.
@@ -283,6 +355,16 @@ pub async fn gif_search(app: tauri::AppHandle, query: String, page: Option<u32>)
         .map_err(|e| e.to_string())?
 }
 
+/// A page of stickers: trending without a query.
+#[tauri::command]
+pub async fn sticker_search(app: tauri::AppHandle, query: String, page: Option<u32>) -> Result<StickerPage, String> {
+    use tauri::Manager;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || stickers(&dir, &query, page.unwrap_or(1)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,6 +386,23 @@ mod tests {
         assert_eq!(items[0].preview, "https://static.klipy.com/sm.webp");
         assert_eq!(items[0].send.mp4, "https://static.klipy.com/md.mp4");
         assert_eq!(items[0].send.still.as_deref(), Some("https://static.klipy.com/sm.jpg"));
+    }
+
+    #[test]
+    fn sticker_results_send_the_largest_picture() {
+        let body = r#"{"result":true,"data":{"data":[
+            {"id":1,"slug":"cat-1","title":"Cat","type":"sticker","file":{
+                "hd":{"webp":{"url":"https://static.klipy.com/hd.webp","width":512,"height":512,"size":90000}},
+                "sm":{"webp":{"url":"https://static.klipy.com/sm.webp","width":150,"height":150,"size":9000}}}},
+            {"id":2,"slug":"ad","type":"ad"},
+            {"id":3,"slug":"dog-2","title":"Dog","file":{"md":{"png":{"url":"https://static.klipy.com/md.png","width":300,"height":300,"size":5000}}}}
+        ],"current_page":1,"per_page":24,"has_next":false}}"#;
+        let response: Response = serde_json::from_str(body).unwrap();
+        let items: Vec<StickerResult> = response.data.unwrap().data.into_iter().filter_map(Item::sticker).collect();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].preview, "https://static.klipy.com/sm.webp");
+        assert_eq!(items[0].send.url, "https://static.klipy.com/hd.webp");
+        assert_eq!(items[1].send.url, "https://static.klipy.com/md.png");
     }
 
     #[test]

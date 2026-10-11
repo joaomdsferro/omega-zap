@@ -920,8 +920,30 @@ impl WaManager {
             .await?;
         let dir = self.dir.clone();
         let slug = pick.slug.clone();
-        tauri::async_runtime::spawn_blocking(move || crate::klipy::shared(&dir, &slug));
+        tauri::async_runtime::spawn_blocking(move || crate::klipy::shared(&dir, crate::klipy::Kind::Gifs, &slug));
         Ok(dto)
+    }
+
+    async fn klipy_picture(pick: &crate::klipy::StickerPick) -> Result<Vec<u8>, String> {
+        let url = pick.url.clone();
+        tauri::async_runtime::spawn_blocking(move || crate::klipy::download(&url))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    /// Sends a sticker found on KLIPY, made into a WhatsApp sticker; it then shows under Recent.
+    pub async fn send_klipy_sticker(&self, chat_id: &str, pick: crate::klipy::StickerPick, reply_to: Option<&str>) -> Result<MessageDto, String> {
+        let picture = Self::klipy_picture(&pick).await?;
+        let dto = self.send_new_sticker(chat_id, picture, reply_to).await?;
+        let dir = self.dir.clone();
+        tauri::async_runtime::spawn_blocking(move || crate::klipy::shared(&dir, crate::klipy::Kind::Stickers, &pick.slug));
+        Ok(dto)
+    }
+
+    /// Puts a sticker found on KLIPY in one of our packs.
+    pub async fn add_klipy_sticker(&self, pack_id: &str, pick: crate::klipy::StickerPick) -> Result<(), String> {
+        let picture = Self::klipy_picture(&pick).await?;
+        self.add_new_sticker(pack_id, picture).await
     }
 
     /// Sends one of the GIFs we sent before again.

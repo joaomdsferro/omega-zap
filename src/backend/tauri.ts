@@ -302,6 +302,8 @@ export class TauriBackend implements ChatBackend {
                 headers: { "x-chat": chatId, "x-reply": replyTo ?? "" },
               }),
             );
+          case "found-sticker":
+            return toMessage(await invoke<RawMessage>("wa_send_klipy_sticker", { chatId, pick: item.pick, replyTo: reply }));
           case "gif":
             return toMessage(await invoke<RawMessage>("wa_send_gif", { chatId, pick: item.pick, replyTo: reply }));
           case "recent-gif":
@@ -324,6 +326,7 @@ export class TauriBackend implements ChatBackend {
         addNewSticker: async (packId, picture) => {
           await invoke("wa_add_new_sticker", new Uint8Array(await picture.arrayBuffer()), { headers: { "x-pack": packId } });
         },
+        addFoundSticker: (packId, pick) => invoke("wa_add_klipy_sticker", { packId, pick }),
         subscribe: (listener) => {
           const pending = listen("wa://stickers", () => listener());
           return () => void pending.then((unlisten) => unlisten());

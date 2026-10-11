@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AccountId } from "../accounts/accounts";
-import type { GifResult, LibrarySticker, OutgoingMedia, StickerLibrary, StickerPack, StickerShelf, StorePack } from "../backend";
+import type { GifResult, LibrarySticker, OutgoingMedia, StickerLibrary, StickerPack, StickerResult, StickerShelf, StorePack } from "../backend";
 import { formatFileSize } from "../lib/format";
-import { gifSearchAvailable, searchGifs } from "../lib/gifs";
+import { klipyAvailable, searchGifs, searchStickers } from "../lib/gifs";
 import { GifVideo, useNear } from "./Attachments";
 import { BackIcon, ClockIcon, EditIcon, GifIcon, PlusIcon, SmileIcon, StarIcon, StickerIcon, TrashIcon } from "./Icons";
 import { PopupMenu, type MenuEntry } from "./PopupMenu";
@@ -185,6 +185,14 @@ function StickerTab({ stickers, onSend, onError }: { stickers: StickerShelf; onS
   const picker = useRef<HTMLInputElement>(null);
   const [addInto, setAddInto] = useState<string | null>(null);
   const [making, setMaking] = useState<string | null>(null);
+  const [available, setAvailable] = useState(false);
+  const [query, setQuery] = useState("");
+  const found = useKlipy(searchStickers, query, available, false, onError);
+  const [foundMenu, setFoundMenu] = useState<{ x: number; y: number; sticker: StickerResult } | null>(null);
+
+  useEffect(() => {
+    void klipyAvailable().then(setAvailable);
+  }, []);
 
   if (adding) {
     return <AddStickers stickers={stickers} onSend={onSend} onError={onError} onBack={() => setAdding(false)} />;
@@ -242,125 +250,186 @@ function StickerTab({ stickers, onSend, onError }: { stickers: StickerShelf; onS
     return items;
   }
 
+  const searching = available && query.trim().length > 0;
+  function foundMenuFor(sticker: StickerResult): MenuEntry[] {
+    const items: MenuEntry[] = [
+      { label: "Send", icon: <StickerIcon size={20} />, onSelect: () => send(sticker.slug, { kind: "found-sticker", pick: sticker.send }) },
+    ];
+    if (ownPacks.length) {
+      items.push("separator", { heading: "Add to pack" });
+      for (const p of ownPacks) items.push({ label: p.name, onSelect: () => stickers.addFoundSticker(p.id, sticker.send).catch(onError) });
+    }
+    return items;
+  }
+
   return (
     <>
-      <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-(--divider) px-2 py-1" role="tablist" aria-label="Sticker sections">
-        {sections.map((section, index) => (
-          <button
-            key={section.id}
-            type="button"
-            role="tab"
-            title={section.name}
-            aria-label={section.name}
-            onClick={() => list.current?.children[index]?.scrollIntoView({ block: "start" })}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-(--icon) hover:bg-(--hover-bg)"
-          >
-            {section.icon}
-          </button>
-        ))}
-        <button
-          type="button"
-          title="Add stickers"
-          aria-label="Add stickers"
-          onClick={() => setAdding(true)}
-          className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-(--icon) hover:bg-(--hover-bg)"
-        >
-          <PlusIcon size={20} />
-        </button>
-      </div>
-      <div ref={list} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        {sections.map((section) => (
-          <section key={section.id} style={{ contentVisibility: "auto", containIntrinsicSize: "auto 200px" }}>
-            <div className="flex items-center gap-1 px-1 pt-2 pb-1">
-              {renaming === section.id && section.pack ? (
-                <NameInput
-                  initial={section.name}
-                  label="Pack name"
-                  onDone={(name) => {
-                    setRenaming(null);
-                    if (name && name !== section.name) stickers.renamePack(section.id, name).catch(onError);
+      {available ? (
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search KLIPY stickers"
+          aria-label="Search stickers"
+          className="mx-2 mt-2 mb-1 h-8 shrink-0 rounded-full bg-(--hover-bg) px-3 text-[14px] outline-none placeholder:text-(--text-secondary)"
+        />
+      ) : null}
+      {searching ? (
+        <>
+          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+            {found.results && found.results.items.length === 0 && !found.loading ? (
+              <p className="px-1 py-2 text-[13px] text-(--text-secondary)">No stickers found.</p>
+            ) : null}
+            <div className="grid grid-cols-4 gap-1 pt-1">
+              {(found.results?.items ?? []).map((sticker) => (
+                <button
+                  key={sticker.slug}
+                  type="button"
+                  title={sticker.title}
+                  aria-label={sticker.title ? `Send sticker ${sticker.title}` : "Send sticker"}
+                  disabled={busy.has(sticker.slug)}
+                  onClick={() => send(sticker.slug, { kind: "found-sticker", pick: sticker.send })}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    setFoundMenu({ x: event.clientX, y: event.clientY, sticker });
                   }}
-                />
-              ) : (
-                <h3 className="min-w-0 flex-1 truncate text-[12px] text-(--text-secondary)">
-                  {section.name}
-                  {section.pack?.publisher ? <span> · {section.pack.publisher}</span> : null}
-                </h3>
-              )}
-              {section.pack && !section.pack.store ? (
-                <>
-                  <SmallButton
-                    label={`Add a picture to ${section.name}`}
-                    onClick={() => {
-                      setAddInto(section.id);
-                      picker.current?.click();
-                    }}
-                  >
-                    {making === section.id ? <span className="block h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" /> : <PlusIcon size={16} />}
-                  </SmallButton>
-                  <SmallButton label={`Rename ${section.name}`} onClick={() => setRenaming(section.id)}>
-                    <EditIcon size={15} />
-                  </SmallButton>
-                </>
-              ) : null}
-              {section.pack ? (
-                <SmallButton
-                  label={`Remove ${section.name}`}
-                  onClick={() => {
-                    if (section.pack!.store || section.stickers.length === 0 || window.confirm(`Delete the pack "${section.name}"?`)) {
-                      stickers.removePack(section.id).catch(onError);
-                    }
-                  }}
+                  className="relative flex aspect-square w-full items-center justify-center rounded-lg p-1 hover:bg-(--hover-bg) disabled:cursor-wait"
                 >
-                  <TrashIcon size={15} />
-                </SmallButton>
-              ) : null}
+                  <img src={sticker.preview} alt="" loading="lazy" draggable={false} className="max-h-full max-w-full object-contain" />
+                  {busy.has(sticker.slug) ? (
+                    <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/30">
+                      <Spinner />
+                    </span>
+                  ) : null}
+                </button>
+              ))}
             </div>
-            {section.stickers.length ? (
-              <div className="grid grid-cols-4 gap-1">
-                {section.stickers.map((sticker) => (
-                  <div key={sticker.id} className="group/sticker relative">
-                    <button
-                      type="button"
-                      title={sticker.emojis.join(" ") || "Send sticker"}
-                      aria-label={sticker.emojis.length ? `Send sticker ${sticker.emojis.join(" ")}` : "Send sticker"}
-                      disabled={busy.has(sticker.id)}
-                      onClick={() => send(sticker.id, { kind: "sticker", id: sticker.id })}
-                      onContextMenu={(event) => {
-                        event.preventDefault();
-                        setMenu({ x: event.clientX, y: event.clientY, sticker, pack: section.pack });
+            <div ref={found.end} className="h-px" />
+            {found.loading ? <p className="px-1 py-2 text-center text-[12px] text-(--text-secondary)">Loading…</p> : null}
+          </div>
+          <p className="shrink-0 border-t border-(--divider) px-3 py-1 text-right text-[11px] text-(--text-secondary)">Powered by KLIPY</p>
+        </>
+      ) : (
+        <>
+          <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-(--divider) px-2 py-1" role="tablist" aria-label="Sticker sections">
+            {sections.map((section, index) => (
+              <button
+                key={section.id}
+                type="button"
+                role="tab"
+                title={section.name}
+                aria-label={section.name}
+                onClick={() => list.current?.children[index]?.scrollIntoView({ block: "start" })}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-(--icon) hover:bg-(--hover-bg)"
+              >
+                {section.icon}
+              </button>
+            ))}
+            <button
+              type="button"
+              title="Add stickers"
+              aria-label="Add stickers"
+              onClick={() => setAdding(true)}
+              className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-(--icon) hover:bg-(--hover-bg)"
+            >
+              <PlusIcon size={20} />
+            </button>
+          </div>
+          <div ref={list} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+            {sections.map((section) => (
+              <section key={section.id} style={{ contentVisibility: "auto", containIntrinsicSize: "auto 200px" }}>
+                <div className="flex items-center gap-1 px-1 pt-2 pb-1">
+                  {renaming === section.id && section.pack ? (
+                    <NameInput
+                      initial={section.name}
+                      label="Pack name"
+                      onDone={(name) => {
+                        setRenaming(null);
+                        if (name && name !== section.name) stickers.renamePack(section.id, name).catch(onError);
                       }}
-                      className="relative flex aspect-square w-full items-center justify-center rounded-lg p-1 hover:bg-(--hover-bg) disabled:cursor-wait"
+                    />
+                  ) : (
+                    <h3 className="min-w-0 flex-1 truncate text-[12px] text-(--text-secondary)">
+                      {section.name}
+                      {section.pack?.publisher ? <span> · {section.pack.publisher}</span> : null}
+                    </h3>
+                  )}
+                  {section.pack && !section.pack.store ? (
+                    <>
+                      <SmallButton
+                        label={`Add a picture to ${section.name}`}
+                        onClick={() => {
+                          setAddInto(section.id);
+                          picker.current?.click();
+                        }}
+                      >
+                        {making === section.id ? <span className="block h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" /> : <PlusIcon size={16} />}
+                      </SmallButton>
+                      <SmallButton label={`Rename ${section.name}`} onClick={() => setRenaming(section.id)}>
+                        <EditIcon size={15} />
+                      </SmallButton>
+                    </>
+                  ) : null}
+                  {section.pack ? (
+                    <SmallButton
+                      label={`Remove ${section.name}`}
+                      onClick={() => {
+                        if (section.pack!.store || section.stickers.length === 0 || window.confirm(`Delete the pack "${section.name}"?`)) {
+                          stickers.removePack(section.id).catch(onError);
+                        }
+                      }}
                     >
-                      <StickerImage stickers={stickers} id={sticker.id} className="h-full w-full" />
-                      {busy.has(sticker.id) ? (
-                        <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/30">
-                          <Spinner />
-                        </span>
-                      ) : null}
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={sticker.favorite ? "Remove from favorites" : "Add to favorites"}
-                      title={sticker.favorite ? "Remove from favorites" : "Add to favorites"}
-                      onClick={() => favorite(sticker)}
-                      className={[
-                        "absolute top-0.5 right-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-(--panel-bg) text-(--icon) shadow-sm",
-                        sticker.favorite && section.id !== "favorites" ? "text-(--accent)" : "",
-                        "opacity-0 group-hover/sticker:opacity-100 focus-visible:opacity-100",
-                      ].join(" ")}
-                    >
-                      <StarIcon size={14} filled={sticker.favorite} />
-                    </button>
+                      <TrashIcon size={15} />
+                    </SmallButton>
+                  ) : null}
+                </div>
+                {section.stickers.length ? (
+                  <div className="grid grid-cols-4 gap-1">
+                    {section.stickers.map((sticker) => (
+                      <div key={sticker.id} className="group/sticker relative">
+                        <button
+                          type="button"
+                          title={sticker.emojis.join(" ") || "Send sticker"}
+                          aria-label={sticker.emojis.length ? `Send sticker ${sticker.emojis.join(" ")}` : "Send sticker"}
+                          disabled={busy.has(sticker.id)}
+                          onClick={() => send(sticker.id, { kind: "sticker", id: sticker.id })}
+                          onContextMenu={(event) => {
+                            event.preventDefault();
+                            setMenu({ x: event.clientX, y: event.clientY, sticker, pack: section.pack });
+                          }}
+                          className="relative flex aspect-square w-full items-center justify-center rounded-lg p-1 hover:bg-(--hover-bg) disabled:cursor-wait"
+                        >
+                          <StickerImage stickers={stickers} id={sticker.id} className="h-full w-full" />
+                          {busy.has(sticker.id) ? (
+                            <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/30">
+                              <Spinner />
+                            </span>
+                          ) : null}
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={sticker.favorite ? "Remove from favorites" : "Add to favorites"}
+                          title={sticker.favorite ? "Remove from favorites" : "Add to favorites"}
+                          onClick={() => favorite(sticker)}
+                          className={[
+                            "absolute top-0.5 right-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-(--panel-bg) text-(--icon) shadow-sm",
+                            sticker.favorite && section.id !== "favorites" ? "text-(--accent)" : "",
+                            "opacity-0 group-hover/sticker:opacity-100 focus-visible:opacity-100",
+                          ].join(" ")}
+                        >
+                          <StarIcon size={14} filled={sticker.favorite} />
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            ) : (
-              <p className="px-1 pb-2 text-[13px] text-(--text-secondary)">{section.empty}</p>
-            )}
-          </section>
-        ))}
-      </div>
+                ) : (
+                  <p className="px-1 pb-2 text-[13px] text-(--text-secondary)">{section.empty}</p>
+                )}
+              </section>
+            ))}
+          </div>
+        </>
+      )}
       <input
         ref={picker}
         type="file"
@@ -380,6 +449,9 @@ function StickerTab({ stickers, onSend, onError }: { stickers: StickerShelf; onS
       />
       {menu ? (
         <PopupMenu x={menu.x} y={menu.y} label="Sticker options" items={menuFor(menu.sticker, menu.pack)} onClose={() => setMenu(null)} />
+      ) : null}
+      {foundMenu ? (
+        <PopupMenu x={foundMenu.x} y={foundMenu.y} label="Sticker options" items={foundMenuFor(foundMenu.sticker)} onClose={() => setFoundMenu(null)} />
       ) : null}
     </>
   );
@@ -604,30 +676,36 @@ function columns(items: GifResult[]): GifResult[][] {
   return out;
 }
 
-function GifTab({ stickers, onSend, onError }: { stickers?: StickerShelf; onSend: (item: OutgoingMedia) => Promise<void>; onError: (e: unknown) => void }) {
-  const [available, setAvailable] = useState<boolean | null>(null);
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<{ query: string; items: GifResult[]; next: number | null } | null>(null);
+/**
+ * KLIPY's results for what is typed, after a pause, a page at a time as the
+ * end of the list (`end`) comes near. With nothing typed: what is trending,
+ * or nothing when `trending` is off.
+ */
+function useKlipy<T extends { slug: string }>(
+  search: (query: string, page?: number) => Promise<{ items: T[]; next: number | null }>,
+  query: string,
+  enabled: boolean,
+  trending: boolean,
+  onError: (e: unknown) => void,
+) {
+  const [results, setResults] = useState<{ query: string; items: T[]; next: number | null } | null>(null);
   const [loading, setLoading] = useState(false);
-  const library = useLibrary(stickers, onError);
-  const { busy, send } = useSending(onSend, onError);
   const end = useRef<HTMLDivElement>(null);
   const [endSeen, setEndSeen] = useState(0);
   const asked = useRef("");
 
   useEffect(() => {
-    void gifSearchAvailable().then(setAvailable);
-  }, []);
-
-  // A pause in typing searches; nothing typed shows what is trending.
-  useEffect(() => {
-    if (!available) return;
     const wanted = query.trim();
+    asked.current = wanted;
+    if (!enabled || (!wanted && !trending)) {
+      setResults(null);
+      setLoading(false);
+      return;
+    }
     const timer = window.setTimeout(
       () => {
-        asked.current = wanted;
         setLoading(true);
-        searchGifs(wanted)
+        search(wanted)
           .then((page) => asked.current === wanted && setResults({ query: wanted, ...page }))
           .catch(onError)
           .finally(() => asked.current === wanted && setLoading(false));
@@ -635,9 +713,8 @@ function GifTab({ stickers, onSend, onError }: { stickers?: StickerShelf; onSend
       wanted ? 350 : 0,
     );
     return () => window.clearTimeout(timer);
-  }, [query, available, onError]);
+  }, [search, query, enabled, trending, onError]);
 
-  // The next page when the end of the list comes near.
   useEffect(() => {
     const node = end.current;
     if (!node) return;
@@ -651,15 +728,33 @@ function GifTab({ stickers, onSend, onError }: { stickers?: StickerShelf; onSend
     if (!results?.next || loading || endSeen === 0) return;
     const { query: q, next } = results;
     setLoading(true);
-    searchGifs(q, next)
+    search(q, next)
       .then((page) =>
-        setResults((prev) => (prev && prev.query === q ? { query: q, items: [...prev.items, ...page.items.filter((i) => !prev.items.some((p) => p.slug === i.slug))], next: page.next } : prev)),
+        setResults((prev) =>
+          prev && prev.query === q
+            ? { query: q, items: [...prev.items, ...page.items.filter((i) => !prev.items.some((p) => p.slug === i.slug))], next: page.next }
+            : prev,
+        ),
       )
       .catch(onError)
       .finally(() => setLoading(false));
     // Only a new sighting of the end asks for more.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [endSeen]);
+
+  return { results, loading, end };
+}
+
+function GifTab({ stickers, onSend, onError }: { stickers?: StickerShelf; onSend: (item: OutgoingMedia) => Promise<void>; onError: (e: unknown) => void }) {
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const [query, setQuery] = useState("");
+  const library = useLibrary(stickers, onError);
+  const { busy, send } = useSending(onSend, onError);
+  const { results, loading, end } = useKlipy(searchGifs, query, Boolean(available), true, onError);
+
+  useEffect(() => {
+    void klipyAvailable().then(setAvailable);
+  }, []);
 
   const recent = library?.gifs ?? [];
   const cols = useMemo(() => columns(results?.items ?? []), [results]);

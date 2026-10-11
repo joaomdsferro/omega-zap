@@ -38,6 +38,8 @@ export type {
   StorePack,
   GifPick,
   GifResult,
+  StickerPick,
+  StickerResult,
   OutgoingMedia,
 } from "./types";
 export { MockBackend } from "./mock";

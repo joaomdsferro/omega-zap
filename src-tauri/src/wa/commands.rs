@@ -408,3 +408,18 @@ pub async fn wa_send_gif(
 pub async fn wa_send_recent_gif(mgr: Mgr<'_>, chat_id: String, id: String, reply_to: Option<String>) -> Result<MessageDto, String> {
     mgr.send_recent_gif(&chat_id, &id, reply_to.as_deref()).await
 }
+
+#[tauri::command]
+pub async fn wa_send_klipy_sticker(
+    mgr: Mgr<'_>,
+    chat_id: String,
+    pick: crate::klipy::StickerPick,
+    reply_to: Option<String>,
+) -> Result<MessageDto, String> {
+    mgr.send_klipy_sticker(&chat_id, pick, reply_to.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn wa_add_klipy_sticker(mgr: Mgr<'_>, pack_id: String, pick: crate::klipy::StickerPick) -> Result<(), String> {
+    mgr.add_klipy_sticker(&pack_id, pick).await
+}
