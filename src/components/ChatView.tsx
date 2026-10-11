@@ -13,6 +13,7 @@ import { Album, ALBUM_MIN, albumPhoto, continuesAlbum } from "./Album";
 import { MediaViewer } from "./MediaViewer";
 import type { ViewerItem } from "./MediaViewer";
 import { DeleteDialog } from "./DeleteDialog";
+import { EditDialog } from "./EditDialog";
 import { MessageBubble } from "./MessageBubble";
 import { PinnedBar } from "./PinnedBar";
 import { ChatSearch, searchChat } from "./ChatSearch";
@@ -51,6 +52,8 @@ interface ChatViewProps {
   onForward?: (message: Message) => void;
   /** Deletes a message for us, or for everyone. */
   onDelete?: (message: Message, forEveryone: boolean) => Promise<void>;
+  /** Changes what one of our texts says, for everyone. */
+  onEdit?: (message: Message, text: string) => Promise<void>;
   /** A message to scroll to and highlight once it has loaded. */
   focusMessageId?: string | null;
   onFocused?: () => void;
@@ -82,7 +85,7 @@ interface ChatViewProps {
   pinsTick?: number;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onTyping, loadPinned, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onTyping, loadPinned, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
   const [personId, setPersonId] = useState<string | null>(null);
   const closePerson = useCallback(() => setPersonId(null), []);
   const loadShownPerson = useCallback(() => loadPerson!(personId!), [loadPerson, personId]);
@@ -292,6 +295,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
 
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [deleting, setDeleting] = useState<Message | null>(null);
+  const [editing, setEditing] = useState<Message | null>(null);
   /** Files picked, dropped or pasted, waiting for Send. */
   const [pending, setPending] = useState<File[]>([]);
 
@@ -299,6 +303,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
     setViewing(null);
     setReplyingTo(null);
     setDeleting(null);
+    setEditing(null);
     setPending([]);
     setJumpTo(null);
   }, [chatKey]);
@@ -536,6 +541,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                     onReply={canSend ? setReplyingTo : undefined}
                     onForward={onForward}
                     onDelete={onDelete ? setDeleting : undefined}
+                    onEdit={onEdit ? setEditing : undefined}
                     onJumpTo={setJumpTo}
                     onOpenPerson={loadPerson ? setPersonId : undefined}
                     flash={flashed === message.id}
@@ -622,6 +628,10 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
           onDelete={(forEveryone) => onDelete(deleting, forEveryone)}
           onClose={() => setDeleting(null)}
         />
+      ) : null}
+
+      {editing && onEdit ? (
+        <EditDialog message={editing} onSave={(text) => onEdit(editing, text)} onClose={() => setEditing(null)} />
       ) : null}
 
       <Composer

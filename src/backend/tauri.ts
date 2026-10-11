@@ -88,6 +88,7 @@ interface RawMessage {
   reactions: ReactionCount[];
   starred: boolean;
   deleted: boolean;
+  edited?: boolean;
 }
 
 interface RawGroupRef {
@@ -220,6 +221,7 @@ function toMessage(raw: RawMessage): Message {
     reactions: raw.reactions,
     starred: raw.starred,
     deleted: raw.deleted,
+    edited: raw.edited,
   };
 }
 
@@ -234,6 +236,7 @@ export class TauriBackend implements ChatBackend {
   lookupNumber?: (phone: string) => Promise<string | null>;
   pinnedMessages?: (chatId: string) => Promise<Message[]>;
   groupInfo?: (id: string) => Promise<GroupInfo>;
+  editMessage?: (chatId: string, messageId: string, text: string) => Promise<Message>;
   groupDetails?: (id: string) => Promise<GroupInfo>;
   setTyping?: (chatId: string, state: TypingState) => Promise<void>;
   watchPresence?: (chatId: string) => Promise<void>;
@@ -251,6 +254,7 @@ export class TauriBackend implements ChatBackend {
       this.linkThumbnailUrl = async (chatId, messageId) =>
         fileUrl(await invoke<string>("wa_link_thumbnail", { chatId, messageId }), "media");
       this.lookupNumber = (phone) => invoke<string | null>("wa_lookup_number", { phone });
+      this.editMessage = async (chatId, messageId, text) => toMessage(await invoke<RawMessage>("wa_edit_message", { chatId, messageId, text }));
       this.groupInfo = async (id) => toGroupInfo(await invoke<RawGroupInfo>("wa_group_info", { id }), account);
       this.groupDetails = async (id) => toGroupInfo(await invoke<RawGroupInfo>("wa_group_details", { id }), account);
       this.pinnedMessages = async (chatId) => (await invoke<RawMessage[]>("wa_pinned_messages", { chatId })).map(toMessage);

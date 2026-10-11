@@ -94,6 +94,8 @@ export interface Message {
   starred?: boolean;
   /** Taken back by its sender: only a placeholder is shown. */
   deleted?: boolean;
+  /** Changed by its sender after it was sent. */
+  edited?: boolean;
 }
 
 export interface Chat {
@@ -302,6 +304,8 @@ export interface ChatBackend {
    * placeholder left behind, or `null` when nothing is shown any more.
    */
   deleteMessage?(chatId: string, messageId: string, forEveryone: boolean): Promise<Message | null>;
+  /** Changes what one of our texts says, for everyone. */
+  editMessage?(chatId: string, messageId: string, text: string): Promise<Message>;
   markRead(chatId: string): Promise<void>;
   /** Marks a chat unread by hand: a dot in the list until it is read. */
   setUnread?(chatId: string, unread: boolean): Promise<void>;

@@ -538,6 +538,7 @@ mod tests {
                 read_by: Vec::new(),
                 starred: false,
                 deleted: None,
+                edited_ms: None,
             },
         }
     }

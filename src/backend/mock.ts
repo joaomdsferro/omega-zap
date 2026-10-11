@@ -49,6 +49,14 @@ export class MockBackend implements ChatBackend {
     return [...(this.messages.get(chatId) ?? [])];
   }
 
+  async editMessage(chatId: string, messageId: string, text: string): Promise<Message> {
+    const list = this.messages.get(chatId) ?? [];
+    const at = list.findIndex((m) => m.id === messageId);
+    if (at === -1) throw new Error("The message is no longer here.");
+    list[at] = { ...list[at], text, edited: true };
+    return list[at];
+  }
+
   /** Demo group info: whoever wrote in the group are its members. */
   async groupInfo(id: string): Promise<GroupInfo> {
     const chat = this.chats.find((c) => c.id === id);

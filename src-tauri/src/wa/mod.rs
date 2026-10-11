@@ -611,6 +611,7 @@ impl WaManager {
             read_by: Vec::new(),
             starred: false,
             deleted: None,
+            edited_ms: None,
         };
         let incoming = store::Incoming {
             chat: chat_id.to_string(),
@@ -1037,6 +1038,28 @@ impl WaManager {
             .ok_or("That message is gone.")?;
         self.mark_dirty();
         Ok(dto)
+    }
+
+    /// Changes what one of our texts says, for everyone, within WhatsApp's
+    /// edit window.
+    pub async fn edit_message(&self, chat_id: &str, message_id: &str, text: &str) -> Result<MessageDto, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("The message is empty.".into());
+        }
+        self.recall(chat_id, message_id);
+        if !lock(&self.store).can_edit(chat_id, message_id) {
+            return Err("Only your own texts can be edited, up to 15 minutes after sending.".into());
+        }
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
+        client
+            .edit_message(jid, message_id, wa::Message::text(text))
+            .await
+            .map_err(|e| format!("The message was not edited: {e}"))?;
+        let dto = lock(&self.store).edit_message(chat_id, message_id, None, Content::text(text, None), store::now_ms());
+        self.mark_dirty();
+        dto.ok_or_else(|| "The message is no longer here.".into())
     }
 
     /// Deletes a message on our devices, or for everyone when `for_everyone`
@@ -1858,7 +1881,9 @@ impl WaManager {
                 let mut pinned_in: Vec<String> = Vec::new();
                 // Reactions and deletions can be for messages only the history has.
                 for m in batch.iter() {
-                    let target = convert::revoke(&m.message).or_else(|| convert::reaction(&m.message).map(|(target, _)| target));
+                    let target = convert::revoke(&m.message)
+                        .or_else(|| convert::reaction(&m.message).map(|(target, _)| target))
+                        .or_else(|| convert::edit(&m.message, 0).map(|edit| edit.target));
                     if let Some(target) = target {
                         self.recall(&m.info.source.chat.to_non_ad_string(), &target);
                     }
@@ -1869,6 +1894,20 @@ impl WaManager {
                         if let Some(target) = convert::revoke(&m.message) {
                             let chat = m.info.source.chat.to_non_ad_string();
                             dtos.extend(store.delete_message(&chat, &target, Deletion::ForEveryone));
+                            continue;
+                        }
+                        if let Some(edit) = convert::edit(&m.message, m.info.timestamp.timestamp_millis()) {
+                            let chat = m.info.source.chat.to_non_ad_string();
+                            let sender = m.info.source.sender.to_non_ad_string();
+                            if let Some(alt) = &m.info.source.sender_alt {
+                                store.learn_mapping(&sender, &alt.to_non_ad_string());
+                            }
+                            let editor = (!m.info.source.is_from_me).then_some(sender);
+                            dtos.extend(store.edit_message(&chat, &edit.target, editor.as_deref(), edit.content, edit.at_ms));
+                            continue;
+                        }
+                        if convert::is_sealed_edit(&m.message) {
+                            log::info!("whatsapp: an edit sealed with the original message's secret was skipped");
                             continue;
                         }
                         if let Some(pin) = convert::pin(&m.message, m.info.timestamp.timestamp_millis()) {
@@ -2121,7 +2160,10 @@ impl WaManager {
             if on_demand {
                 *answered.entry(store.chat_key(&c.id)).or_default() += c.messages.len() as u32;
             }
+            // Edits are applied once the messages they change are in.
+            let mut edits = Vec::new();
             for item in &c.messages {
+                edits.extend(convert::history_edit(&c.id, item));
                 for pin in convert::history_pins(item) {
                     store.set_message_pin(&c.id, &pin.target, pin.at_ms, pin.until_ms);
                 }
@@ -2135,6 +2177,9 @@ impl WaManager {
                         }
                     }
                 }
+            }
+            for (editor, edit) in edits {
+                store.edit_message(&c.id, &edit.target, editor.as_deref(), edit.content, edit.at_ms);
             }
         }
         let rest = stream.remainder().map_err(|e| e.to_string())?;

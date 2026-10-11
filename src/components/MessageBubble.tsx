@@ -9,10 +9,12 @@ import { useSettings } from "../settings/settings";
 import { Attachments } from "./Attachments";
 import type { LoadMedia } from "./Attachments";
 import { LinkCard, openLink } from "./LinkCard";
+import { canEdit } from "./EditDialog";
 import {
   BlockedIcon,
   ChevronDownIcon,
   CopyIcon,
+  EditIcon,
   FileIcon,
   ForwardIcon,
   PersonIcon,
@@ -64,6 +66,8 @@ interface MessageBubbleProps {
   flash?: boolean;
   /** Pinned in the chat for everyone. */
   pinned?: boolean;
+  /** Changes what one of our texts says, while it still can be. */
+  onEdit?: (message: Message) => void;
 }
 
 function Tail({ mine }: { mine: boolean }) {
@@ -91,6 +95,7 @@ function Meta({ message, account, pinned }: { message: Message; account: Account
   return (
     <span className="flex items-center gap-1 text-[11px] leading-3.75 whitespace-nowrap text-(--bubble-meta)">
       {pinned ? <PinIcon size={11} aria-label="Pinned" aria-hidden={false} role="img" /> : null}
+      {message.edited ? <span>Edited</span> : null}
       {message.starred ? <StarIcon size={11} filled aria-label="Starred" aria-hidden={false} role="img" /> : null}
       <time dateTime={message.sentAt}>{formatMessageTime(message.sentAt)}</time>
       {message.fromMe && message.status ? (
@@ -265,7 +270,7 @@ const LONG_PRESS_MS = 450;
 /** WhatsApp's forwarding score from which a message counts as forwarded many times. */
 const FORWARDED_MANY = 5;
 
-export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight, pinned }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight, pinned, onEdit }: MessageBubbleProps) {
   const { settings } = useSettings();
   const [picking, setPicking] = useState(false);
   // The reactions' details, opened from their pill.
@@ -382,6 +387,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
             onSelect: () => onStar(message),
           }
         : null,
+      onEdit && canEdit(message) ? { label: "Edit", icon: <EditIcon size={20} />, onSelect: () => onEdit(message) } : null,
     ];
     const items: MenuEntry[] = actions.filter((item) => item !== null);
     if (onDelete) {

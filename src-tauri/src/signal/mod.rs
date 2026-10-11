@@ -942,6 +942,7 @@ impl SignalManager {
                 read_by: Vec::new(),
                 starred: false,
                 deleted: None,
+                edited_ms: None,
             },
         };
         let dto = lock(&self.store)
@@ -1185,6 +1186,7 @@ impl SignalManager {
                         read_by: Vec::new(),
                         starred: false,
                         deleted: None,
+                        edited_ms: None,
                     },
                 };
                 // History arrives in bulk and was already seen on the phone.

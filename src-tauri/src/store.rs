@@ -321,6 +321,9 @@ pub struct StoredMessage {
     pub starred: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deleted: Option<Deletion>,
+    /// When its sender last changed what it says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited_ms: Option<i64>,
 }
 
 /// How a message was deleted. Kept rather than dropped, so a history replay
@@ -395,6 +398,9 @@ struct StoredPin {
     /// When the pin runs out; `None` once unpinned.
     until_ms: Option<i64>,
 }
+
+/// How long after sending a message WhatsApp lets it be edited.
+pub const EDIT_WINDOW_MS: i64 = 15 * 60 * 1000;
 
 /// The most messages a chat shows pinned, as WhatsApp allows.
 pub const MAX_PINNED_MESSAGES: usize = 3;
@@ -532,6 +538,9 @@ pub struct MessageDto {
     pub starred: bool,
     /// Taken back by its sender: only a placeholder is left.
     pub deleted: bool,
+    /// Changed by its sender after it was sent.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub edited: bool,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -1369,7 +1378,9 @@ impl ChatStore {
                     known.id = reply.id.clone();
                 }
             }
-            if known.content.link.as_ref().is_none_or(|link| link.large.is_none())
+            // An edit's card is newer than the one the message came with.
+            if known.edited_ms.is_none()
+                && known.content.link.as_ref().is_none_or(|link| link.large.is_none())
                 && message.content.link.is_some()
             {
                 known.content.link = message.content.link;
@@ -2130,6 +2141,50 @@ impl ChatStore {
         Some(self.to_dto(&chat_id, &message))
     }
 
+    /// Whether we can still change what one of our messages says: a text,
+    /// not deleted, sent less than WhatsApp's edit window ago.
+    pub fn can_edit(&self, chat: &str, id: &str) -> bool {
+        self.find_message(chat, id).is_some_and(|(_, m)| {
+            m.from_me && m.content.kind == MsgKind::Text && m.deleted.is_none() && now_ms() - m.ts_ms < EDIT_WINDOW_MS
+        })
+    }
+
+    /// Changes what a message says, as its sender edited it at `at_ms`. A
+    /// photo or file keeps its file and takes the new caption. Ignored for
+    /// someone else's message, a deleted one, or an edit older than the
+    /// one shown. Returns the message when it changed.
+    pub fn edit_message(&mut self, chat: &str, id: &str, editor: Option<&str>, new: Content, at_ms: i64) -> Option<MessageDto> {
+        let chat_id = self.canonical(chat);
+        let editor = editor.map(|e| self.canonical(e));
+        let is_own = editor.as_deref().is_none_or(|e| self.is_own(e));
+        let is_group = self.chats.get(&chat_id)?.is_group;
+        let message = self.chats.get_mut(&chat_id)?.messages.iter_mut().find(|m| m.id == id)?;
+        let sender_ok = if message.from_me {
+            is_own
+        } else if is_group {
+            editor.is_some() && message.author_jid.as_deref().is_none_or(|a| Some(a) == editor.as_deref())
+        } else {
+            !is_own
+        };
+        if !sender_ok || message.deleted.is_some() || message.edited_ms.is_some_and(|at| at >= at_ms) {
+            return None;
+        }
+        let text = new.text.filter(|t| !t.trim().is_empty());
+        match message.content.kind {
+            MsgKind::Text => {
+                let text = text?;
+                // The card stays while its link does.
+                let kept = message.content.link.take().filter(|link| text.contains(&link.url));
+                message.content.link = new.link.or(kept);
+                message.content.text = Some(text);
+            }
+            _ => message.content.text = text,
+        }
+        message.edited_ms = Some(at_ms);
+        let message = message.clone();
+        Some(self.to_dto(&chat_id, &message))
+    }
+
     /// Sets or clears one person's reaction. Returns the message when it is known.
     pub fn set_reaction(
         &mut self,
@@ -2423,6 +2478,7 @@ impl ChatStore {
             reactions: self.reaction_dtos(&m.reactions),
             starred: m.starred,
             deleted: m.deleted.is_some(),
+            edited: m.edited_ms.is_some() && m.deleted.is_none(),
         }
     }
 
@@ -2498,6 +2554,7 @@ mod tests {
                 read_by: Vec::new(),
                 starred: false,
                 deleted: None,
+                edited_ms: None,
             },
         }
     }
@@ -2751,6 +2808,25 @@ mod tests {
         assert!(!chats[1].pinned);
         assert!(chats.iter().find(|c| c.id == "2@s.whatsapp.net").is_some_and(|c| c.archived));
         assert!(chats.iter().filter(|c| c.id != "2@s.whatsapp.net").all(|c| !c.archived));
+    }
+
+    #[test]
+    fn edits_change_the_text_once_and_only_from_the_sender() {
+        let mut store = ChatStore::default();
+        let chat = "1@s.whatsapp.net";
+        store.ingest(incoming(chat, "a", now_ms(), false), false);
+        let edited = store.edit_message(chat, "a", Some(chat), Content::text("hello", None), 10).expect("edited");
+        assert_eq!(edited.text.as_deref(), Some("hello"));
+        assert!(edited.edited);
+        assert!(store.edit_message(chat, "a", Some(chat), Content::text("older", None), 5).is_none(), "an older edit replayed");
+        assert!(store.edit_message(chat, "a", None, Content::text("mine", None), 20).is_none(), "not ours to edit");
+        store.ingest(incoming(chat, "a", now_ms(), false), false);
+        assert_eq!(store.messages(chat)[0].text.as_deref(), Some("hello"), "history replay keeps the edit");
+        assert!(!store.can_edit(chat, "a"), "only our own texts");
+        store.ingest(incoming(chat, "b", now_ms(), true), false);
+        assert!(store.can_edit(chat, "b"));
+        store.ingest(incoming(chat, "c", now_ms() - EDIT_WINDOW_MS - 1, true), false);
+        assert!(!store.can_edit(chat, "c"), "past the window");
     }
 
     #[test]

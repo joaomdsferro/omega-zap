@@ -222,6 +222,47 @@ pub fn reaction(message: &wa::Message) -> Option<(String, Option<String>)> {
     Some((target, non_empty(&reaction.text)))
 }
 
+/// A message changed by its sender: which one, what it says now, and when.
+pub struct Edit {
+    pub target: String,
+    pub content: Content,
+    pub at_ms: i64,
+}
+
+/// The edit a message carries. `sent_ms` stands in for the time when the
+/// edit has none of its own.
+pub fn edit(message: &wa::Message, sent_ms: i64) -> Option<Edit> {
+    let protocol = message.get_base_message().protocol_message.as_option()?;
+    if protocol.r#type != Some(wa::message::protocol_message::Type::MESSAGE_EDIT) {
+        return None;
+    }
+    Some(Edit {
+        target: protocol.key.as_option()?.id.clone()?,
+        content: content(protocol.edited_message.as_option()?)?,
+        at_ms: protocol.timestamp_ms.filter(|t| *t > 0).unwrap_or(sent_ms),
+    })
+}
+
+/// Whether a message is an edit sealed with the original message's secret,
+/// which this app does not keep.
+pub fn is_sealed_edit(message: &wa::Message) -> bool {
+    whatsapp_rust::features::message_edit::extract_envelope(message.get_base_message()).is_some()
+}
+
+/// An edit recorded in a history-sync conversation, and who made it
+/// (`None` for us).
+pub fn history_edit(chat_id: &str, item: &wa::HistorySyncMsg) -> Option<(Option<String>, Edit)> {
+    let web = item.message.as_option()?;
+    let key = web.key.as_option()?;
+    let edit = edit(web.message.as_option()?, web.message_timestamp.unwrap_or_default() as i64 * 1000)?;
+    let editor = if key.from_me.unwrap_or(false) {
+        None
+    } else {
+        Some(key.participant.clone().or_else(|| web.participant.clone()).unwrap_or_else(|| chat_id.to_string()))
+    };
+    Some((editor, edit))
+}
+
 /// A message pinned for everyone, or unpinned.
 pub struct Pin {
     /// The pinned message.
@@ -356,6 +397,7 @@ pub fn live(message: &wa::Message, info: &MessageInfo) -> Option<Incoming> {
             read_by: Vec::new(),
             starred: false,
             deleted: None,
+            edited_ms: None,
         },
     })
 }
@@ -399,6 +441,7 @@ pub fn history(chat_id: &str, item: &wa::HistorySyncMsg) -> Option<Incoming> {
             read_by: Vec::new(),
             starred: web.starred.unwrap_or(false),
             deleted: None,
+            edited_ms: None,
         },
     })
 }

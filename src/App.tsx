@@ -656,6 +656,15 @@ function Shell() {
     };
   }, [selectedBackend]);
 
+  const editMessage = useMemo(() => {
+    const backend = selectedBackend;
+    if (!backend?.editMessage) return undefined;
+    return async (message: Message, text: string) => {
+      const edited = await backend.editMessage!(message.chatId, message.id, text);
+      setMessages((prev) => upsert(prev, edited));
+    };
+  }, [selectedBackend]);
+
   const react = useMemo(() => {
     const backend = selectedBackend;
     if (!backend?.react) return undefined;
@@ -1023,6 +1032,7 @@ function Shell() {
         onLoadOlder={selectedBackend?.olderMessages ? loadOlder : undefined}
         historyTick={historyTick}
         searchMessages={searchMessages}
+        onEdit={canSend ? editMessage : undefined}
         loadPinned={loadPinned}
         pinsTick={pinsTick}
         loadGroup={loadGroup}
