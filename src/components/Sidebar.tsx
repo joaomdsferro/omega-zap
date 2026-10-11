@@ -1,6 +1,8 @@
-import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
-import type { Chat } from "../backend";
+import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import type { Chat, StarredMessage } from "../backend";
 import { ChatList } from "./ChatList";
+import { MessageResults } from "./MessageResults";
+import { matches } from "../lib/search";
 import { MoreIcon, NewChatIcon, PlusIcon, SearchIcon, SettingsIcon, StarIcon } from "./Icons";
 import { PopupMenu, type MenuEntry } from "./PopupMenu";
 
@@ -20,10 +22,18 @@ interface SidebarProps {
   chats: Chat[];
   selected: Chat | null;
   onSelect: (chat: Chat) => void;
+  /** The pointer rests on a chat that may be opened next. */
+  onPeek?: (chat: Chat) => void;
+  /** A chat to point out, as `account:id`. */
+  highlighted?: string | null;
+  /** The pointed-out chat is fading back. */
+  highlightFading?: boolean;
   /** Mark each chat with its network: the list mixes accounts. */
   showAccount?: boolean;
   /** Shown above the list: demo notice, connection problems, sync progress. */
   banner?: ReactNode;
+  /** Shown under the list, such as how far loading the history has got. */
+  footer?: ReactNode;
   emptyText: string;
   /** The custom lists, by name, in order. */
   lists: string[];
@@ -37,7 +47,16 @@ interface SidebarProps {
   /** Opens the list editor, with a chat already in the new list. */
   onNewList: (chat?: Chat) => void;
   onEditList: (list: string) => void;
+  /** Finds messages with the words of a search, across the chats shown. */
+  searchMessages?: (query: string) => Promise<StarredMessage[]>;
+  /** Opens a found message's chat on it. */
+  onOpenMessage?: (found: StarredMessage) => void;
 }
+
+/** Searches shorter than this look only at chat names. */
+const MIN_MESSAGE_SEARCH = 2;
+/** Typing goes on for this long before messages are searched. */
+const SEARCH_DELAY_MS = 150;
 
 interface OpenMenu {
   x: number;
@@ -98,8 +117,12 @@ export function Sidebar({
   chats,
   selected,
   onSelect,
+  onPeek,
+  highlighted,
+  highlightFading,
   showAccount,
   banner,
+  footer,
   emptyText,
   lists,
   listsOf,
@@ -110,8 +133,27 @@ export function Sidebar({
   onToggleList,
   onNewList,
   onEditList,
+  searchMessages,
+  onOpenMessage,
 }: SidebarProps) {
   const [query, setQuery] = useState("");
+  const [found, setFound] = useState<{ query: string; items: StarredMessage[] } | null>(null);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < MIN_MESSAGE_SEARCH || !searchMessages) return setFound(null);
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      searchMessages(q)
+        .then((items) => alive && setFound({ query: q, items }))
+        .catch(() => alive && setFound(null));
+    }, SEARCH_DELAY_MS);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [query, searchMessages]);
+  const foundMessages = query.trim().length >= MIN_MESSAGE_SEARCH ? (found?.items ?? []) : [];
   const [chosen, setChosen] = useState<Filter>("all");
   const [menu, setMenu] = useState<OpenMenu | null>(null);
 
@@ -130,13 +172,22 @@ export function Sidebar({
   const active = filters.find((f) => f.id === chosen) ?? filters[0];
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim();
     return chats.filter((c) => {
       if (!active.test(c)) return false;
       if (!q) return true;
-      return c.name.toLowerCase().includes(q) || c.lastMessage.toLowerCase().includes(q);
+      return matches(c.name, q) || matches(c.lastMessage, q);
     });
   }, [chats, query, active]);
+
+  // A chat pointed out has to be in sight: drop a filter or search hiding it.
+  useEffect(() => {
+    if (!highlighted || filtered.some((c) => `${c.account}:${c.id}` === highlighted)) return;
+    if (!chats.some((c) => `${c.account}:${c.id}` === highlighted)) return;
+    setQuery("");
+    setChosen("all");
+    // Only when it is asked for, not each time the list changes after.
+  }, [highlighted]);
 
   function openChatMenu(chat: Chat, x: number, y: number) {
     const inLists = listsOf(chat);
@@ -204,7 +255,7 @@ export function Sidebar({
             onKeyDown={(e) => {
               if (e.key === "Escape") setQuery("");
             }}
-            placeholder="Search"
+            placeholder="Search chats and messages"
             className="h-9 w-full rounded-lg bg-(--search-bg) pr-3 pl-12 text-[15px] text-(--text-primary) outline-none placeholder:text-(--text-secondary) focus-visible:outline-none"
           />
         </div>
@@ -250,7 +301,7 @@ export function Sidebar({
       {banner}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {filtered.length === 0 ? (
+        {filtered.length === 0 && foundMessages.length === 0 ? (
           <div className="px-6 py-10 text-center text-[14px] text-(--text-secondary)">
             <p>{chats.length === 0 ? emptyText : query ? "No chats match" : `No chats in ${active.label}`}</p>
             {active.id.startsWith("list:") && !query && chats.length > 0 ? (
@@ -264,19 +315,37 @@ export function Sidebar({
             ) : null}
           </div>
         ) : (
-          <ChatList
-            chats={filtered}
-            selected={selected}
-            onSelect={onSelect}
-            showAccount={showAccount}
-            onMenu={openChatMenu}
-          />
+          <>
+            {foundMessages.length > 0 && filtered.length > 0 ? <SectionHeading>Chats</SectionHeading> : null}
+            <ChatList
+              chats={filtered}
+              selected={selected}
+              onSelect={onSelect}
+              onPeek={onPeek}
+              highlighted={highlighted}
+              highlightFading={highlightFading}
+              showAccount={showAccount}
+              onMenu={openChatMenu}
+            />
+            {foundMessages.length > 0 && onOpenMessage ? (
+              <>
+                <SectionHeading>Messages</SectionHeading>
+                <MessageResults found={foundMessages} query={found?.query ?? query} showAccount={showAccount} onOpen={onOpenMessage} />
+              </>
+            ) : null}
+          </>
         )}
       </div>
+
+      {footer}
 
       {menu ? (
         <PopupMenu x={menu.x} y={menu.y} label={menu.label} items={menu.items} onClose={() => setMenu(null)} />
       ) : null}
     </div>
   );
+}
+
+function SectionHeading({ children }: { children: string }) {
+  return <h2 className="px-6 pt-4 pb-2 text-[15px] text-(--accent)">{children}</h2>;
 }

@@ -1,15 +1,22 @@
-import { memo, useCallback, useRef } from "react";
+import { memo, useCallback, useEffect, useRef } from "react";
 import type { Chat } from "../backend";
 import { formatListTime } from "../lib/format";
 import { ACCOUNTS } from "../accounts/accounts";
 import { AccountBadge } from "./AccountBadge";
 import { Avatar } from "./Avatar";
+import { FormattedLine } from "../lib/markup";
 import { ChevronDownIcon, MuteIcon, PinIcon, Ticks } from "./Icons";
 
 interface ChatListProps {
   chats: Chat[];
   selected: Chat | null;
   onSelect: (chat: Chat) => void;
+  /** The pointer rests on a chat that may be opened next. */
+  onPeek?: (chat: Chat) => void;
+  /** A chat to point out, as `account:id`. */
+  highlighted?: string | null;
+  /** The pointed-out chat is fading back. */
+  highlightFading?: boolean;
   /** Mark each chat with its network: the list mixes accounts. */
   showAccount?: boolean;
   /** Opens a chat's options at a point on screen. */
@@ -19,21 +26,41 @@ interface ChatListProps {
 interface ChatRowProps {
   chat: Chat;
   selected: boolean;
+  highlighted: boolean;
+  fading: boolean;
   showAccount?: boolean;
   onSelect: (chat: Chat) => void;
+  onPeek?: (chat: Chat) => void;
   onMenu?: (chat: Chat, x: number, y: number) => void;
 }
 
 /** One chat. Redrawn only when it or its selection changes, not with every other row. */
-const ChatRow = memo(function ChatRow({ chat, selected, showAccount, onSelect, onMenu }: ChatRowProps) {
+const ChatRow = memo(function ChatRow({
+  chat,
+  selected,
+  highlighted,
+  fading,
+  showAccount,
+  onSelect,
+  onPeek,
+  onMenu,
+}: ChatRowProps) {
   const unread = chat.unread > 0;
+  const row = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (highlighted) row.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [highlighted]);
   return (
-    <li className="group/row relative">
+    <li
+      ref={row}
+      className={["group/row relative", highlighted ? "chat-highlight" : "", highlighted && fading ? "chat-highlight-out" : ""].join(" ")}
+    >
       <button
         type="button"
         role="option"
         aria-selected={selected}
         onClick={() => onSelect(chat)}
+        onPointerEnter={onPeek && !selected ? () => onPeek(chat) : undefined}
         onContextMenu={
           onMenu
             ? (event) => {
@@ -79,7 +106,8 @@ const ChatRow = memo(function ChatRow({ chat, selected, showAccount, onSelect, o
               ].join(" ")}
               dateTime={chat.lastAt}
             >
-              {formatListTime(chat.lastAt)}
+              {/* A chat named by the first sync without any message may have no date. */}
+              {Date.parse(chat.lastAt) > 0 ? formatListTime(chat.lastAt) : ""}
             </time>
           </div>
           <div className="mt-0.5 flex items-center gap-1.5 text-(--text-secondary)">
@@ -88,7 +116,7 @@ const ChatRow = memo(function ChatRow({ chat, selected, showAccount, onSelect, o
                 <Ticks status={chat.lastStatus} account={chat.account} />
               </span>
             ) : null}
-            <p className="min-w-0 flex-1 truncate text-[14px] leading-5">{chat.lastMessage}</p>
+            <p className="min-w-0 flex-1 truncate text-[14px] leading-5"><FormattedLine text={chat.lastMessage ?? ""} emojiSize={18} /></p>
             {chat.muted ? <MuteIcon size={16} aria-label="Muted" /> : null}
             {chat.pinned ? <PinIcon size={16} aria-label="Pinned" /> : null}
             {unread ? (
@@ -122,12 +150,22 @@ const ChatRow = memo(function ChatRow({ chat, selected, showAccount, onSelect, o
   );
 });
 
-export function ChatList({ chats, selected: current, onSelect, showAccount, onMenu }: ChatListProps) {
+export function ChatList({
+  chats,
+  selected: current,
+  onSelect,
+  onPeek,
+  highlighted,
+  highlightFading,
+  showAccount,
+  onMenu,
+}: ChatListProps) {
   // The rows get handlers that never change, so a new handler from above
   // does not redraw every row.
-  const handlers = useRef({ onSelect, onMenu });
-  handlers.current = { onSelect, onMenu };
+  const handlers = useRef({ onSelect, onPeek, onMenu });
+  handlers.current = { onSelect, onPeek, onMenu };
   const select = useCallback((chat: Chat) => handlers.current.onSelect(chat), []);
+  const peek = useCallback((chat: Chat) => handlers.current.onPeek?.(chat), []);
   const menu = useCallback((chat: Chat, x: number, y: number) => handlers.current.onMenu?.(chat, x, y), []);
   return (
     <ul className="flex flex-col" role="listbox" aria-label="Chats">
@@ -136,8 +174,11 @@ export function ChatList({ chats, selected: current, onSelect, showAccount, onMe
           key={`${chat.account}:${chat.id}`}
           chat={chat}
           selected={chat.id === current?.id && chat.account === current.account}
+          highlighted={highlighted === `${chat.account}:${chat.id}`}
+          fading={highlighted === `${chat.account}:${chat.id}` && Boolean(highlightFading)}
           showAccount={showAccount}
           onSelect={select}
+          onPeek={onPeek ? peek : undefined}
           onMenu={onMenu ? menu : undefined}
         />
       ))}
