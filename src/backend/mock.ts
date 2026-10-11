@@ -1,7 +1,7 @@
 import { matches } from "../lib/search";
 import { hueFor, initialsFor } from "../lib/avatar";
 import { DEMO_CHATS, DEMO_MESSAGES } from "../data/demo-chats";
-import type { BackendEvent, Chat, ChatBackend, Contact, CustomList, GroupInfo, Message, OutgoingLink, PinNote, Pins, StarredMessage } from "./types";
+import type { BackendEvent, Chat, ChatBackend, Contact, CustomList, GroupInfo, MemberChange, Message, OutgoingLink, PinNote, Pins, StarredMessage } from "./types";
 
 /** A demo pin or unpin; pins that were undone are marked so. */
 type MockPin = PinNote & { unpinned?: boolean };
@@ -75,8 +75,13 @@ export class MockBackend implements ChatBackend {
     return list[at];
   }
 
+  /** Demo groups as changed from here, by id. */
+  private groups = new Map<string, GroupInfo>();
+
   /** Demo group info: whoever wrote in the group are its members. */
   async groupInfo(id: string): Promise<GroupInfo> {
+    const changed = this.groups.get(id);
+    if (changed) return { ...changed, left: this.chats.find((c) => c.id === id)?.left };
     const chat = this.chats.find((c) => c.id === id);
     const name = chat?.name ?? "Group";
     const authors = [...new Set((this.messages.get(id) ?? []).filter((m) => !m.fromMe).map((m) => m.author ?? "Someone"))];
@@ -100,9 +105,38 @@ export class MockBackend implements ChatBackend {
       starred: 0,
       mediaCount: 0,
       recentMedia: [],
-      participants: [member("You", true), ...authors.map((who, i) => member(who, false, i === 0))],
-      isAdmin: false,
+      participants: [member("You", true, true), ...authors.map((who, i) => member(who, false, i === 0))],
+      isAdmin: true,
+      left: chat?.left,
     };
+  }
+
+  async leaveGroup(id: string): Promise<void> {
+    this.update(id, { left: true });
+  }
+
+  async editGroup(id: string, { name, description }: { name?: string; description?: string }): Promise<GroupInfo> {
+    const group = await this.groupInfo(id);
+    const next = { ...group, name: name?.trim() || group.name, description: description === undefined ? group.description : description.trim() || undefined };
+    this.groups.set(id, next);
+    if (name) this.update(id, { name: next.name, initials: initialsFor(next.name) });
+    return next;
+  }
+
+  async changeMembers(id: string, change: MemberChange, members: string[]): Promise<GroupInfo> {
+    const group = await this.groupInfo(id);
+    let participants = group.participants;
+    if (change === "remove") participants = participants.filter((m) => !members.includes(m.id));
+    else if (change === "add") {
+      const known = new Set(participants.map((m) => m.id));
+      participants = [
+        ...participants,
+        ...members.filter((m) => !known.has(m)).map((m) => ({ id: m, name: m, avatarHue: hueFor(m), initials: initialsFor(m), isMe: false, admin: false })),
+      ];
+    } else participants = participants.map((m) => (members.includes(m.id) ? { ...m, admin: change === "promote" } : m));
+    const next = { ...group, participants, members: participants.length };
+    this.groups.set(id, next);
+    return next;
   }
 
   /** Pins by chat, the latest last; starts as the first two texts of each chat. */
@@ -227,7 +261,7 @@ export class MockBackend implements ChatBackend {
   async clearChat(chatId: string, keepStarred: boolean): Promise<void> {
     this.messages.set(chatId, (this.messages.get(chatId) ?? []).filter((m) => keepStarred && m.starred));
     this.emit({ type: "cleared", chatId });
-    this.update(chatId, { lastMessage: "", unread: 0, markedUnread: false });
+    this.update(chatId, { lastMessage: "", unread: 0, markedUnread: false, cleared: true });
   }
 
   private update(chatId: string, patch: Partial<Chat>) {

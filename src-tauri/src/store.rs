@@ -475,6 +475,10 @@ struct StoredChat {
     /// Who pinned or unpinned what and when, for the "You pinned a message"
     /// lines in the conversation. Kept after an unpin, as WhatsApp keeps them.
     pin_notes: Vec<StoredPin>,
+    /// We are no longer in the group: we left or were removed.
+    left: bool,
+    /// Only the group's admins may change its name, description and picture.
+    info_locked: bool,
 }
 
 /// A message pinned in a chat for everyone in it, or unpinned.
@@ -583,6 +587,10 @@ pub struct ChatSummary {
     pub lists: Vec<String>,
     /// We blocked them.
     pub blocked: bool,
+    /// A group we are no longer in.
+    pub left: bool,
+    /// Its messages were cleared: none are coming from the phone.
+    pub cleared: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -776,6 +784,10 @@ pub struct GroupInfoDto {
     pub participants: Vec<MemberDto>,
     /// Whether we are an admin of it.
     pub is_admin: bool,
+    /// We are no longer in it.
+    pub left: bool,
+    /// Only admins may change its name, description and picture.
+    pub info_locked: bool,
 }
 
 /// Someone in a group, as a group lookup names them.
@@ -794,6 +806,19 @@ pub struct GroupFacts {
     pub description: Option<String>,
     pub created_ms: Option<i64>,
     pub creator: Option<String>,
+    /// Only admins may edit the group's info.
+    pub locked: bool,
+}
+
+/// A change to a group, as its notifications tell it.
+pub enum GroupChange {
+    Subject(String),
+    Description(Option<String>),
+    Added(Vec<GroupMember>),
+    Removed(Vec<String>),
+    Promoted(Vec<String>),
+    Demoted(Vec<String>),
+    Locked(bool),
 }
 
 /// A group, as listed in someone's contact info.
@@ -1388,6 +1413,8 @@ impl ChatStore {
             media_count,
             recent_media,
             is_admin: participants.iter().any(|m| m.is_me && m.admin),
+            left: chat.is_some_and(|c| c.left),
+            info_locked: chat.is_some_and(|c| c.info_locked),
             participants,
             id,
         }
@@ -1400,6 +1427,7 @@ impl ChatStore {
             chat.description = facts.description.filter(|d| !d.trim().is_empty());
             chat.created_ms = facts.created_ms.or(chat.created_ms);
             chat.creator = creator.or(chat.creator.take());
+            chat.info_locked = facts.locked;
         }
     }
 
@@ -1449,11 +1477,105 @@ impl ChatStore {
             members.iter().filter(|m| m.admin || m.super_admin).map(|m| (!m.super_admin, self.canonical(&m.id))).collect();
         admins.sort();
         let group = self.canonical(group);
+        // Only members are told who is in a group. Not finding ourselves
+        // proves nothing: our id may be one not mapped yet.
+        let in_it = ids.iter().any(|id| self.own_ids.contains(id));
         if let Some(chat) = self.chats.get_mut(&group) {
             chat.members = Some(ids.len() as u32);
             chat.participants = ids;
             chat.admins = admins.into_iter().map(|(_, id)| id).collect();
+            chat.left &= !in_it;
         }
+    }
+
+    /// Marks a group as one we left or are back in.
+    pub fn set_left(&mut self, group: &str, left: bool) {
+        if let Some(chat) = self.chats.get_mut(&self.canonical(group)) {
+            chat.left = left;
+            if left {
+                chat.admins.retain(|a| !self.own_ids.contains(a));
+                let before = chat.participants.len();
+                chat.participants.retain(|p| !self.own_ids.contains(p));
+                if chat.participants.len() < before {
+                    chat.members = Some(chat.participants.len() as u32);
+                }
+            }
+        }
+    }
+
+    /// Applies what a group's notification says changed. Returns whether
+    /// anything did.
+    pub fn apply_group_change(&mut self, group: &str, change: GroupChange) -> bool {
+        let group = self.canonical(group);
+        if !self.chats.contains_key(&group) {
+            return false;
+        }
+        let ids = |store: &Self, list: Vec<String>| -> Vec<String> { list.iter().map(|j| store.canonical(j)).collect() };
+        let change = match change {
+            GroupChange::Added(members) => {
+                for member in &members {
+                    if let (Some(pn), Some(lid)) = (&member.pn, &member.lid) {
+                        self.learn_mapping(lid, pn);
+                    }
+                }
+                GroupChange::Added(members)
+            }
+            other => other,
+        };
+        let own = self.own_ids.clone();
+        let canon: Vec<String> = match &change {
+            GroupChange::Added(members) => members.iter().map(|m| self.canonical(&m.id)).collect(),
+            GroupChange::Removed(list) | GroupChange::Promoted(list) | GroupChange::Demoted(list) => ids(self, list.clone()),
+            _ => Vec::new(),
+        };
+        let mine = canon.iter().any(|id| own.contains(id));
+        let Some(chat) = self.chats.get_mut(&group) else { return false };
+        match change {
+            GroupChange::Subject(name) => {
+                if name.trim().is_empty() {
+                    return false;
+                }
+                chat.name = Some(name.trim().to_string());
+            }
+            GroupChange::Description(text) => chat.description = text.filter(|d| !d.trim().is_empty()),
+            GroupChange::Locked(locked) => chat.info_locked = locked,
+            GroupChange::Added(_) => {
+                let known = !chat.participants.is_empty();
+                for id in canon {
+                    if !chat.participants.contains(&id) {
+                        if known {
+                            chat.participants.push(id);
+                        } else {
+                            chat.members = chat.members.map(|n| n + 1);
+                        }
+                    }
+                }
+                if known {
+                    chat.members = Some(chat.participants.len() as u32);
+                }
+                if mine {
+                    chat.left = false;
+                }
+            }
+            GroupChange::Removed(_) => {
+                let before = chat.participants.len();
+                chat.participants.retain(|p| !canon.contains(p));
+                chat.admins.retain(|a| !canon.contains(a));
+                chat.members = if before > 0 { Some(chat.participants.len() as u32) } else { chat.members.map(|n| n.saturating_sub(canon.len() as u32)) };
+                if mine {
+                    chat.left = true;
+                }
+            }
+            GroupChange::Promoted(_) => {
+                for id in canon {
+                    if !chat.admins.contains(&id) {
+                        chat.admins.push(id);
+                    }
+                }
+            }
+            GroupChange::Demoted(_) => chat.admins.retain(|a| !canon.contains(a)),
+        }
+        true
     }
 
     /// The groups someone is in with us, as far as their members are known.
@@ -2718,6 +2840,8 @@ impl ChatStore {
                         .map(|(list, _)| list.to_string())
                         .collect(),
                     blocked: self.blocked.contains(id),
+                    left: chat.left,
+                    cleared: self.cleared.contains_key(id),
                 }
             })
             .collect();
@@ -2964,6 +3088,30 @@ mod tests {
         store.ingest(incoming(other, "y", 5_000, false), true);
         assert!(store.delete_chat(other, 2_000));
         assert_eq!(store.chats[other].messages.len(), 1);
+    }
+
+    #[test]
+    fn group_changes_follow_members_and_admins() {
+        let group = "120363000000000000@g.us";
+        let me = "351922222222@s.whatsapp.net";
+        let maya = "351911111111@s.whatsapp.net";
+        let mut store = ChatStore::default();
+        store.set_own_ids([me.to_string()]);
+        let mut message = incoming(group, "a", 1_000, false);
+        message.is_group = true;
+        store.ingest(message, false);
+        let member = |id: &str| GroupMember { id: id.into(), pn: None, lid: None, admin: false, super_admin: false };
+        store.set_group_participants(group, &[member(me)]);
+        assert!(store.apply_group_change(group, GroupChange::Added(vec![member(maya)])));
+        assert!(store.apply_group_change(group, GroupChange::Promoted(vec![maya.into()])));
+        assert!(store.apply_group_change(group, GroupChange::Subject("Trip".into())));
+        let info = store.group_info(group);
+        assert_eq!((info.name.as_str(), info.members, info.left), ("Trip", Some(2), false));
+        assert!(info.participants.iter().any(|m| m.id == maya && m.admin));
+        store.apply_group_change(group, GroupChange::Removed(vec![me.into()]));
+        let info = store.group_info(group);
+        assert_eq!((info.members, info.left), (Some(1), true));
+        assert!(store.list_chats()[0].left);
     }
 
     #[test]

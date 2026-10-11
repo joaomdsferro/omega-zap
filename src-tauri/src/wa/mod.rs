@@ -13,7 +13,8 @@ use tauri::{AppHandle, Emitter};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use whatsapp_rust::download::{DownloadParams, MediaType};
-use whatsapp_rust::features::SyncActionMessageRange;
+use whatsapp_rust::features::{GroupDescription, GroupSubject, PreviousDescription, SyncActionMessageRange};
+use whatsapp_rust::wacore::stanza::groups::{GroupNotificationAction, GroupParticipantInfo};
 use whatsapp_rust::http::HttpRequest;
 use whatsapp_rust::prelude::*;
 use whatsapp_rust::wacore::store::DevicePropsOverride;
@@ -1465,6 +1466,82 @@ impl WaManager {
         Ok(self.group_info(id))
     }
 
+    /// Leaves a group. Its chat stays, read-only, until it is deleted.
+    pub async fn leave_group(&self, id: &str) -> Result<(), String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = id.parse().map_err(|e| format!("Not a group: {e}"))?;
+        client.groups().leave(jid).await.map_err(|e| format!("You did not leave the group: {e}"))?;
+        lock(&self.store).set_left(id, true);
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// Renames a group, or changes or removes its description.
+    pub async fn edit_group(&self, id: &str, name: Option<String>, description: Option<String>) -> Result<store::GroupInfoDto, String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = id.parse().map_err(|e| format!("Not a group: {e}"))?;
+        let groups = client.groups();
+        if let Some(name) = name {
+            let subject = GroupSubject::new(name.trim()).map_err(|e| format!("That name can't be used: {e}"))?;
+            groups.set_subject(jid.clone(), subject).await.map_err(|e| format!("The group was not renamed: {e}"))?;
+            lock(&self.store).apply_group_change(id, store::GroupChange::Subject(name));
+        }
+        if let Some(text) = description {
+            let text = text.trim();
+            let body = if text.is_empty() {
+                None
+            } else {
+                Some(GroupDescription::new(text).map_err(|e| format!("That description can't be used: {e}"))?)
+            };
+            groups
+                .set_description(jid, body, PreviousDescription::Resolve)
+                .await
+                .map_err(|e| format!("The description was not changed: {e}"))?;
+            lock(&self.store).apply_group_change(id, store::GroupChange::Description(Some(text.to_string())));
+        }
+        self.mark_dirty();
+        Ok(self.group_info(id))
+    }
+
+    /// Adds people to a group, removes one, or makes one an admin or not.
+    /// Says who could not be changed, and why when the server says.
+    pub async fn change_members(&self, id: &str, change: &str, members: Vec<String>) -> Result<store::GroupInfoDto, String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = id.parse().map_err(|e| format!("Not a group: {e}"))?;
+        let people: Vec<Jid> = members.iter().map(|m| m.parse::<Jid>()).collect::<Result<_, _>>().map_err(|e| format!("Not a person: {e}"))?;
+        let groups = client.groups();
+        let result = match change {
+            "add" => groups.add_participants(jid.clone(), &people).await,
+            "remove" => groups.remove_participants(jid.clone(), &people).await,
+            "promote" => groups.promote_participants(jid.clone(), &people).await,
+            "demote" => groups.demote_participants(jid.clone(), &people).await,
+            other => return Err(format!("Unknown change: {other}")),
+        }
+        .map_err(|e| format!("The group was not changed: {e}"))?;
+        let failed: Vec<String> = result
+            .iter()
+            .filter(|r| !r.is_ok())
+            .map(|r| {
+                let who = lock(&self.store).display_name(&r.jid.to_non_ad_string());
+                match r.error.as_deref() {
+                    // Their privacy settings only let contacts add them: WhatsApp invites them instead.
+                    Some("403") => format!("{who} can only be added by an invite link"),
+                    Some("409") if change == "add" => format!("{who} is already in the group"),
+                    Some("408") => format!("{who} left recently and can't be added yet"),
+                    Some(code) => format!("{who} ({code})"),
+                    None => who,
+                }
+            })
+            .collect();
+        // The server's own answer: who is in it and who is admin.
+        let info = self.group_details(id).await.unwrap_or_else(|_| self.group_info(id));
+        if failed.is_empty() {
+            Ok(info)
+        } else {
+            Err(format!("Not changed: {}.", failed.join("; ")))
+        }
+    }
+
     /// Looks up who is in every group, in one request, at most once a day:
     /// contact info finds the groups in common from it.
     fn sync_participants(self: &Arc<Self>, generation: u64, client: Arc<Client>) {
@@ -2272,6 +2349,14 @@ impl WaManager {
                 );
                 self.mark_dirty();
             }
+            Event::GroupUpdate(update) => {
+                let Some(change) = group_change(&update.action) else { return };
+                let group = update.group_jid.to_non_ad_string();
+                if lock(&self.store).apply_group_change(&group, change) {
+                    self.mark_dirty();
+                    let _ = self.app.emit("wa://group", lock(&self.store).chat_key(&group));
+                }
+            }
             Event::DeleteChatUpdate(update) => {
                 let chat = update.jid.to_non_ad_string();
                 let before = range_end(update.action.message_range.as_option(), update.action_timestamp.unwrap_or(update.timestamp).timestamp_millis());
@@ -2647,5 +2732,32 @@ fn facts_of(metadata: &whatsapp_rust::features::GroupMetadata) -> store::GroupFa
         description: metadata.description.clone(),
         created_ms: metadata.creation_time.map(|t| t as i64 * 1000),
         creator: metadata.creator_pn.as_ref().or(metadata.creator.as_ref()).map(|j| j.to_non_ad_string()),
+        locked: metadata.is_locked,
     }
+}
+
+/// What a group notification changes that the store keeps.
+fn group_change(action: &GroupNotificationAction) -> Option<store::GroupChange> {
+    let ids = |list: &[GroupParticipantInfo]| list.iter().map(|p| p.jid.to_non_ad_string()).collect::<Vec<_>>();
+    Some(match action {
+        GroupNotificationAction::Subject { subject, .. } => store::GroupChange::Subject(subject.clone()),
+        GroupNotificationAction::Description { description, .. } => store::GroupChange::Description(description.clone()),
+        GroupNotificationAction::Add { participants, .. } => store::GroupChange::Added(
+            participants
+                .iter()
+                .map(|p| {
+                    let id = p.jid.to_non_ad_string();
+                    let pn = p.phone_number.as_ref().map(|j| j.to_non_ad_string());
+                    let lid = p.jid.is_lid().then(|| id.clone());
+                    store::GroupMember { id, pn, lid, admin: false, super_admin: false }
+                })
+                .collect(),
+        ),
+        GroupNotificationAction::Remove { participants, .. } => store::GroupChange::Removed(ids(participants)),
+        GroupNotificationAction::Promote { participants } => store::GroupChange::Promoted(ids(participants)),
+        GroupNotificationAction::Demote { participants } => store::GroupChange::Demoted(ids(participants)),
+        GroupNotificationAction::Locked { .. } => store::GroupChange::Locked(true),
+        GroupNotificationAction::Unlocked => store::GroupChange::Locked(false),
+        _ => return None,
+    })
 }

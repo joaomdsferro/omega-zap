@@ -7,6 +7,7 @@ import {
   ArchiveIcon,
   BlockedIcon,
   ClearIcon,
+  ExitIcon,
   BackIcon,
   CloseIcon,
   MoreIcon,
@@ -76,6 +77,8 @@ interface SidebarProps {
   onToggleBlocked?: (chat: Chat) => void;
   /** Whether a chat's account can block. */
   canBlock?: (chat: Chat) => boolean;
+  /** Ask before leaving a group; a group is left before it can be deleted. */
+  onExitGroup?: (chat: Chat) => void;
   /** Opens the list editor, with a chat already in the new list. */
   onNewList: (chat?: Chat) => void;
   onEditList: (list: string) => void;
@@ -172,6 +175,7 @@ export function Sidebar({
   onDeleteChat,
   onToggleBlocked,
   canBlock,
+  onExitGroup,
   onNewList,
   onEditList,
   searchMessages,
@@ -308,9 +312,13 @@ export function Sidebar({
         ...(onToggleBlocked && !chat.isGroup && canBlock?.(chat)
           ? [{ label: chat.blocked ? "Unblock" : "Block", icon: <BlockedIcon size={18} />, danger: !chat.blocked, onSelect: () => onToggleBlocked(chat) }]
           : []),
-        ...(onDeleteChat
-          ? [{ label: "Delete chat", icon: <TrashIcon size={18} />, danger: true, onSelect: () => onDeleteChat(chat) }]
-          : []),
+        ...(chat.isGroup && !chat.left
+          ? onExitGroup
+            ? [{ label: "Exit group", icon: <ExitIcon size={18} />, danger: true, onSelect: () => onExitGroup(chat) }]
+            : []
+          : onDeleteChat
+            ? [{ label: chat.isGroup ? "Delete group" : "Delete chat", icon: <TrashIcon size={18} />, danger: true, onSelect: () => onDeleteChat(chat) }]
+            : []),
       ],
     });
   }

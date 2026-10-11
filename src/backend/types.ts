@@ -163,6 +163,10 @@ export interface Chat {
   lists?: string[];
   /** We blocked them. */
   blocked?: boolean;
+  /** A group we are no longer in. */
+  left?: boolean;
+  /** Its messages were cleared: none are coming from the phone. */
+  cleared?: boolean;
 }
 
 /** A chat list the user made, such as "Family" or "Work". */
@@ -250,7 +254,14 @@ export interface GroupInfo {
   participants: GroupMember[];
   /** We are an admin of it. */
   isAdmin: boolean;
+  /** We are no longer in it. */
+  left?: boolean;
+  /** Only admins may change its name, description and picture. */
+  infoLocked?: boolean;
 }
+
+/** What admins can do to members of a group. */
+export type MemberChange = "add" | "remove" | "promote" | "demote";
 
 export interface GroupRef {
   id: string;
@@ -314,6 +325,8 @@ export type BackendEvent =
   | { type: "notice"; notice: Notice }
   /** Older messages of a chat came from the phone. */
   | { type: "history"; chatId: string }
+  /** A group's name, description or members changed. */
+  | { type: "group"; chatId: string }
   /** A chat was cleared or deleted, here or on another device. */
   | { type: "cleared"; chatId: string }
   /** A message of a chat was pinned or unpinned. */
@@ -404,6 +417,12 @@ export interface ChatBackend {
   setArchived?(chatId: string, archived: boolean): Promise<void>;
   /** Pins a chat to the top of the list, or unpins it. */
   setPinned?(chatId: string, pinned: boolean): Promise<void>;
+  /** Leaves a group; its chat stays, read-only. */
+  leaveGroup?(id: string): Promise<void>;
+  /** Renames a group or changes its description (empty removes it). */
+  editGroup?(id: string, changes: { name?: string; description?: string }): Promise<GroupInfo>;
+  /** Adds, removes, promotes or demotes members; fails naming who could not be changed. */
+  changeMembers?(id: string, change: MemberChange, members: string[]): Promise<GroupInfo>;
   /** Blocks someone, or unblocks them. */
   setBlocked?(id: string, blocked: boolean): Promise<void>;
   /** Deletes a chat and its messages. */

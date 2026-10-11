@@ -9,6 +9,9 @@ import {
   type ChatBackend,
   type Contact,
   type CustomList,
+  type GroupInfo,
+  type GroupMember,
+  type MemberChange,
   type Message,
   type OutgoingLink,
   type PrivacyCategory,
@@ -224,6 +227,7 @@ function Shell() {
   /** Counts older messages arriving from the phone for the open chat. */
   const [historyTick, setHistoryTick] = useState(0);
   const [pinsTick, setPinsTick] = useState(0);
+  const [groupTick, setGroupTick] = useState(0);
   /** The messages of recently opened chats, most recent last, by `account:id`. */
   const messageCache = useRef(new Map<string, Message[]>());
   /** The chat whose messages `messages` holds. */
@@ -328,6 +332,8 @@ function Shell() {
               if (messagesOf.current === `${backend.account}:${event.chatId}`) setMessages(list);
             })
             .catch(console.error);
+        } else if (event.type === "group") {
+          if (open?.account === backend.account && open.id === event.chatId) setGroupTick((tick) => tick + 1);
         } else if (event.type === "pins") {
           if (open?.account === backend.account && open.id === event.chatId) setPinsTick((tick) => tick + 1);
         } else if (event.type === "history") {
@@ -649,6 +655,7 @@ function Shell() {
 
   const loadGroup = useMemo(() => selectedBackend?.groupInfo?.bind(selectedBackend), [selectedBackend]);
   const loadGroupDetails = useMemo(() => selectedBackend?.groupDetails?.bind(selectedBackend), [selectedBackend]);
+  const loadContacts = useMemo(() => selectedBackend?.listContacts.bind(selectedBackend), [selectedBackend]);
   const loadPinned = useMemo(() => selectedBackend?.pinnedMessages?.bind(selectedBackend), [selectedBackend]);
   const pinMessage = useMemo(() => {
     const backend = selectedBackend;
@@ -859,18 +866,52 @@ function Shell() {
       danger: true,
       onConfirm: async (keepStarred) => {
         await backend.clearChat!(chat.id, keepStarred);
-        patchChat(backend, chat.id, { lastMessage: "", unread: 0, markedUnread: false });
+        patchChat(backend, chat.id, { lastMessage: "", unread: 0, markedUnread: false, cleared: true });
       },
     }).catch(() => {});
+  }
+
+  function askExitGroup(chat: Pick<Chat, "account" | "id" | "name">): Promise<void> {
+    const backend = backendFor(chat.account);
+    if (!backend?.leaveGroup) return Promise.reject(new Error("Groups can't be left from here."));
+    return ask({
+      title: `Exit "${chat.name}"?`,
+      body: "Only the group's admins are told that you left. The chat stays in your list until you delete it.",
+      confirmLabel: "Exit group",
+      danger: true,
+      onConfirm: async () => {
+        await backend.leaveGroup!(chat.id);
+        patchChat(backend, chat.id, { left: true });
+      },
+    });
+  }
+
+  /** Changes a group's members; removing someone asks first. */
+  async function changeMembers(chat: Pick<Chat, "account" | "id" | "name">, change: MemberChange, members: GroupMember[]): Promise<GroupInfo> {
+    const backend = backendFor(chat.account);
+    if (!backend?.changeMembers) throw new Error("Members can't be changed from here.");
+    const run = () => backend.changeMembers!(chat.id, change, members.map((m) => m.id));
+    if (change !== "remove") return run();
+    let changed: GroupInfo | undefined;
+    await ask({
+      title: `Remove ${members.map((m) => m.name).join(", ")}?`,
+      body: `They will no longer be in "${chat.name}".`,
+      confirmLabel: "Remove",
+      danger: true,
+      onConfirm: async () => {
+        changed = await run();
+      },
+    });
+    return changed!;
   }
 
   function askDeleteChat(chat: Pick<Chat, "account" | "id" | "isGroup">) {
     const backend = backendFor(chat.account);
     if (!backend?.deleteChat) return;
     void ask({
-      title: "Delete this chat?",
-      body: `Its messages are deleted from ${reachOf(chat.account)}.${chat.isGroup ? " You stay in the group." : ""}`,
-      confirmLabel: "Delete chat",
+      title: chat.isGroup ? "Delete this group?" : "Delete this chat?",
+      body: `Its messages are deleted from ${reachOf(chat.account)}.`,
+      confirmLabel: chat.isGroup ? "Delete group" : "Delete chat",
       danger: true,
       onConfirm: async () => {
         await backend.deleteChat!(chat.id);
@@ -1268,6 +1309,11 @@ function Shell() {
         onBlock={selectedBackend?.setBlocked ? (person, blocked) => askBlock(selectedChat.account, person, blocked) : undefined}
         onClearChat={selectedBackend?.clearChat ? () => askClearChat(selectedChat) : undefined}
         onDeleteChat={selectedBackend?.deleteChat ? (id, isGroup) => askDeleteChat({ account: selectedChat.account, id, isGroup }) : undefined}
+        onExitGroup={selectedBackend?.leaveGroup ? () => askExitGroup(selectedChat) : undefined}
+        onEditGroup={selectedBackend?.editGroup ? (changes) => selectedBackend.editGroup!(selectedChat.id, changes) : undefined}
+        onChangeMembers={selectedBackend?.changeMembers ? (change, members) => changeMembers(selectedChat, change, members) : undefined}
+        loadContacts={loadContacts}
+        groupTick={groupTick}
         onMuteChat={
           selectedBackend?.setMuted
             ? (chatId, muted) => toggleMuted({ account: selectedChat.account, id: chatId, muted: !muted })
@@ -1384,6 +1430,7 @@ function Shell() {
             onDeleteChat={askDeleteChat}
             onToggleBlocked={(chat) => void askBlock(chat.account, chat, !chat.blocked).catch(() => {})}
             canBlock={(chat) => Boolean(backendFor(chat.account)?.setBlocked)}
+            onExitGroup={(chat) => void askExitGroup(chat).catch(() => {})}
             onNewList={(chat) => editList(undefined, chat)}
             onEditList={(name) => editList(name)}
             searchMessages={searchMessages}

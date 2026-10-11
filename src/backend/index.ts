@@ -22,6 +22,7 @@ export type {
   PersonDetails,
   GroupRef,
   GroupInfo,
+  MemberChange,
   GroupMember,
   Privacy,
   PrivacyCategory,

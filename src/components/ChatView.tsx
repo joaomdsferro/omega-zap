@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Chat, GroupInfo as Group, Message, OutgoingLink, Person, PersonDetails, PinNote, Pins, StarredMessage, TypingState } from "../backend";
+import type { Chat, Contact, GroupInfo as Group, GroupMember, MemberChange, Message, OutgoingLink, Person, PersonDetails, PinNote, Pins, StarredMessage, TypingState } from "../backend";
 import { ContactInfo } from "./ContactInfo";
 import { GroupInfo } from "./GroupInfo";
 import { listenForFileDrops } from "../lib/dropped";
@@ -18,7 +18,7 @@ import { canForward } from "./ForwardDialog";
 import { MessageBubble } from "./MessageBubble";
 import { PinnedBar } from "./PinnedBar";
 import { PinDialog } from "./PinDialog";
-import { BlockedIcon, CheckIcon, ChevronDownIcon, ClearIcon, CloseIcon, ForwardIcon, InfoIcon, MoreIcon, MuteIcon, PinIcon, SelectIcon, StarIcon, TrashIcon } from "./Icons";
+import { BlockedIcon, CheckIcon, ChevronDownIcon, ClearIcon, CloseIcon, ExitIcon, ForwardIcon, InfoIcon, MoreIcon, MuteIcon, PinIcon, SelectIcon, StarIcon, TrashIcon } from "./Icons";
 import { PopupMenu, type MenuEntry } from "./PopupMenu";
 import { ChatSearch, searchChat } from "./ChatSearch";
 import { searchWords } from "../lib/search";
@@ -81,6 +81,15 @@ interface ChatViewProps {
   onClearChat?: () => void;
   /** Asks to delete a chat of this account: this one, or the one with someone from their contact info. */
   onDeleteChat?: (id: string, isGroup: boolean) => void;
+  /** Asks to leave this group; settles once it is done, failing when cancelled. */
+  onExitGroup?: () => Promise<void>;
+  onEditGroup?: (changes: { name?: string; description?: string }) => Promise<Group>;
+  /** Changes this group's members; removing asks first. */
+  onChangeMembers?: (change: MemberChange, members: GroupMember[]) => Promise<Group>;
+  /** Contacts that can be added to a group. */
+  loadContacts?: () => Promise<Contact[]>;
+  /** Changes when this group changed elsewhere. */
+  groupTick?: number;
   /** Tells a chat, named `account:id`, that we are typing or stopped. */
   onTyping?: (chatKey: string, state: TypingState) => void;
   /** Loads the messages from before `before` (an ISO time); false when there are none. */
@@ -101,7 +110,7 @@ interface ChatViewProps {
   pinsTick?: number;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, onVote, onMessageNumber, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onBlock, onClearChat, onDeleteChat, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, onVote, onMessageNumber, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onBlock, onClearChat, onDeleteChat, onExitGroup, onEditGroup, onChangeMembers, loadContacts, groupTick, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
   const [personId, setPersonId] = useState<string | null>(null);
   const closePerson = useCallback(() => setPersonId(null), []);
   const loadShownPerson = useCallback(() => loadPerson!(personId!), [loadPerson, personId]);
@@ -392,7 +401,14 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
     "separator",
     ...(onClearChat ? [{ label: "Clear chat", icon: <ClearIcon size={18} />, onSelect: onClearChat }] : []),
     ...(blockPerson ? [{ label: chat.blocked ? "Unblock" : "Block", icon: <BlockedIcon size={18} />, danger: !chat.blocked, onSelect: () => blockPerson(!chat.blocked) }] : []),
-    ...(onDeleteChat ? [{ label: "Delete chat", icon: <TrashIcon size={18} />, danger: true, onSelect: () => onDeleteChat(chat.id, Boolean(chat.isGroup)) }] : []),
+    // A group is left before it is deleted, as on the phone.
+    ...(chat.isGroup && !chat.left
+      ? onExitGroup
+        ? [{ label: "Exit group", icon: <ExitIcon size={18} />, danger: true, onSelect: () => void onExitGroup().catch(() => {}) }]
+        : []
+      : onDeleteChat
+        ? [{ label: chat.isGroup ? "Delete group" : "Delete chat", icon: <TrashIcon size={18} />, danger: true, onSelect: () => onDeleteChat(chat.id, Boolean(chat.isGroup)) }]
+        : []),
   ];
   // No separator at the end.
   if (menuItems[menuItems.length - 1] === "separator") menuItems.pop();
@@ -637,7 +653,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
         onScroll={onScroll}
         className="chat-wallpaper min-h-0 flex-1 overflow-y-auto pt-2 pb-4"
       >
-        {messages.length === 0 && !chat.lastMessage ? (
+        {messages.length === 0 && !chat.lastMessage && !chat.cleared ? (
           <div className="flex h-full items-center justify-center px-6">
             <p
               className="max-w-90 rounded-[7.5px] bg-(--day-chip-bg) px-4 py-2 text-center text-[13px] text-(--day-chip-text)"
@@ -777,6 +793,20 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
           onOpenPerson={loadPerson ? setPersonId : undefined}
           onStarred={onStarred}
           onMute={onMuteChat ? (muted) => onMuteChat(chat.id, muted) : undefined}
+          onEdit={onEditGroup}
+          onChangeMembers={onChangeMembers}
+          loadContacts={loadContacts}
+          onExit={onExitGroup}
+          onDelete={
+            onDeleteChat
+              ? () => {
+                  setGroupOpen(null);
+                  onDeleteChat(chat.id, true);
+                }
+              : undefined
+          }
+          onError={onError}
+          version={groupTick}
         />
       ) : null}
 
@@ -866,7 +896,11 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
       ) : null}
       {/* Kept while selecting, so what was typed stays. */}
       <div className={selection ? "hidden" : "contents"}>
-      {chat.blocked ? (
+      {chat.left ? (
+        <div className="flex min-h-15.5 shrink-0 items-center justify-center border-l border-(--divider) bg-(--panel-header-bg) px-4 py-3 text-center">
+          <span className="text-[14px] text-(--text-secondary)">You can't send messages to this group because you're no longer a member.</span>
+        </div>
+      ) : chat.blocked ? (
         <div className="flex min-h-15.5 shrink-0 items-center justify-center gap-1 border-l border-(--divider) bg-(--panel-header-bg) px-4 py-3 text-center">
           <span className="text-[14px] text-(--text-secondary)">You blocked this contact.</span>
           {blockPerson ? (

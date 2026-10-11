@@ -106,6 +106,31 @@ pub async fn wa_set_archived(mgr: Mgr<'_>, chat_id: String, archived: bool) -> R
 }
 
 #[tauri::command]
+pub async fn wa_leave_group(mgr: Mgr<'_>, id: String) -> Result<(), String> {
+    mgr.leave_group(&id).await
+}
+
+#[tauri::command]
+pub async fn wa_edit_group(
+    mgr: Mgr<'_>,
+    id: String,
+    name: Option<String>,
+    description: Option<String>,
+) -> Result<crate::store::GroupInfoDto, String> {
+    mgr.edit_group(&id, name, description).await
+}
+
+#[tauri::command]
+pub async fn wa_change_members(
+    mgr: Mgr<'_>,
+    id: String,
+    change: String,
+    members: Vec<String>,
+) -> Result<crate::store::GroupInfoDto, String> {
+    mgr.change_members(&id, &change, members).await
+}
+
+#[tauri::command]
 pub async fn wa_set_blocked(mgr: Mgr<'_>, id: String, blocked: bool) -> Result<(), String> {
     mgr.set_blocked(&id, blocked).await
 }

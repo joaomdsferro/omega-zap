@@ -23,6 +23,7 @@ import type {
   MessageKind,
   OutgoingLink,
   GroupInfo,
+  MemberChange,
   GroupRef,
   Person,
   PersonDetails,
@@ -51,6 +52,8 @@ interface RawChat {
   favorite: boolean;
   lists: string[];
   blocked: boolean;
+  left: boolean;
+  cleared: boolean;
 }
 
 interface RawContact {
@@ -120,10 +123,14 @@ interface RawGroupInfo {
   recentMedia: RawMessage[];
   participants: { id: string; name: string; phone: string | null; avatar: string | null; isMe: boolean; admin: boolean; about: string | null }[];
   isAdmin: boolean;
+  left: boolean;
+  infoLocked: boolean;
 }
 
 function toGroupInfo(raw: RawGroupInfo, account: AccountId): GroupInfo {
   return {
+    left: raw.left || undefined,
+    infoLocked: raw.infoLocked || undefined,
     id: raw.id,
     account,
     name: raw.name,
@@ -185,6 +192,8 @@ function toChat(raw: RawChat, account: AccountId): Chat {
     favorite: raw.favorite,
     lists: raw.lists,
     blocked: raw.blocked || undefined,
+    left: raw.left || undefined,
+    cleared: raw.cleared || undefined,
   };
 }
 
@@ -257,6 +266,9 @@ export class TauriBackend implements ChatBackend {
   privacy?: () => Promise<Privacy>;
   setPrivacy?: (category: PrivacyCategory, value: string) => Promise<void>;
   setBlocked?: (id: string, blocked: boolean) => Promise<void>;
+  leaveGroup?: (id: string) => Promise<void>;
+  editGroup?: (id: string, changes: { name?: string; description?: string }) => Promise<GroupInfo>;
+  changeMembers?: (id: string, change: MemberChange, members: string[]) => Promise<GroupInfo>;
 
   constructor(readonly account: AccountId) {
     this.prefix = COMMAND_PREFIX[account];
@@ -298,6 +310,11 @@ export class TauriBackend implements ChatBackend {
       };
       this.setPrivacy = (category, value) => invoke("wa_set_privacy", { category, value });
       this.setBlocked = (id, blocked) => invoke("wa_set_blocked", { id, blocked });
+      this.leaveGroup = (id) => invoke("wa_leave_group", { id });
+      this.editGroup = async (id, { name, description }) =>
+        toGroupInfo(await invoke<RawGroupInfo>("wa_edit_group", { id, name: name ?? null, description: description ?? null }), account);
+      this.changeMembers = async (id, change, members) =>
+        toGroupInfo(await invoke<RawGroupInfo>("wa_change_members", { id, change, members }), account);
     }
   }
 
@@ -478,6 +495,7 @@ export class TauriBackend implements ChatBackend {
       listen<string>(`${this.prefix}://history`, (e) => listener({ type: "history", chatId: e.payload })),
       listen<string>(`${this.prefix}://pins`, (e) => listener({ type: "pins", chatId: e.payload })),
       listen<string>(`${this.prefix}://cleared`, (e) => listener({ type: "cleared", chatId: e.payload })),
+      listen<string>(`${this.prefix}://group`, (e) => listener({ type: "group", chatId: e.payload })),
       listen<RawMessage>(`${this.prefix}://message`, (e) =>
         listener({ type: "message", message: toMessage(e.payload) }),
       ),
