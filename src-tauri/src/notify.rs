@@ -251,6 +251,10 @@ mod freedesktop {
     /// The desktop entry notifications name. Plasma keeps a notification in
     /// its history only when it knows the app it came from.
     const DESKTOP_ID: &str = "omega-zap";
+    /// The entry the Linux packages install, named after the product.
+    const PACKAGED_ID: &str = "Omega Zap";
+    /// The entry in use: the packaged one when installed, else ours.
+    static ENTRY: OnceLock<&'static str> = OnceLock::new();
     const PATH: &str = "/org/freedesktop/Notifications";
     /// Emoji in a notification, about as tall as its text.
     const EMOJI_PX: u32 = 16;
@@ -309,7 +313,7 @@ mod freedesktop {
         let mut hints: HashMap<&str, Value<'_>> = HashMap::new();
         hints.insert("category", Value::from("im.received"));
         hints.insert("urgency", Value::U8(1));
-        hints.insert("desktop-entry", Value::from(DESKTOP_ID));
+        hints.insert("desktop-entry", Value::from(*ENTRY.get().unwrap_or(&DESKTOP_ID)));
         // Clicking the notification itself runs its "default" action.
         let actions = vec!["default", "Open chat"];
         let reply = bus
@@ -331,10 +335,21 @@ mod freedesktop {
     /// menu, pointing at this executable. Debug builds call themselves "Dev".
     pub fn register_desktop_entry() -> std::io::Result<()> {
         let data_dirs = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
-        let file = format!("{DESKTOP_ID}.desktop");
-        if data_dirs.split(':').any(|dir| Path::new(dir).join("applications").join(&file).exists()) {
-            return Ok(());
+        let installed = |id: &str| {
+            let file = format!("{id}.desktop");
+            data_dirs.split(':').any(|dir| Path::new(dir).join("applications").join(&file).exists())
+        };
+        // Debug builds keep their own "Dev" entry beside an installed copy.
+        if !cfg!(debug_assertions) {
+            for id in [DESKTOP_ID, PACKAGED_ID] {
+                if installed(id) {
+                    let _ = ENTRY.set(id);
+                    return Ok(());
+                }
+            }
         }
+        let _ = ENTRY.set(DESKTOP_ID);
+        let file = format!("{DESKTOP_ID}.desktop");
         let data_home = std::env::var_os("XDG_DATA_HOME")
             .map(std::path::PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".local/share")))
@@ -359,7 +374,12 @@ mod freedesktop {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
-        let exe = std::env::current_exe()?;
+        // An AppImage runs from a mount that changes every start; the
+        // desktop has to start the image itself.
+        let exe = match std::env::var_os("APPIMAGE") {
+            Some(image) => std::path::PathBuf::from(image),
+            None => std::env::current_exe()?,
+        };
         let entry = format!(
             "[Desktop Entry]\n\
              Type=Application\n\
