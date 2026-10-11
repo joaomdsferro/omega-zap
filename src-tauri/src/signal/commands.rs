@@ -165,3 +165,8 @@ pub fn signal_search(mgr: Mgr<'_>, query: String, chat_id: Option<String>) -> Ve
 pub fn signal_contacts(mgr: Mgr<'_>) -> Vec<ContactDto> {
     mgr.contacts()
 }
+
+#[tauri::command]
+pub fn signal_person(mgr: Mgr<'_>, id: String) -> crate::store::PersonDto {
+    mgr.person(&id)
+}

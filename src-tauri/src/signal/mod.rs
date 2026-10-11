@@ -533,6 +533,10 @@ impl SignalManager {
         lock(&self.store).contacts()
     }
 
+    pub fn person(&self, id: &str) -> crate::store::PersonDto {
+        lock(&self.store).person(id)
+    }
+
     // Signal has no favorites, lists or stars of its own, so these stay on
     // this computer.
 

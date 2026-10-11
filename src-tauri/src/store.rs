@@ -466,6 +466,8 @@ pub struct MessageDto {
     pub sent_at: i64,
     pub from_me: bool,
     pub author: Option<String>,
+    /// Who sent it, when it is someone else: opens their contact info.
+    pub author_id: Option<String>,
     pub text: Option<String>,
     pub image_label: Option<String>,
     pub media_label: Option<String>,
@@ -482,12 +484,36 @@ pub struct MessageDto {
     pub link_preview: Option<LinkPreviewDto>,
     /// Forwarding score: 0 when not forwarded.
     pub forwarded: u32,
-    /// Names `text` mentions as "@Name", for the UI to mark.
-    pub mentions: Vec<String>,
+    /// The people `text` mentions, as written there ("@Name").
+    pub mentions: Vec<MentionDto>,
     pub reactions: Vec<ReactionDto>,
     pub starred: bool,
     /// Taken back by its sender: only a placeholder is left.
     pub deleted: bool,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MentionDto {
+    /// "@Name", as it appears in the text.
+    pub text: String,
+    pub id: String,
+}
+
+/// Someone's contact info, as the UI shows it.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonDto {
+    pub id: String,
+    pub name: String,
+    /// The name they gave themselves, when it differs from the saved one.
+    pub profile_name: Option<String>,
+    pub phone: Option<String>,
+    /// File name of the profile picture inside the avatars directory.
+    pub avatar: Option<String>,
+    pub is_me: bool,
+    /// Whether they are a saved contact.
+    pub saved: bool,
 }
 
 /// A chat list the user made, such as "Family" or "Work".
@@ -871,7 +897,7 @@ impl ChatStore {
     /// in. WhatsApp writes "@<number>" (a phone number or a LID), kept as it
     /// is when the person has no name here; the Signal bridge writes
     /// "@<ACI>", always replaced.
-    fn with_mentions(&self, text: &str) -> (String, Vec<String>) {
+    fn with_mentions(&self, text: &str) -> (String, Vec<MentionDto>) {
         let mut out = String::with_capacity(text.len());
         let mut names = Vec::new();
         let mut rest = text;
@@ -882,17 +908,17 @@ impl ChatStore {
             let aci = after.get(1..37).filter(|id| is_uuid(id));
             let digits = if aci.is_some() { 36 } else { after[1..].bytes().take_while(u8::is_ascii_digit).count() };
             let ends_word = !after[1 + digits..].chars().next().is_some_and(char::is_alphanumeric);
-            let name = match aci {
-                Some(aci) if starts_word && ends_word => Some(self.display_name(aci)),
+            let found = match aci {
+                Some(aci) if starts_word && ends_word => Some((self.display_name(aci), aci.to_string())),
                 _ => (starts_word && ends_word && digits >= 5)
                     .then(|| self.mention_name(&after[1..1 + digits]))
                     .flatten(),
             };
-            match name {
-                Some(name) => {
+            match found {
+                Some((name, id)) => {
                     out.push('@');
                     out.push_str(&name);
-                    names.push(format!("@{name}"));
+                    names.push(MentionDto { text: format!("@{name}"), id });
                     rest = &after[1 + digits..];
                 }
                 None => {
@@ -905,18 +931,39 @@ impl ChatStore {
         (out, names)
     }
 
-    /// The name of whoever "@<number>" mentions, if known.
-    fn mention_name(&self, number: &str) -> Option<String> {
+    /// The name and id of whoever "@<number>" mentions, if known.
+    fn mention_name(&self, number: &str) -> Option<(String, String)> {
         for server in ["lid", "s.whatsapp.net"] {
             let jid = self.canonical(&format!("{number}@{server}"));
             if self.own_ids.contains(&jid) {
-                return Some("You".into());
+                return Some(("You".into(), jid));
             }
             if let Some(name) = self.contact_names.get(&jid).or_else(|| self.push_names.get(&jid)) {
-                return Some(name.clone());
+                return Some((name.clone(), jid));
             }
         }
         None
+    }
+
+    /// Someone's contact info, from what is known here.
+    pub fn person(&self, id: &str) -> PersonDto {
+        let id = self.canonical(id);
+        let is_me = self.own_ids.contains(&id);
+        let saved = self.contact_names.get(&id);
+        let profile = self.push_names.get(&id).filter(|p| saved.is_some_and(|s| s != *p) || saved.is_none());
+        PersonDto {
+            name: if is_me { "You".into() } else { self.display_name(&id) },
+            profile_name: saved.and(profile).cloned(),
+            phone: format_phone(&id),
+            avatar: if is_me {
+                self.own_avatar()
+            } else {
+                self.chats.get(&id).and_then(|c| c.avatar_id.as_deref()).map(|pic| avatar_file(&id, pic))
+            },
+            is_me,
+            saved: saved.is_some(),
+            id,
+        }
     }
 
     fn chat_name(&self, id: &str, chat: &StoredChat) -> String {
@@ -1893,6 +1940,9 @@ impl ChatStore {
             author: (is_group && !m.from_me)
                 .then(|| m.author_jid.as_deref().map(|j| self.display_name(j)))
                 .flatten(),
+            author_id: (!m.from_me)
+                .then(|| m.author_jid.as_deref().map(|j| self.canonical(j)).or_else(|| (!is_group).then(|| chat_id.to_string())))
+                .flatten(),
             text,
             mentions,
             image_label,
@@ -2031,6 +2081,7 @@ mod tests {
         let (text, names) =
             store.with_mentions("@68689445540020 e @351911111111, @351922222222 @99999999 mail@351911111111");
         assert_eq!(text, "@Rui Silva e @Maya, @You @99999999 mail@351911111111");
+        let names: Vec<_> = names.iter().map(|m| m.text.as_str()).collect();
         assert_eq!(names, ["@Rui Silva", "@Maya", "@You"]);
 
         let aci = "0a1b2c3d-0000-4000-8000-00000000abcd";

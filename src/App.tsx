@@ -716,6 +716,11 @@ function Shell() {
     };
   }, [panel, shown, chatsBy, messages]);
 
+  const loadPerson = useMemo(
+    () => (selectedBackend?.person ? (id: string) => selectedBackend.person!(id) : undefined),
+    [selectedBackend],
+  );
+
   function openContact(contact: Contact) {
     const known = chats.find((c) => c.account === contact.account && c.id === contact.id);
     if (!known) {
@@ -871,6 +876,8 @@ function Shell() {
         historyTick={historyTick}
         searchMessages={searchMessages}
         onFocused={clearFocus}
+        loadPerson={loadPerson}
+        onMessagePerson={(person) => openContact(person)}
       />
     );
   } else if (unified ? anyLinked : focus.status.linked) {

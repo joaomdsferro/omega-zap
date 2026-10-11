@@ -477,6 +477,19 @@ textarea {
   font-weight: 500;
 }
 
+/* A mention that opens the person's contact info: still text, in the line. */
+button.mention {
+  display: inline;
+  padding: 0;
+  font: inherit;
+  font-weight: 500;
+  text-align: inherit;
+}
+
+button.mention:hover {
+  text-decoration: underline;
+}
+
 /* Words found by a search inside a chat, marked in the bubbles. */
 .search-mark {
   background: color-mix(in oklab, #ffcc00 50%, transparent);

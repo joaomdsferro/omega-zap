@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Chat, Message, OutgoingLink, StarredMessage } from "../backend";
+import type { Chat, Message, OutgoingLink, Person, StarredMessage } from "../backend";
+import { ContactInfo } from "./ContactInfo";
 import { listenForFileDrops } from "../lib/dropped";
 import { formatDayLabel, sameDay } from "../lib/format";
 import { AccountBadge } from "./AccountBadge";
@@ -51,6 +52,10 @@ interface ChatViewProps {
   /** A message to scroll to and highlight once it has loaded. */
   focusMessageId?: string | null;
   onFocused?: () => void;
+  /** Someone's contact info, opened from a sender's name or a mention. */
+  loadPerson?: (id: string) => Promise<Person>;
+  /** Opens a chat with someone from their contact info. */
+  onMessagePerson?: (person: Person) => void;
   /** Loads the messages from before `before` (an ISO time); false when there are none. */
   onLoadOlder?: (before: string) => Promise<boolean>;
   /** Changes when older messages of this chat came from the phone: there may be more to load. */
@@ -59,7 +64,10 @@ interface ChatViewProps {
   searchMessages?: (query: string, chatId?: string) => Promise<StarredMessage[]>;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, onMessagePerson }: ChatViewProps) {
+  const [personId, setPersonId] = useState<string | null>(null);
+  const closePerson = useCallback(() => setPersonId(null), []);
+  const loadShownPerson = useCallback(() => loadPerson!(personId!), [loadPerson, personId]);
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -473,6 +481,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                     onForward={onForward}
                     onDelete={onDelete ? setDeleting : undefined}
                     onJumpTo={setJumpTo}
+                    onOpenPerson={loadPerson ? setPersonId : undefined}
                     flash={flashed === message.id}
                     highlight={searchHits.has(message.id) ? searchMarks : undefined}
                   />
@@ -493,6 +502,22 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
           ))}
         </div>
       </div>
+
+      {personId && loadPerson ? (
+        <ContactInfo
+          key={personId}
+          load={loadShownPerson}
+          onClose={closePerson}
+          onMessage={
+            onMessagePerson
+              ? (person) => {
+                  setPersonId(null);
+                  onMessagePerson(person);
+                }
+              : undefined
+          }
+        />
+      ) : null}
 
       {viewing && loadMedia && viewable.some((item) => item.key === viewing) ? (
         <MediaViewer

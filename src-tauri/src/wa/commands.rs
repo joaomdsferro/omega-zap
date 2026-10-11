@@ -168,6 +168,11 @@ pub fn wa_contacts(mgr: Mgr<'_>) -> Vec<ContactDto> {
 }
 
 #[tauri::command]
+pub fn wa_person(mgr: Mgr<'_>, id: String) -> crate::store::PersonDto {
+    mgr.person(&id)
+}
+
+#[tauri::command]
 pub async fn wa_lookup_number(mgr: Mgr<'_>, phone: String) -> Result<Option<String>, String> {
     mgr.lookup_number(&phone).await
 }

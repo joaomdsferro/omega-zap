@@ -57,6 +57,8 @@ interface MessageBubbleProps {
   onDelete?: (message: Message) => void;
   /** Scrolls to a quoted message. */
   onJumpTo?: (messageId: string) => void;
+  /** Opens someone's contact info: the sender's name and mentions lead there. */
+  onOpenPerson?: (id: string) => void;
   /** Briefly highlighted: the message was jumped to. */
   flash?: boolean;
 }
@@ -259,7 +261,7 @@ const LONG_PRESS_MS = 450;
 /** WhatsApp's forwarding score from which a message counts as forwarded many times. */
 const FORWARDED_MANY = 5;
 
-export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, flash, highlight }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight }: MessageBubbleProps) {
   const { settings } = useSettings();
   const [picking, setPicking] = useState(false);
   // The reactions' details, opened from their pill.
@@ -466,7 +468,13 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
 
         {showAuthor && message.author ? (
           <p className="mb-0.5 px-0.5 text-[12.8px] font-medium" style={{ color: authorColor(message.author) }}>
-            {message.author}
+            {onOpenPerson && message.authorId ? (
+              <button type="button" onClick={() => onOpenPerson(message.authorId!)} className="text-left hover:underline">
+                {message.author}
+              </button>
+            ) : (
+              message.author
+            )}
           </p>
         ) : null}
 
@@ -568,7 +576,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
             </p>
           ) : (
             <p className="px-0.5 wrap-break-word whitespace-pre-wrap">
-              <Formatted text={message.text ?? ""} onLink={openLink} highlight={highlight} mentions={message.mentions} />
+              <Formatted text={message.text ?? ""} onLink={openLink} highlight={highlight} mentions={message.mentions} onMention={onOpenPerson} />
               {metaSpacer}
             </p>
           )

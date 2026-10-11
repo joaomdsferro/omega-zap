@@ -1024,6 +1024,10 @@ impl WaManager {
         lock(&self.store).contacts()
     }
 
+    pub fn person(&self, id: &str) -> crate::store::PersonDto {
+        lock(&self.store).person(id)
+    }
+
     async fn connected_client(&self) -> Result<Arc<Client>, String> {
         self.client().await.ok_or_else(|| "WhatsApp is not connected.".to_string())
     }

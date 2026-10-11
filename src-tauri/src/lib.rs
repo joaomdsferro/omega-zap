@@ -329,6 +329,7 @@ pub fn run() {
             wa::commands::wa_older_messages,
             wa::commands::wa_fetch_history_first,
             wa::commands::wa_contacts,
+            wa::commands::wa_person,
             wa::commands::wa_lookup_number,
             notify::show_notification,
             notify::dismiss_notification,
@@ -362,6 +363,7 @@ pub fn run() {
             signal::commands::signal_search,
             signal::commands::signal_older_messages,
             signal::commands::signal_contacts,
+            signal::commands::signal_person,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -76,7 +76,9 @@ export interface Message {
   voiceSeconds?: number;
   replyTo?: ReplyQuote;
   /** People `text` mentions, written there as "@Name". */
-  mentions?: string[];
+  mentions?: Mention[];
+  /** Who sent it, when it is someone else. */
+  authorId?: string;
   status?: DeliveryStatus;
   /** The attachment can be fetched with `mediaUrl`. */
   hasMedia?: boolean;
@@ -126,6 +128,27 @@ export interface CustomList {
 }
 
 /** Someone a new chat can be started with. */
+export interface Mention {
+  /** "@Name", as it appears in the text. */
+  text: string;
+  id: string;
+}
+
+/** Someone's contact info. */
+export interface Person {
+  id: string;
+  account: AccountId;
+  name: string;
+  /** The name they gave themselves, when it differs from the saved one. */
+  profileName?: string;
+  phone?: string;
+  avatarUrl?: string;
+  avatarHue: number;
+  initials: string;
+  isMe: boolean;
+  saved: boolean;
+}
+
 export interface Contact {
   id: string;
   account: AccountId;
@@ -203,6 +226,8 @@ export interface ChatBackend {
   /** Messages with every word of `query` in them, ignoring case and accents, newest first; only `chatId`'s when given. */
   searchMessages(query: string, chatId?: string): Promise<StarredMessage[]>;
   listContacts(): Promise<Contact[]>;
+  /** Someone's contact info, from what this computer knows. */
+  person?(id: string): Promise<Person>;
   /** The chat id for a phone number, or `null` when the number isn't on the network. */
   lookupNumber?(phone: string): Promise<string | null>;
   subscribe(listener: (event: BackendEvent) => void): () => void;

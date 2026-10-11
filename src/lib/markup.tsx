@@ -1,4 +1,5 @@
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import type { Mention } from "../backend/types";
 import { emojiImage, withEmoji } from "./emoji";
 import { URL_PATTERN } from "./links";
 import { ranges } from "./search";
@@ -170,7 +171,8 @@ function drawRun(
   emojiSize: number,
   onLink?: (event: ReactMouseEvent, url: string) => void,
   words?: string[],
-  mentions?: string[],
+  mentions?: Mention[],
+  onMention?: (id: string) => void,
 ): ReactNode {
   if (run.kind === "marker") return null;
   const className = styleClass(run.styles);
@@ -188,7 +190,7 @@ function drawRun(
       </a>
     );
   }
-  const content = withMentions(run.text, mentions, (text) => marked(text, emojiSize, words));
+  const content = withMentions(run.text, mentions, (text) => marked(text, emojiSize, words), onMention);
   return className ? (
     <span key={key} className={className}>
       {content}
@@ -198,30 +200,42 @@ function drawRun(
   );
 }
 
-/** `text` with each of `mentions` ("@Name") marked as WhatsApp does. */
-function withMentions(text: string, mentions: string[] | undefined, draw: (text: string) => ReactNode): ReactNode {
+/** `text` with each of `mentions` ("@Name") marked as WhatsApp does; clicking one opens their contact info. */
+function withMentions(
+  text: string,
+  mentions: Mention[] | undefined,
+  draw: (text: string) => ReactNode,
+  onMention?: (id: string) => void,
+): ReactNode {
   if (!mentions?.length) return draw(text);
   const parts: ReactNode[] = [];
   let at = 0;
   while (at < text.length) {
     let next = -1;
-    let found = "";
+    let found: Mention | null = null;
     for (const mention of mentions) {
-      const index = text.indexOf(mention, at);
+      const index = text.indexOf(mention.text, at);
       // The longest wins when two names start alike ("@Ana" and "@Ana Rita").
-      if (index >= 0 && (next < 0 || index < next || (index === next && mention.length > found.length))) {
+      if (index >= 0 && (next < 0 || index < next || (index === next && mention.text.length > (found?.text.length ?? 0)))) {
         next = index;
         found = mention;
       }
     }
-    if (next < 0) break;
+    if (next < 0 || !found) break;
     if (next > at) parts.push(draw(text.slice(at, next)));
+    const mention = found;
     parts.push(
-      <span key={next} className="mention">
-        {draw(found)}
-      </span>,
+      onMention ? (
+        <button key={next} type="button" className="mention" onClick={() => onMention(mention.id)}>
+          {draw(mention.text)}
+        </button>
+      ) : (
+        <span key={next} className="mention">
+          {draw(mention.text)}
+        </span>
+      ),
     );
-    at = next + found.length;
+    at = next + mention.text.length;
   }
   if (at < text.length) parts.push(draw(text.slice(at)));
   return parts;
@@ -249,6 +263,7 @@ export function Formatted({
   onLink,
   highlight,
   mentions,
+  onMention,
 }: {
   text: string;
   emojiSize?: number;
@@ -256,7 +271,9 @@ export function Formatted({
   /** Words of a search to mark, already folded. */
   highlight?: string[];
   /** People the text mentions, as "@Name". */
-  mentions?: string[];
+  mentions?: Mention[];
+  /** Opens a mentioned person's contact info. */
+  onMention?: (id: string) => void;
 }) {
   const parts: ReactNode[] = [];
   let key = 0;
@@ -280,12 +297,12 @@ export function Formatted({
     if (block?.block !== "quote") endQuote();
     if (!block) {
       if (previousPlain) parts.push("\n");
-      parts.push(...line.map((run) => drawRun(run, key++, emojiSize, onLink, highlight, mentions)));
+      parts.push(...line.map((run) => drawRun(run, key++, emojiSize, onLink, highlight, mentions, onMention)));
       if (!line.length && index > 0 && !previousPlain) parts.push("\n");
       previousPlain = true;
       return;
     }
-    const content = cutLine(line, block.cut).map((run) => drawRun(run, key++, emojiSize, onLink, highlight, mentions));
+    const content = cutLine(line, block.cut).map((run) => drawRun(run, key++, emojiSize, onLink, highlight, mentions, onMention));
     previousPlain = false;
     if (block.block === "quote") {
       if (quote) quote.push(<br key={key++} />);

@@ -14,9 +14,11 @@ import type {
   Contact,
   CustomList,
   DeliveryStatus,
+  Mention,
   Message,
   MessageKind,
   OutgoingLink,
+  Person,
   Notice,
   ReactionCount,
   StarredMessage,
@@ -67,7 +69,8 @@ interface RawMessage {
   mediaLabel: string | null;
   voiceSeconds: number | null;
   replyTo: { author: string; fromMe: boolean; id: string | null; text: string } | null;
-  mentions: string[];
+  mentions: Mention[];
+  authorId: string | null;
   status: DeliveryStatus | null;
   hasMedia: boolean;
   attachments: { kind: Attachment["kind"]; mime: string; fileName: string | null; size: number; width: number | null; height: number | null }[];
@@ -115,6 +118,7 @@ function toMessage(raw: RawMessage): Message {
     mediaLabel: raw.mediaLabel ?? undefined,
     voiceSeconds: raw.voiceSeconds ?? undefined,
     mentions: raw.mentions?.length ? raw.mentions : undefined,
+    authorId: raw.authorId ?? undefined,
     replyTo: raw.replyTo ? { author: raw.replyTo.author, fromMe: raw.replyTo.fromMe, id: raw.replyTo.id ?? undefined, text: raw.replyTo.text } : undefined,
     status: raw.status ?? undefined,
     hasMedia: raw.hasMedia,
@@ -248,6 +252,25 @@ export class TauriBackend implements ChatBackend {
   async searchMessages(query: string, chatId?: string): Promise<StarredMessage[]> {
     const raw = await invoke<{ chatName: string; message: RawMessage }[]>(`${this.prefix}_search`, { query, chatId: chatId ?? null });
     return raw.map((s) => ({ account: this.account, chatName: s.chatName, message: toMessage(s.message) }));
+  }
+
+  async person(id: string): Promise<Person> {
+    const raw = await invoke<{ id: string; name: string; profileName: string | null; phone: string | null; avatar: string | null; isMe: boolean; saved: boolean }>(
+      `${this.prefix}_person`,
+      { id },
+    );
+    return {
+      id: raw.id,
+      account: this.account,
+      name: raw.name,
+      profileName: raw.profileName ?? undefined,
+      phone: raw.phone ?? undefined,
+      avatarUrl: raw.avatar ? fileUrl(raw.avatar, "avatar") : undefined,
+      avatarHue: hueFor(raw.id),
+      initials: initialsFor(raw.name),
+      isMe: raw.isMe,
+      saved: raw.saved,
+    };
   }
 
   async listContacts(): Promise<Contact[]> {
