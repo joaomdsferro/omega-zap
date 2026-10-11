@@ -68,6 +68,8 @@ interface MessageBubbleProps {
   pinned?: boolean;
   /** Changes what one of our texts says, while it still can be. */
   onEdit?: (message: Message) => void;
+  /** Pins the message for everyone, or unpins it when `pinned`. */
+  onPin?: (message: Message) => void;
 }
 
 function Tail({ mine }: { mine: boolean }) {
@@ -270,7 +272,7 @@ const LONG_PRESS_MS = 450;
 /** WhatsApp's forwarding score from which a message counts as forwarded many times. */
 const FORWARDED_MANY = 5;
 
-export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight, pinned, onEdit }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight, pinned, onEdit, onPin }: MessageBubbleProps) {
   const { settings } = useSettings();
   const [picking, setPicking] = useState(false);
   // The reactions' details, opened from their pill.
@@ -380,6 +382,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
       onForward && !deleted && (message.hasMedia || message.attachments?.length || (text && message.kind === "text"))
         ? { label: "Forward", icon: <ForwardIcon size={20} />, onSelect: () => onForward(message) }
         : null,
+      !deleted && onPin ? { label: pinned ? "Unpin" : "Pin", icon: <PinIcon size={20} />, onSelect: () => onPin(message) } : null,
       !deleted && onStar
         ? {
             label: message.starred ? "Unstar" : "Star",

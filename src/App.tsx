@@ -635,6 +635,14 @@ function Shell() {
   const loadGroup = useMemo(() => selectedBackend?.groupInfo?.bind(selectedBackend), [selectedBackend]);
   const loadGroupDetails = useMemo(() => selectedBackend?.groupDetails?.bind(selectedBackend), [selectedBackend]);
   const loadPinned = useMemo(() => selectedBackend?.pinnedMessages?.bind(selectedBackend), [selectedBackend]);
+  const pinMessage = useMemo(() => {
+    const backend = selectedBackend;
+    if (!backend?.pinMessage) return undefined;
+    return async (message: Message, secs: number | null) => {
+      await backend.pinMessage!(message.chatId, message.id, secs);
+      setPinsTick((tick) => tick + 1);
+    };
+  }, [selectedBackend]);
 
   const star = useMemo(() => {
     const backend = selectedBackend;
@@ -1034,6 +1042,7 @@ function Shell() {
         searchMessages={searchMessages}
         onEdit={canSend ? editMessage : undefined}
         loadPinned={loadPinned}
+        onPin={canSend ? pinMessage : undefined}
         pinsTick={pinsTick}
         loadGroup={loadGroup}
         loadGroupDetails={loadGroupDetails}

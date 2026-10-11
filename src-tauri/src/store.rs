@@ -386,6 +386,9 @@ struct StoredChat {
     /// Messages pinned for everyone, and unpins kept a while so an older
     /// pin replayed by history does not bring them back.
     pins: Vec<StoredPin>,
+    /// Who pinned what and when, for the "You pinned a message" lines in
+    /// the conversation. Kept after an unpin, as WhatsApp keeps them.
+    pin_notes: Vec<StoredPin>,
 }
 
 /// A message pinned in a chat for everyone in it, or unpinned.
@@ -397,7 +400,34 @@ struct StoredPin {
     at_ms: i64,
     /// When the pin runs out; `None` once unpinned.
     until_ms: Option<i64>,
+    /// Who pinned or unpinned it; `None` for us.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    by: Option<String>,
 }
+
+/// A line in a conversation saying someone pinned a message.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PinNoteDto {
+    pub message_id: String,
+    pub at: i64,
+    pub by_me: bool,
+    /// Who pinned it, by name, when it was someone else.
+    pub by: Option<String>,
+}
+
+/// The messages pinned in a chat and the lines saying who pinned them.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PinsDto {
+    /// The latest pin first.
+    pub messages: Vec<MessageDto>,
+    /// Oldest first.
+    pub notes: Vec<PinNoteDto>,
+}
+
+/// How many "pinned a message" lines a chat keeps.
+const MAX_PIN_NOTES: usize = 50;
 
 /// How long after sending a message WhatsApp lets it be edited.
 pub const EDIT_WINDOW_MS: i64 = 15 * 60 * 1000;
@@ -1005,6 +1035,7 @@ impl ChatStore {
         into.name = into.name.take().or(from.name);
         into.pinned_at = into.pinned_at.or(from.pinned_at);
         into.pins.extend(from.pins);
+        into.pin_notes.extend(from.pin_notes);
         into.archived |= from.archived;
         into.muted_until_ms = into.muted_until_ms.max(from.muted_until_ms);
         into.unread += from.unread;
@@ -2210,14 +2241,22 @@ impl ChatStore {
     }
 
     /// Pins a message until `until_ms`, or unpins it without, unless a later
-    /// pin or unpin of it is already known. Whether anything changed.
-    pub fn set_message_pin(&mut self, chat: &str, id: &str, at_ms: i64, until_ms: Option<i64>) -> bool {
+    /// pin or unpin of it is already known. `by` is who did it, `None` for
+    /// us. Whether anything changed.
+    pub fn set_message_pin(&mut self, chat: &str, id: &str, at_ms: i64, until_ms: Option<i64>, by: Option<&str>) -> bool {
+        let by = by.map(|b| self.canonical(b)).filter(|b| !self.own_ids.contains(b));
         let Some(chat) = self.chats.get_mut(&self.canonical(chat)) else { return false };
+        if until_ms.is_some() && !chat.pin_notes.iter().any(|n| n.id == id && n.at_ms == at_ms) {
+            chat.pin_notes.push(StoredPin { id: id.to_string(), at_ms, until_ms, by: by.clone() });
+            chat.pin_notes.sort_by_key(|n| n.at_ms);
+            let extra = chat.pin_notes.len().saturating_sub(MAX_PIN_NOTES);
+            chat.pin_notes.drain(..extra);
+        }
         if chat.pins.iter().any(|p| p.id == id && p.at_ms >= at_ms) {
             return false;
         }
         chat.pins.retain(|p| p.id != id);
-        chat.pins.push(StoredPin { id: id.to_string(), at_ms, until_ms });
+        chat.pins.push(StoredPin { id: id.to_string(), at_ms, until_ms, by });
         let now = now_ms();
         chat.pins.retain(|p| p.until_ms.is_some_and(|until| until > now) || now - p.at_ms < PIN_MEMORY_MS);
         true
@@ -2230,6 +2269,21 @@ impl ChatStore {
         let mut pins: Vec<&StoredPin> = chat.pins.iter().filter(|p| p.until_ms.is_some_and(|until| until > now)).collect();
         pins.sort_by_key(|p| std::cmp::Reverse(p.at_ms));
         pins.into_iter().take(MAX_PINNED_MESSAGES).map(|p| p.id.clone()).collect()
+    }
+
+    /// The "pinned a message" lines of a chat, oldest first.
+    pub fn pin_notes(&self, chat: &str) -> Vec<PinNoteDto> {
+        let Some(stored) = self.chats.get(&self.canonical(chat)) else { return Vec::new() };
+        stored
+            .pin_notes
+            .iter()
+            .map(|n| PinNoteDto {
+                message_id: n.id.clone(),
+                at: n.at_ms,
+                by_me: n.by.is_none(),
+                by: n.by.as_deref().map(|b| self.display_name(b)),
+            })
+            .collect()
     }
 
     /// A message as the UI shows it, unless it was deleted for us.
@@ -2839,13 +2893,17 @@ mod tests {
         let now = now_ms();
         let later = now + 60_000;
         for (at, id) in ["a", "b", "c", "d"].into_iter().enumerate() {
-            assert!(store.set_message_pin(chat, id, now - 100 + at as i64, Some(later)));
+            assert!(store.set_message_pin(chat, id, now - 100 + at as i64, Some(later), (id == "b").then_some("2@s.whatsapp.net")));
         }
         assert_eq!(store.pinned_ids(chat), ["d", "c", "b"], "three at most, latest first");
-        assert!(store.set_message_pin(chat, "d", now - 50, None));
-        assert!(!store.set_message_pin(chat, "d", now - 97, Some(later)), "an older pin replayed by history");
-        assert!(store.set_message_pin(chat, "a", now - 40, Some(now - 1)));
+        assert!(store.set_message_pin(chat, "d", now - 50, None, None));
+        assert!(!store.set_message_pin(chat, "d", now - 97, Some(later), None), "an older pin replayed by history");
+        assert!(store.set_message_pin(chat, "a", now - 40, Some(now - 1), None));
         assert_eq!(store.pinned_ids(chat), ["c", "b"], "unpinned and lapsed ones left out");
+        let notes = store.pin_notes(chat);
+        let ids: Vec<&str> = notes.iter().map(|n| n.message_id.as_str()).collect();
+        assert_eq!(ids, ["a", "b", "c", "d", "a"], "every pin keeps its line, unpinned or not");
+        assert!(!notes[1].by_me && notes[1].by.is_some() && notes[0].by_me);
     }
 
     #[test]

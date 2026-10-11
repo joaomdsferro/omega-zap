@@ -251,6 +251,23 @@ export interface Notice {
   avatar?: string;
 }
 
+/** A line in a conversation saying someone pinned a message. */
+export interface PinNote {
+  messageId: string;
+  /** ISO time of the pin. */
+  at: string;
+  byMe: boolean;
+  /** Who pinned it, by name, when it was someone else. */
+  by?: string;
+}
+
+export interface Pins {
+  /** The latest pin first. */
+  messages: Message[];
+  /** Oldest first. */
+  notes: PinNote[];
+}
+
 export type BackendEvent =
   | { type: "chats-changed" }
   | { type: "message"; message: Message }
@@ -287,8 +304,10 @@ export interface ChatBackend {
   getMessages(chatId: string): Promise<Message[]>;
   /** Messages from before `beforeMs`, oldest first: the history past what `getMessages` gives. */
   olderMessages?(chatId: string, beforeMs: number): Promise<Message[]>;
-  /** The messages pinned in a chat for everyone, the latest pin first. */
-  pinnedMessages?(chatId: string): Promise<Message[]>;
+  /** The messages pinned in a chat for everyone, the latest pin first, and who pinned what. */
+  pinnedMessages?(chatId: string): Promise<Pins>;
+  /** Pins a message for everyone for `secs`, or unpins it with `null`. */
+  pinMessage?(chatId: string, messageId: string, secs: number | null): Promise<void>;
   /** Puts a chat first in line for its history to be fetched from the phone. */
   fetchHistoryFirst?(chatId: string): Promise<void>;
   /**

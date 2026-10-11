@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Chat, GroupInfo as Group, Message, OutgoingLink, Person, PersonDetails, StarredMessage, TypingState } from "../backend";
+import type { Chat, GroupInfo as Group, Message, OutgoingLink, Person, PersonDetails, PinNote, Pins, StarredMessage, TypingState } from "../backend";
 import { ContactInfo } from "./ContactInfo";
 import { GroupInfo } from "./GroupInfo";
 import { listenForFileDrops } from "../lib/dropped";
@@ -16,6 +16,8 @@ import { DeleteDialog } from "./DeleteDialog";
 import { EditDialog } from "./EditDialog";
 import { MessageBubble } from "./MessageBubble";
 import { PinnedBar } from "./PinnedBar";
+import { PinDialog } from "./PinDialog";
+import { PinIcon } from "./Icons";
 import { ChatSearch, searchChat } from "./ChatSearch";
 import { searchWords } from "../lib/search";
 import { SearchIcon } from "./Icons";
@@ -79,13 +81,15 @@ interface ChatViewProps {
   loadGroup?: (id: string) => Promise<Group>;
   /** A group's info fresh from the network. */
   loadGroupDetails?: (id: string) => Promise<Group>;
-  /** The messages pinned in a chat, the latest pin first. */
-  loadPinned?: (chatId: string) => Promise<Message[]>;
+  /** The messages pinned in a chat, the latest pin first, and who pinned what. */
+  loadPinned?: (chatId: string) => Promise<Pins>;
+  /** Pins a message for everyone for `secs`, or unpins it with `null`. */
+  onPin?: (message: Message, secs: number | null) => Promise<void>;
   /** Changes when a message of this chat was pinned or unpinned. */
   pinsTick?: number;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onTyping, loadPinned, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
   const [personId, setPersonId] = useState<string | null>(null);
   const closePerson = useCallback(() => setPersonId(null), []);
   const loadShownPerson = useCallback(() => loadPerson!(personId!), [loadPerson, personId]);
@@ -260,12 +264,12 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
   const [jumpTo, setJumpTo] = useState<string | null>(null);
 
   // Pinned messages, asked for again when pins change or older history comes.
-  const [pinsOf, setPinsOf] = useState<{ chatKey: string; list: Message[] }>({ chatKey, list: [] });
+  const [pinsOf, setPinsOf] = useState<{ chatKey: string; list: Message[]; notes: PinNote[] }>({ chatKey, list: [], notes: [] });
   useEffect(() => {
-    if (!loadPinned) return setPinsOf({ chatKey, list: [] });
+    if (!loadPinned) return setPinsOf({ chatKey, list: [], notes: [] });
     let alive = true;
     loadPinned(chat.id)
-      .then((list) => alive && setPinsOf({ chatKey, list }))
+      .then(({ messages: list, notes }) => alive && setPinsOf({ chatKey, list, notes }))
       .catch(console.error);
     return () => {
       alive = false;
@@ -278,6 +282,18 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
     return pinsOf.list.map((pin) => loaded.get(pin.id) ?? pin).filter((pin) => !pin.deleted);
   }, [pinsOf, chatKey, messages]);
   const pinnedIds = useMemo(() => new Set(pins.map((pin) => pin.id)), [pins]);
+  const pinNotes = pinsOf.chatKey === chatKey ? pinsOf.notes : NO_NOTES;
+  /** The message whose pin length is being chosen. */
+  const [pinning, setPinning] = useState<Message | null>(null);
+  const pinsRef = useRef(pinnedIds);
+  pinsRef.current = pinnedIds;
+  const togglePin = useMemo(() => {
+    if (!onPin) return undefined;
+    return (message: Message) => {
+      if (!pinsRef.current.has(message.id)) return setPinning(message);
+      onPin(message, null).catch((e) => reportError.current?.(String(e)));
+    };
+  }, [onPin]);
   const [viewing, setViewing] = useState<string | null>(null);
   const viewable = useMemo(
     () =>
@@ -483,19 +499,22 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
           </div>
         ) : null}
         <div key={chatKey} ref={content} className={openedEmpty.current && messages.length > 0 ? "animate-fade-in" : undefined}>
-          {groupByDay(visible).map((day) => (
+          {withPinNotes(visible, pinNotes).map(({ key, at, messages: day, notes }) => (
             // Each day is its own block so its sticky chip scrolls away when
             // the next day's chip arrives, instead of stacking under it.
-            <section key={day[0].id}>
+            <section key={key}>
               <div className="sticky top-2 z-10 my-3 flex justify-center">
                 <span
                   className="rounded-[7.5px] bg-(--day-chip-bg) px-3 py-1.25 text-[12.5px] text-(--day-chip-text) uppercase"
                   style={{ boxShadow: "var(--bubble-shadow)" }}
                 >
-                  {formatDayLabel(day[0].sentAt)}
+                  {formatDayLabel(at)}
                 </span>
               </div>
-              {albums(day).map(({ message, index, album }) => {
+              {albums(day).map(({ message, index, album }) => (
+                <Fragment key={message.id}>
+                  {pinLines(notes, day[index - 1], album ? album[album.length - 1] : message, setJumpTo)}
+                  {(() => {
                 const prev = day[index - 1];
                 if (album) {
                   const tail = !prev || prev.fromMe !== message.fromMe || (!message.fromMe && prev.author !== message.author);
@@ -547,6 +566,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                     flash={flashed === message.id}
                     highlight={searchHits.has(message.id) ? searchMarks : undefined}
                     pinned={pinnedIds.has(message.id)}
+                    onPin={togglePin}
                   />
                 );
                 if (message.id !== unread.current.id) return bubble;
@@ -560,7 +580,10 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                     {bubble}
                   </Fragment>
                 );
-              })}
+                  })()}
+                </Fragment>
+              ))}
+              {pinLines(notes, day[day.length - 1], undefined, setJumpTo)}
             </section>
           ))}
         </div>
@@ -632,6 +655,9 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
 
       {editing && onEdit ? (
         <EditDialog message={editing} onSave={(text) => onEdit(editing, text)} onClose={() => setEditing(null)} />
+      ) : null}
+      {pinning && onPin ? (
+        <PinDialog full={pins.length >= 3} onPin={(secs) => onPin(pinning, secs)} onClose={() => setPinning(null)} />
       ) : null}
 
       <Composer
@@ -713,4 +739,53 @@ function albums(day: Message[]): { message: Message; index: number; album?: Mess
     }
   }
   return out;
+}
+
+const NO_NOTES: PinNote[] = [];
+
+/**
+ * The days of a chronological message list, each with the "pinned a
+ * message" lines that fall in it. A day can hold only lines. Lines from
+ * before the first message shown are left out: where they go isn't known yet.
+ */
+function withPinNotes(messages: Message[], notes: PinNote[]): { key: string; at: string; messages: Message[]; notes: PinNote[] }[] {
+  const days = groupByDay(messages).map((day) => ({ key: day[0].id, at: day[0].sentAt, messages: day, notes: [] as PinNote[] }));
+  if (!messages.length) return days;
+  const first = Date.parse(messages[0].sentAt);
+  for (const note of notes) {
+    if (Date.parse(note.at) < first) continue;
+    let day = days.find((d) => sameDay(d.at, note.at));
+    if (!day) {
+      day = { key: `pins-${note.at}`, at: note.at, messages: [], notes: [] };
+      days.push(day);
+      days.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+    }
+    day.notes.push(note);
+  }
+  return days;
+}
+
+/** The lines for pins made after `after` and up to `upTo` (to the end of the day without it). */
+function pinLines(notes: PinNote[], after: Message | undefined, upTo: Message | undefined, onJump: (id: string) => void) {
+  if (!notes.length) return null;
+  const from = after ? Date.parse(after.sentAt) : -Infinity;
+  const to = upTo ? Date.parse(upTo.sentAt) : Infinity;
+  return notes
+    .filter((note) => {
+      const at = Date.parse(note.at);
+      return at > from && at <= to;
+    })
+    .map((note) => (
+      <div key={`${note.messageId}-${note.at}`} className="my-2 flex justify-center px-4">
+        <button
+          type="button"
+          onClick={() => onJump(note.messageId)}
+          className="flex max-w-full items-center gap-1.5 rounded-[7.5px] bg-(--day-chip-bg) px-3 py-1.25 text-[12.5px] text-(--day-chip-text) hover:brightness-95"
+          style={{ boxShadow: "var(--bubble-shadow)" }}
+        >
+          <PinIcon size={14} className="shrink-0" />
+          <span className="truncate">{note.byMe ? "You" : (note.by ?? "Someone")} pinned a message</span>
+        </button>
+      </div>
+    ));
 }

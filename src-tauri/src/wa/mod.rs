@@ -24,7 +24,7 @@ use whatsapp_rust::waproto::whatsapp::sync_action_value::label_edit_action::List
 use whatsapp_rust::waproto::whatsapp::sync_action_value::{FavoritesAction, LabelEditAction, favorites_action};
 use whatsapp_rust::{
     AppStateResyncMode, ChatStateType, ErrorChainExt, MediaRetryResult, MediaReuploadRequest, PresencePolicy, PresenceStatus,
-    ProfilePictureLookup, RevokeType, UploadOptions, WAPatchName, message_key, message_range, schemas,
+    PinDuration, ProfilePictureLookup, RevokeType, UploadOptions, WAPatchName, message_key, message_range, schemas,
 };
 
 use crate::account::{
@@ -32,7 +32,7 @@ use crate::account::{
 };
 use crate::store;
 use crate::store::{
-    CdnRef, ChatStore, History, ContactDto, Content, Deletion, Delivery, LinkPreview, ListDto, ReplyRef, MessageDto, Notice, StarredDto, StoredMessage,
+    CdnRef, ChatStore, History, ContactDto, Content, Deletion, Delivery, LinkPreview, ListDto, ReplyRef, MessageDto, Notice, PinsDto, StarredDto, StoredMessage,
     now_ms,
 };
 pub use crate::store::ChatSummary;
@@ -307,15 +307,59 @@ impl WaManager {
         }
     }
 
-    /// The messages pinned in a chat, the latest pin first. Pinned messages
-    /// only the history database has are brought back into memory.
-    pub fn pinned_messages(&self, chat_id: &str) -> Vec<MessageDto> {
+    /// The messages pinned in a chat, the latest pin first, and who pinned
+    /// what. Pinned messages only the history database has are brought back
+    /// into memory.
+    pub fn pinned_messages(&self, chat_id: &str) -> PinsDto {
         let ids = lock(&self.store).pinned_ids(chat_id);
         for id in &ids {
             self.recall(chat_id, id);
         }
         let store = lock(&self.store);
-        ids.iter().filter_map(|id| store.message_dto(chat_id, id)).collect()
+        PinsDto {
+            messages: ids.iter().filter_map(|id| store.message_dto(chat_id, id)).collect(),
+            notes: store.pin_notes(chat_id),
+        }
+    }
+
+    /// Pins a message for everyone for `secs` (24 hours, 7 days or 30
+    /// days), or unpins it when `secs` is `None`.
+    pub async fn pin_message(&self, chat_id: &str, message_id: &str, secs: Option<u32>) -> Result<(), String> {
+        self.recall(chat_id, message_id);
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
+        let target = lock(&self.store).reaction_target(chat_id, message_id).ok_or("That message is gone.")?;
+        let key = wa::MessageKey {
+            remote_jid: Some(chat_id.to_string()),
+            from_me: Some(target.from_me),
+            id: Some(message_id.to_string()),
+            participant: target.author.filter(|_| chat_id.ends_with("@g.us") && !target.from_me),
+            ..Default::default()
+        };
+        let at_ms = now_ms();
+        let until_ms = match secs {
+            Some(secs) => {
+                let duration = match secs {
+                    0..=86_400 => PinDuration::Hours24,
+                    86_401..=604_800 => PinDuration::Days7,
+                    _ => PinDuration::Days30,
+                };
+                client.pin_message(jid, key, duration).await.map_err(|e| format!("The message was not pinned: {e}"))?;
+                Some(at_ms + secs as i64 * 1000)
+            }
+            None => {
+                client.unpin_message(jid, key).await.map_err(|e| format!("The message was not unpinned: {e}"))?;
+                None
+            }
+        };
+        let chat = {
+            let mut store = lock(&self.store);
+            store.set_message_pin(chat_id, message_id, at_ms, until_ms, None);
+            store.chat_key(chat_id)
+        };
+        let _ = self.app.emit("wa://pins", chat);
+        self.mark_dirty();
+        Ok(())
     }
 
     /// Messages of a chat from before `before_ms`, for scrolling back past
@@ -1912,9 +1956,14 @@ impl WaManager {
                         }
                         if let Some(pin) = convert::pin(&m.message, m.info.timestamp.timestamp_millis()) {
                             let chat = m.info.source.chat.to_non_ad_string();
-                            if store.set_message_pin(&chat, &pin.target, pin.at_ms, pin.until_ms) {
-                                pinned_in.push(store.chat_key(&chat));
-                            }
+                            let by = (!m.info.source.is_from_me).then(|| m.info.source.sender.to_non_ad_string());
+                            let stored = store.set_message_pin(&chat, &pin.target, pin.at_ms, pin.until_ms, by.as_deref());
+                            log::info!(
+                                "whatsapp: {} of {} in {chat} (stored: {stored})",
+                                if pin.until_ms.is_some() { "pin" } else { "unpin" },
+                                pin.target
+                            );
+                            pinned_in.push(store.chat_key(&chat));
                             continue;
                         }
                         match convert::reaction(&m.message) {
@@ -2164,8 +2213,8 @@ impl WaManager {
             let mut edits = Vec::new();
             for item in &c.messages {
                 edits.extend(convert::history_edit(&c.id, item));
-                for pin in convert::history_pins(item) {
-                    store.set_message_pin(&c.id, &pin.target, pin.at_ms, pin.until_ms);
+                for pin in convert::history_pins(&c.id, item) {
+                    store.set_message_pin(&c.id, &pin.target, pin.at_ms, pin.until_ms, pin.by.as_deref());
                 }
                 if let Some(incoming) = convert::history(&c.id, item) {
                     let id = incoming.message.id.clone();

@@ -1,7 +1,10 @@
 import { matches } from "../lib/search";
 import { hueFor, initialsFor } from "../lib/avatar";
 import { DEMO_CHATS, DEMO_MESSAGES } from "../data/demo-chats";
-import type { BackendEvent, Chat, ChatBackend, Contact, CustomList, GroupInfo, Message, OutgoingLink, StarredMessage } from "./types";
+import type { BackendEvent, Chat, ChatBackend, Contact, CustomList, GroupInfo, Message, OutgoingLink, PinNote, Pins, StarredMessage } from "./types";
+
+/** A demo pin; unpinned ones keep their line in the chat. */
+type MockPin = PinNote & { unpinned?: boolean };
 
 function cloneChats(): Chat[] {
   return DEMO_CHATS.map((c) => ({ ...c, account: "whatsapp" }));
@@ -87,9 +90,33 @@ export class MockBackend implements ChatBackend {
     };
   }
 
-  /** Demo pins: the first two texts of each chat, the later one pinned last. */
-  async pinnedMessages(chatId: string): Promise<Message[]> {
-    return (this.messages.get(chatId) ?? []).filter((m) => m.kind === "text" && !m.deleted).slice(0, 2).reverse();
+  /** Pins by chat, the latest last; starts as the first two texts of each chat. */
+  private pins = new Map<string, MockPin[]>();
+
+  private pinsOf(chatId: string): MockPin[] {
+    let pins = this.pins.get(chatId);
+    if (!pins) {
+      const texts = (this.messages.get(chatId) ?? []).filter((m) => m.kind === "text" && !m.deleted).slice(0, 2);
+      pins = texts.map((m, i): MockPin => ({ messageId: m.id, at: m.sentAt, byMe: i === 0, by: i === 0 ? undefined : (m.author ?? "Them") }));
+      this.pins.set(chatId, pins);
+    }
+    return pins;
+  }
+
+  async pinnedMessages(chatId: string): Promise<Pins> {
+    const list = this.messages.get(chatId) ?? [];
+    const pins = this.pinsOf(chatId).filter((p) => !p.unpinned);
+    const messages = pins
+      .slice(-3)
+      .reverse()
+      .flatMap((p) => list.filter((m) => m.id === p.messageId));
+    return { messages, notes: this.pinsOf(chatId).map(({ unpinned: _, ...note }) => note) };
+  }
+
+  async pinMessage(chatId: string, messageId: string, secs: number | null): Promise<void> {
+    const pins = this.pinsOf(chatId);
+    for (const p of pins) if (p.messageId === messageId) p.unpinned = true;
+    if (secs !== null) pins.push({ messageId, at: new Date().toISOString(), byMe: true });
   }
 
   async markRead(chatId: string): Promise<void> {

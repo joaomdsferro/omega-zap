@@ -7,6 +7,7 @@ import { fileUrl } from "../lib/files";
 import { signalBody } from "../lib/markup";
 import { MAX_SEND_BYTES, base64Json, fileDetails } from "../lib/outgoing";
 import type {
+  Pins,
   Attachment,
   BackendEvent,
   Chat,
@@ -234,7 +235,8 @@ export class TauriBackend implements ChatBackend {
   openMedia?: (chatId: string, messageId: string, index: number) => Promise<void>;
   linkThumbnailUrl?: (chatId: string, messageId: string) => Promise<string>;
   lookupNumber?: (phone: string) => Promise<string | null>;
-  pinnedMessages?: (chatId: string) => Promise<Message[]>;
+  pinnedMessages?: (chatId: string) => Promise<Pins>;
+  pinMessage?: (chatId: string, messageId: string, secs: number | null) => Promise<void>;
   groupInfo?: (id: string) => Promise<GroupInfo>;
   editMessage?: (chatId: string, messageId: string, text: string) => Promise<Message>;
   groupDetails?: (id: string) => Promise<GroupInfo>;
@@ -257,7 +259,14 @@ export class TauriBackend implements ChatBackend {
       this.editMessage = async (chatId, messageId, text) => toMessage(await invoke<RawMessage>("wa_edit_message", { chatId, messageId, text }));
       this.groupInfo = async (id) => toGroupInfo(await invoke<RawGroupInfo>("wa_group_info", { id }), account);
       this.groupDetails = async (id) => toGroupInfo(await invoke<RawGroupInfo>("wa_group_details", { id }), account);
-      this.pinnedMessages = async (chatId) => (await invoke<RawMessage[]>("wa_pinned_messages", { chatId })).map(toMessage);
+      this.pinnedMessages = async (chatId) => {
+        const raw = await invoke<{ messages: RawMessage[]; notes: { messageId: string; at: number; byMe: boolean; by: string | null }[] }>("wa_pinned_messages", { chatId });
+        return {
+          messages: raw.messages.map(toMessage),
+          notes: raw.notes.map((n) => ({ messageId: n.messageId, at: new Date(n.at).toISOString(), byMe: n.byMe, by: n.by ?? undefined })),
+        };
+      };
+      this.pinMessage = (chatId, messageId, secs) => invoke("wa_pin_message", { chatId, messageId, secs });
       this.setTyping = (chatId, state) => invoke("wa_set_typing", { chatId, state });
       this.watchPresence = (chatId) => invoke("wa_watch_presence", { chatId });
       this.privacy = async () => {

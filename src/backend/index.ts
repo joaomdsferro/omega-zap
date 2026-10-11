@@ -1,4 +1,6 @@
 export type {
+  PinNote,
+  Pins,
   Attachment,
   AttachmentKind,
   BackendEvent,
