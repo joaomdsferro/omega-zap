@@ -16,6 +16,10 @@
 
 [Install](#install) · [Features](#features) · [How it works](#how-it-works) · [Privacy](#privacy) · [FAQ](#faq) · [Contributing](CONTRIBUTING.md)
 
+<br />
+
+<img src="docs/assets/screenshot.png" alt="Omega Zap showing a group chat in the WhatsApp dark theme, with the chat list on the left" width="1000" />
+
 </div>
 
 ---
