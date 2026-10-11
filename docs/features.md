@@ -33,6 +33,13 @@ Everything Omega Zap does today, network by network. For what is still missing, 
 - **Contact info.** Click a sender's name in a group, a mention, or the header of a chat with one
   person: their picture, number, About, media from your chat, starred messages, a mute switch and the
   groups you share.
+- **Group info.** Click a group's header: its picture, description, who made it and when, media,
+  starred messages, a mute switch, and the members (admins marked), searchable, each opening their
+  contact info. WhatsApp only.
+- **Pinned messages.** Messages pinned in a WhatsApp chat show in a bar over the conversation, one at a
+  time; click it to go to the message and bring up the next. Pinned messages carry a small pin.
+- **Edits.** On WhatsApp an edited message shows its new text with "Edited". Your own texts can be
+  edited from the message menu for 15 minutes after sending.
 - **Search.** The sidebar search finds chats and then messages across every chat; **Ctrl+F** searches
   inside a chat and marks the words. Case and accents are ignored.
 - **New chat.** Your contacts A to Z, and yourself. On WhatsApp you can also type a full phone number.
@@ -95,7 +102,7 @@ WhatsApp only, for now.
 
 - Windows and macOS builds
 - Recording voice messages
-- Showing message edits
+- Pinning messages and editing captions from this computer; Signal edits and pinned messages
 - An app lock (a password for the stored data)
 - More than one account per network, WhatsApp Business, Telegram
 - Signal: typing indicators, starting a chat by phone number (saved contacts work), fetching history
