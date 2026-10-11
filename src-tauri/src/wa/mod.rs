@@ -1267,6 +1267,30 @@ impl WaManager {
         Ok(store::PersonDetailsDto { about, photo, common_groups })
     }
 
+    pub fn group_info(&self, id: &str) -> store::GroupInfoDto {
+        lock(&self.store).group_info(id)
+    }
+
+    /// A group's info fresh from the network: members and their roles,
+    /// description, and its picture at full size.
+    pub async fn group_details(&self, id: &str) -> Result<store::GroupInfoDto, String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = id.parse().map_err(|e| format!("Not a group: {e}"))?;
+        let groups = client.groups();
+        let mut metadata = groups.fetch_metadata(&jid).await.map_err(|e| format!("The group could not be looked up: {e}"))?;
+        groups.resolve_participant_addresses(&mut metadata).await;
+        let photo = self.full_picture(&client, id, &jid).await;
+        let members = members_of(&metadata);
+        {
+            let mut store = lock(&self.store);
+            store.set_group_participants(id, &members);
+            store.set_group_facts(id, facts_of(&metadata));
+            store.remember_group_picture(id, photo.as_deref());
+        }
+        self.mark_dirty();
+        Ok(self.group_info(id))
+    }
+
     /// Looks up who is in every group, in one request, at most once a day:
     /// contact info finds the groups in common from it.
     fn sync_participants(self: &Arc<Self>, generation: u64, client: Arc<Client>) {
@@ -2292,16 +2316,25 @@ fn forwarding(context: Option<wa::ContextInfo>, score: u32) -> Option<wa::Contex
 }
 
 /// A group's members as the store keeps them: (id, phone number id, LID).
-fn members_of(metadata: &whatsapp_rust::features::GroupMetadata) -> Vec<(String, Option<String>, Option<String>)> {
+fn members_of(metadata: &whatsapp_rust::features::GroupMetadata) -> Vec<store::GroupMember> {
     metadata
         .participants
         .iter()
-        .map(|p| {
-            (
-                p.jid.to_non_ad_string(),
-                p.phone_number.as_ref().map(|j| j.to_non_ad_string()),
-                p.lid.as_ref().map(|j| j.to_non_ad_string()),
-            )
+        .map(|p| store::GroupMember {
+            id: p.jid.to_non_ad_string(),
+            pn: p.phone_number.as_ref().map(|j| j.to_non_ad_string()),
+            lid: p.lid.as_ref().map(|j| j.to_non_ad_string()),
+            admin: p.is_admin(),
+            super_admin: p.is_super_admin(),
         })
         .collect()
+}
+
+/// What a group lookup says about a group, besides who is in it.
+fn facts_of(metadata: &whatsapp_rust::features::GroupMetadata) -> store::GroupFacts {
+    store::GroupFacts {
+        description: metadata.description.clone(),
+        created_ms: metadata.creation_time.map(|t| t as i64 * 1000),
+        creator: metadata.creator_pn.as_ref().or(metadata.creator.as_ref()).map(|j| j.to_non_ad_string()),
+    }
 }

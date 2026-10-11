@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Chat, Message, OutgoingLink, Person, PersonDetails, StarredMessage, TypingState } from "../backend";
+import type { Chat, GroupInfo as Group, Message, OutgoingLink, Person, PersonDetails, StarredMessage, TypingState } from "../backend";
 import { ContactInfo } from "./ContactInfo";
+import { GroupInfo } from "./GroupInfo";
 import { listenForFileDrops } from "../lib/dropped";
 import { formatDayLabel, sameDay } from "../lib/format";
 import { AccountBadge } from "./AccountBadge";
@@ -71,17 +72,26 @@ interface ChatViewProps {
   historyTick?: number;
   /** Searches the whole history, for the search in this chat. */
   searchMessages?: (query: string, chatId?: string) => Promise<StarredMessage[]>;
+  /** A group's info, from what this computer knows. */
+  loadGroup?: (id: string) => Promise<Group>;
+  /** A group's info fresh from the network. */
+  loadGroupDetails?: (id: string) => Promise<Group>;
   /** The messages pinned in a chat, the latest pin first. */
   loadPinned?: (chatId: string) => Promise<Message[]>;
   /** Changes when a message of this chat was pinned or unpinned. */
   pinsTick?: number;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onTyping, loadPinned, pinsTick }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onTyping, loadPinned, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
   const [personId, setPersonId] = useState<string | null>(null);
   const closePerson = useCallback(() => setPersonId(null), []);
   const loadShownPerson = useCallback(() => loadPerson!(personId!), [loadPerson, personId]);
   const loadShownDetails = useCallback(() => loadPersonDetails!(personId!), [loadPersonDetails, personId]);
+  /** Group info is open, for this chat. */
+  const [groupOpen, setGroupOpen] = useState<string | null>(null);
+  const closeGroup = useCallback(() => setGroupOpen(null), []);
+  const loadShownGroup = useCallback(() => loadGroup!(chat.id), [loadGroup, chat.id]);
+  const loadShownGroupDetails = useCallback(() => loadGroupDetails!(chat.id), [loadGroupDetails, chat.id]);
   // Someone's contact info belongs to the chat it was opened from.
   useEffect(() => setPersonId(null), [chat.id, chat.account]);
   const scroller = useRef<HTMLDivElement>(null);
@@ -411,12 +421,12 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
         </div>
       ) : null}
       <header className="flex h-15 shrink-0 items-center gap-3 border-l border-(--divider) bg-(--panel-header-bg) px-4">
-        {/* A chat with one person opens their contact info, as on WhatsApp. */}
+        {/* The header opens contact info, or group info for a group, as on WhatsApp. */}
         <button
           type="button"
-          onClick={() => setPersonId(chat.id)}
-          disabled={chat.isGroup || !loadPerson}
-          aria-label={chat.isGroup || !loadPerson ? undefined : `Contact info for ${chat.name}`}
+          onClick={() => (chat.isGroup ? setGroupOpen(chatKey) : setPersonId(chat.id))}
+          disabled={chat.isGroup ? !loadGroup : !loadPerson}
+          aria-label={chat.isGroup ? (loadGroup ? `Group info for ${chat.name}` : undefined) : loadPerson ? `Contact info for ${chat.name}` : undefined}
           className="flex min-w-0 items-center gap-3 text-left disabled:cursor-default"
         >
           <Avatar
@@ -549,6 +559,23 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
           ))}
         </div>
       </div>
+
+      {groupOpen === chatKey && loadGroup ? (
+        <GroupInfo
+          key={chatKey}
+          load={loadShownGroup}
+          loadDetails={loadGroupDetails ? loadShownGroupDetails : undefined}
+          loadMedia={loadMedia}
+          onClose={closeGroup}
+          onJump={(id) => {
+            setGroupOpen(null);
+            setJumpTo(id);
+          }}
+          onOpenPerson={loadPerson ? setPersonId : undefined}
+          onStarred={onStarred}
+          onMute={onMuteChat ? (muted) => onMuteChat(chat.id, muted) : undefined}
+        />
+      ) : null}
 
       {personId && loadPerson ? (
         <ContactInfo

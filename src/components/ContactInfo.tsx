@@ -129,24 +129,7 @@ export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, 
               {person.starred > 0 ? (
                 <Row icon={<StarIcon size={20} />} label="Starred messages" value={String(person.starred)} onClick={onStarred} />
               ) : null}
-              {onMute ? (
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={person.muted}
-                  onClick={toggleMute}
-                  className="flex w-full items-center gap-5 rounded-lg px-3 py-3 text-left hover:bg-(--hover-bg)"
-                >
-                  <MuteIcon size={20} className="text-(--text-secondary)" />
-                  <span className="flex-1 text-[15px] text-(--text-primary)">Mute notifications</span>
-                  <span
-                    className={["flex h-6 w-11 shrink-0 items-center rounded-full px-0.5 transition-colors", person.muted ? "bg-(--accent)" : "bg-(--text-secondary)/40"].join(" ")}
-                    aria-hidden
-                  >
-                    <span className={["h-5 w-5 rounded-full bg-white transition-transform", person.muted ? "translate-x-5" : ""].join(" ")} />
-                  </span>
-                </button>
-              ) : null}
+              {onMute ? <MuteSwitch muted={person.muted} onToggle={toggleMute} /> : null}
             </Section>
           ) : null}
 
@@ -202,11 +185,32 @@ function Action({ icon, label, onClick, soon }: { icon: ReactNode; label: string
   );
 }
 
-function Section({ children }: { children: ReactNode }) {
+export function MuteSwitch({ muted, onToggle }: { muted: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={muted}
+      onClick={onToggle}
+      className="flex w-full items-center gap-5 rounded-lg px-3 py-3 text-left hover:bg-(--hover-bg)"
+    >
+      <MuteIcon size={20} className="text-(--text-secondary)" />
+      <span className="flex-1 text-[15px] text-(--text-primary)">Mute notifications</span>
+      <span
+        className={["flex h-6 w-11 shrink-0 items-center rounded-full px-0.5 transition-colors", muted ? "bg-(--accent)" : "bg-(--text-secondary)/40"].join(" ")}
+        aria-hidden
+      >
+        <span className={["h-5 w-5 rounded-full bg-white transition-transform", muted ? "translate-x-5" : ""].join(" ")} />
+      </span>
+    </button>
+  );
+}
+
+export function Section({ children }: { children: ReactNode }) {
   return <section className="border-t-8 border-(--panel-header-bg) px-3 py-3">{children}</section>;
 }
 
-function Row({ icon, label, value, onClick }: { icon: ReactNode; label: string; value?: string; onClick?: () => void }) {
+export function Row({ icon, label, value, onClick }: { icon: ReactNode; label: string; value?: string; onClick?: () => void }) {
   return (
     <button
       type="button"
@@ -223,7 +227,7 @@ function Row({ icon, label, value, onClick }: { icon: ReactNode; label: string; 
 }
 
 /** A photo or video from the chat with them, square. */
-function Thumb({ message, loadMedia, onOpen }: { message: Message; loadMedia?: LoadMedia; onOpen?: () => void }) {
+export function Thumb({ message, loadMedia, onOpen }: { message: Message; loadMedia?: LoadMedia; onOpen?: () => void }) {
   const [url, setUrl] = useState<string | null>(null);
   const video = useRef(message.kind !== "image");
   useEffect(() => {

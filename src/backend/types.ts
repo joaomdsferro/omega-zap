@@ -174,6 +174,44 @@ export interface PersonDetails {
   commonGroups: GroupRef[];
 }
 
+/** Someone in a group, as group info lists them. */
+export interface GroupMember {
+  id: string;
+  name: string;
+  /** Their number, when they are not a saved contact. */
+  phone?: string;
+  avatarUrl?: string;
+  avatarHue: number;
+  initials: string;
+  isMe: boolean;
+  admin: boolean;
+  about?: string;
+}
+
+/** A group's info. */
+export interface GroupInfo {
+  id: string;
+  account: AccountId;
+  name: string;
+  avatarUrl?: string;
+  avatarHue: number;
+  initials: string;
+  /** How many people are in it, us included, once looked up. */
+  members?: number;
+  description?: string;
+  /** ISO time the group was made. */
+  createdAt?: string;
+  createdBy?: string;
+  muted: boolean;
+  starred: number;
+  mediaCount: number;
+  recentMedia: Message[];
+  /** Us first, then admins, then saved contacts and the rest by name. */
+  participants: GroupMember[];
+  /** We are an admin of it. */
+  isAdmin: boolean;
+}
+
 export interface GroupRef {
   id: string;
   name: string;
@@ -289,6 +327,10 @@ export interface ChatBackend {
   person?(id: string): Promise<Person>;
   /** About, full-size picture and groups in common: slower, from the network. */
   personDetails?(id: string): Promise<PersonDetails>;
+  /** A group's info, from what this computer knows. */
+  groupInfo?(id: string): Promise<GroupInfo>;
+  /** A group's info fresh from the network: members, roles, description, full-size picture. */
+  groupDetails?(id: string): Promise<GroupInfo>;
   /** Mutes a chat until `untilMs`, or for good without it, or unmutes it. */
   setMuted?(chatId: string, muted: boolean, untilMs?: number): Promise<void>;
   /** Moves a chat to Archived, which unpins it, or back to the list. */

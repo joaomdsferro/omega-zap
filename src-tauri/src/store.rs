@@ -374,6 +374,12 @@ struct StoredChat {
     members_checked_ms: i64,
     /// Who is in the group, once looked up: finds the groups in common.
     participants: Vec<String>,
+    /// The group's admins, its creator first when it is one.
+    admins: Vec<String>,
+    /// What the group says about itself, and when and by whom it was made.
+    description: Option<String>,
+    created_ms: Option<i64>,
+    creator: Option<String>,
     /// Messages pinned for everyone, and unpins kept a while so an older
     /// pin replayed by history does not bring them back.
     pins: Vec<StoredPin>,
@@ -571,6 +577,60 @@ pub struct PersonDetailsDto {
     /// File name of their picture at full size inside the avatars directory.
     pub photo: Option<String>,
     pub common_groups: Vec<GroupRefDto>,
+}
+
+/// Someone in a group, as group info lists them.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MemberDto {
+    pub id: String,
+    pub name: String,
+    /// Their number, when they are not a saved contact: WhatsApp shows it beside the name.
+    pub phone: Option<String>,
+    pub avatar: Option<String>,
+    pub is_me: bool,
+    pub admin: bool,
+    pub about: Option<String>,
+}
+
+/// A group's info, as the UI shows it beside the chat.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupInfoDto {
+    pub id: String,
+    pub name: String,
+    pub avatar: Option<String>,
+    pub members: Option<u32>,
+    pub description: Option<String>,
+    pub created_ms: Option<i64>,
+    /// Who made the group, by name.
+    pub created_by: Option<String>,
+    pub muted: bool,
+    pub starred: u32,
+    pub media_count: u32,
+    pub recent_media: Vec<MessageDto>,
+    /// Us first, then admins, then saved contacts and the rest by name.
+    pub participants: Vec<MemberDto>,
+    /// Whether we are an admin of it.
+    pub is_admin: bool,
+}
+
+/// Someone in a group, as a group lookup names them.
+pub struct GroupMember {
+    pub id: String,
+    pub pn: Option<String>,
+    pub lid: Option<String>,
+    pub admin: bool,
+    /// The group's creator.
+    pub super_admin: bool,
+}
+
+/// What a group lookup says about a group, besides who is in it.
+#[derive(Default)]
+pub struct GroupFacts {
+    pub description: Option<String>,
+    pub created_ms: Option<i64>,
+    pub creator: Option<String>,
 }
 
 /// A group, as listed in someone's contact info.
@@ -1037,19 +1097,7 @@ impl ChatStore {
         let is_me = self.own_ids.contains(&id);
         let saved = self.contact_names.get(&id);
         let chat = self.chats.get(&id);
-        let media: Vec<&StoredMessage> = chat
-            .map(|c| {
-                c.messages
-                    .iter()
-                    .filter(|m| m.deleted.is_none())
-                    .filter(|m| {
-                        matches!(m.content.kind, MsgKind::Image | MsgKind::Media)
-                            || !m.content.attachments.is_empty()
-                            || m.content.link.is_some()
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let (media_count, recent_media) = self.media_of(&id);
         let profile = self.push_names.get(&id).filter(|p| saved.is_some_and(|s| s != *p) || saved.is_none());
         PersonDto {
             name: if is_me { "You".into() } else { self.display_name(&id) },
@@ -1070,16 +1118,111 @@ impl ChatStore {
             has_chat: chat.is_some(),
             muted: chat.is_some_and(|c| c.muted_until_ms.is_some_and(|until| until > now_ms())),
             starred: chat.map_or(0, |c| c.messages.iter().filter(|m| m.starred).count() as u32),
-            media_count: media.len() as u32,
-            recent_media: media
-                .iter()
-                .rev()
-                .filter(|m| matches!(m.content.kind, MsgKind::Image) || m.content.attachments.iter().any(|a| a.kind() == "video"))
-                .take(3)
-                .map(|m| self.to_dto(&id, m))
-                .collect(),
+            media_count,
+            recent_media,
             id,
         }
+    }
+
+    /// How many photos, videos, files and links a chat holds, and its
+    /// latest photos and videos, newest first.
+    fn media_of(&self, id: &str) -> (u32, Vec<MessageDto>) {
+        let media: Vec<&StoredMessage> = self
+            .chats
+            .get(id)
+            .map(|c| {
+                c.messages
+                    .iter()
+                    .filter(|m| m.deleted.is_none())
+                    .filter(|m| {
+                        matches!(m.content.kind, MsgKind::Image | MsgKind::Media)
+                            || !m.content.attachments.is_empty()
+                            || m.content.link.is_some()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let recent = media
+            .iter()
+            .rev()
+            .filter(|m| matches!(m.content.kind, MsgKind::Image) || m.content.attachments.iter().any(|a| a.kind() == "video"))
+            .take(3)
+            .map(|m| self.to_dto(id, m))
+            .collect();
+        (media.len() as u32, recent)
+    }
+
+    /// A group's info, from what is known here.
+    pub fn group_info(&self, id: &str) -> GroupInfoDto {
+        let id = self.canonical(id);
+        let chat = self.chats.get(&id);
+        let (media_count, recent_media) = self.media_of(&id);
+        let admins: Vec<String> = chat.map(|c| c.admins.iter().map(|a| self.canonical(a)).collect()).unwrap_or_default();
+        let mut participants: Vec<MemberDto> = chat
+            .map(|c| c.participants.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .map(|member| {
+                let member = self.canonical(member);
+                let is_me = self.own_ids.contains(&member);
+                MemberDto {
+                    name: self.display_name(&member),
+                    phone: if self.contact_names.contains_key(&member) || is_me { None } else { format_phone(&member) },
+                    avatar: if is_me {
+                        self.own_avatar()
+                    } else {
+                        self.chats.get(&member).and_then(|c| c.avatar_id.as_deref()).map(|pic| avatar_file(&member, pic))
+                    },
+                    admin: admins.contains(&member),
+                    about: if is_me { None } else { self.abouts.get(&member).cloned() },
+                    is_me,
+                    id: member,
+                }
+            })
+            .collect();
+        // Us, admins, saved contacts, then everyone else, each by name.
+        participants.sort_by_cached_key(|m| {
+            let rank = if m.is_me { 0 } else if m.admin { 1 } else if m.phone.is_none() { 2 } else { 3 };
+            (rank, m.name.to_lowercase())
+        });
+        GroupInfoDto {
+            name: chat.map_or_else(|| "Group".into(), |c| self.chat_name(&id, c)),
+            avatar: self
+                .full_pictures
+                .get(&id)
+                .cloned()
+                .or_else(|| chat.and_then(|c| c.avatar_id.as_deref()).map(|pic| avatar_file(&id, pic))),
+            members: chat.and_then(|c| c.members),
+            description: chat.and_then(|c| c.description.clone()),
+            created_ms: chat.and_then(|c| c.created_ms),
+            created_by: chat.and_then(|c| c.creator.as_deref()).map(|c| self.display_name(c)),
+            muted: chat.is_some_and(|c| c.muted_until_ms.is_some_and(|until| until > now_ms())),
+            starred: chat.map_or(0, |c| c.messages.iter().filter(|m| m.starred).count() as u32),
+            media_count,
+            recent_media,
+            is_admin: participants.iter().any(|m| m.is_me && m.admin),
+            participants,
+            id,
+        }
+    }
+
+    /// Keeps what a lookup of one group found beyond its members.
+    pub fn set_group_facts(&mut self, group: &str, facts: GroupFacts) {
+        let creator = facts.creator.map(|c| self.canonical(&c));
+        if let Some(chat) = self.chats.get_mut(&self.canonical(group)) {
+            chat.description = facts.description.filter(|d| !d.trim().is_empty());
+            chat.created_ms = facts.created_ms.or(chat.created_ms);
+            chat.creator = creator.or(chat.creator.take());
+        }
+    }
+
+    /// Keeps a group's full-size picture, found by group info.
+    pub fn remember_group_picture(&mut self, id: &str, picture: Option<&str>) {
+        let id = self.canonical(id);
+        match picture {
+            Some(file) => self.full_pictures.insert(id, file.to_string()),
+            None => self.full_pictures.remove(&id),
+        };
     }
 
     /// Whether the members of every group are due a lookup: once a day.
@@ -1108,17 +1251,21 @@ impl ChatStore {
         self.full_pictures.get(&self.canonical(id)).map(String::as_str)
     }
 
-    pub fn set_group_participants(&mut self, group: &str, members: &[(String, Option<String>, Option<String>)]) {
-        for (_, pn, lid) in members {
-            if let (Some(pn), Some(lid)) = (pn, lid) {
+    pub fn set_group_participants(&mut self, group: &str, members: &[GroupMember]) {
+        for member in members {
+            if let (Some(pn), Some(lid)) = (&member.pn, &member.lid) {
                 self.learn_mapping(lid, pn);
             }
         }
-        let ids: Vec<String> = members.iter().map(|(id, _, _)| self.canonical(id)).collect();
+        let ids: Vec<String> = members.iter().map(|m| self.canonical(&m.id)).collect();
+        let mut admins: Vec<(bool, String)> =
+            members.iter().filter(|m| m.admin || m.super_admin).map(|m| (!m.super_admin, self.canonical(&m.id))).collect();
+        admins.sort();
         let group = self.canonical(group);
         if let Some(chat) = self.chats.get_mut(&group) {
             chat.members = Some(ids.len() as u32);
             chat.participants = ids;
+            chat.admins = admins.into_iter().map(|(_, id)| id).collect();
         }
     }
 

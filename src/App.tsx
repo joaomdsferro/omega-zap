@@ -632,6 +632,8 @@ function Shell() {
     return load ? (message: Message) => load(message.chatId, message.id) : undefined;
   }, [selectedBackend]);
 
+  const loadGroup = useMemo(() => selectedBackend?.groupInfo?.bind(selectedBackend), [selectedBackend]);
+  const loadGroupDetails = useMemo(() => selectedBackend?.groupDetails?.bind(selectedBackend), [selectedBackend]);
   const loadPinned = useMemo(() => selectedBackend?.pinnedMessages?.bind(selectedBackend), [selectedBackend]);
 
   const star = useMemo(() => {
@@ -1023,6 +1025,8 @@ function Shell() {
         searchMessages={searchMessages}
         loadPinned={loadPinned}
         pinsTick={pinsTick}
+        loadGroup={loadGroup}
+        loadGroupDetails={loadGroupDetails}
         onFocused={clearFocus}
         loadPerson={loadPerson}
         loadPersonDetails={loadPersonDetails}

@@ -46,6 +46,16 @@ pub fn wa_get_messages(mgr: Mgr<'_>, chat_id: String) -> Vec<MessageDto> {
 }
 
 #[tauri::command]
+pub fn wa_group_info(mgr: Mgr<'_>, id: String) -> crate::store::GroupInfoDto {
+    mgr.group_info(&id)
+}
+
+#[tauri::command]
+pub async fn wa_group_details(mgr: Mgr<'_>, id: String) -> Result<crate::store::GroupInfoDto, String> {
+    mgr.group_details(&id).await
+}
+
+#[tauri::command]
 pub fn wa_pinned_messages(mgr: Mgr<'_>, chat_id: String) -> Vec<MessageDto> {
     mgr.pinned_messages(&chat_id)
 }

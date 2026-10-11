@@ -16,6 +16,8 @@ export type {
   Person,
   PersonDetails,
   GroupRef,
+  GroupInfo,
+  GroupMember,
   Privacy,
   PrivacyCategory,
   ReactionCount,

@@ -1,6 +1,7 @@
 import { matches } from "../lib/search";
+import { hueFor, initialsFor } from "../lib/avatar";
 import { DEMO_CHATS, DEMO_MESSAGES } from "../data/demo-chats";
-import type { BackendEvent, Chat, ChatBackend, Contact, CustomList, Message, OutgoingLink, StarredMessage } from "./types";
+import type { BackendEvent, Chat, ChatBackend, Contact, CustomList, GroupInfo, Message, OutgoingLink, StarredMessage } from "./types";
 
 function cloneChats(): Chat[] {
   return DEMO_CHATS.map((c) => ({ ...c, account: "whatsapp" }));
@@ -46,6 +47,36 @@ export class MockBackend implements ChatBackend {
 
   async getMessages(chatId: string): Promise<Message[]> {
     return [...(this.messages.get(chatId) ?? [])];
+  }
+
+  /** Demo group info: whoever wrote in the group are its members. */
+  async groupInfo(id: string): Promise<GroupInfo> {
+    const chat = this.chats.find((c) => c.id === id);
+    const name = chat?.name ?? "Group";
+    const authors = [...new Set((this.messages.get(id) ?? []).filter((m) => !m.fromMe).map((m) => m.author ?? "Someone"))];
+    const member = (who: string, isMe = false, admin = false) => ({
+      id: who,
+      name: who,
+      avatarHue: hueFor(who),
+      initials: initialsFor(who),
+      isMe,
+      admin,
+    });
+    return {
+      id,
+      account: "whatsapp",
+      name,
+      avatarHue: chat?.avatarHue ?? 0,
+      initials: chat?.initials ?? initialsFor(name),
+      members: authors.length + 1,
+      description: "Demo group.",
+      muted: Boolean(chat?.muted),
+      starred: 0,
+      mediaCount: 0,
+      recentMedia: [],
+      participants: [member("You", true), ...authors.map((who, i) => member(who, false, i === 0))],
+      isAdmin: false,
+    };
   }
 
   /** Demo pins: the first two texts of each chat, the later one pinned last. */

@@ -18,6 +18,7 @@ import type {
   Message,
   MessageKind,
   OutgoingLink,
+  GroupInfo,
   GroupRef,
   Person,
   PersonDetails,
@@ -94,6 +95,53 @@ interface RawGroupRef {
   name: string;
   avatar: string | null;
   members: number | null;
+}
+
+interface RawGroupInfo {
+  id: string;
+  name: string;
+  avatar: string | null;
+  members: number | null;
+  description: string | null;
+  createdMs: number | null;
+  createdBy: string | null;
+  muted: boolean;
+  starred: number;
+  mediaCount: number;
+  recentMedia: RawMessage[];
+  participants: { id: string; name: string; phone: string | null; avatar: string | null; isMe: boolean; admin: boolean; about: string | null }[];
+  isAdmin: boolean;
+}
+
+function toGroupInfo(raw: RawGroupInfo, account: AccountId): GroupInfo {
+  return {
+    id: raw.id,
+    account,
+    name: raw.name,
+    avatarUrl: raw.avatar ? fileUrl(raw.avatar, "avatar") : undefined,
+    avatarHue: hueFor(raw.id),
+    initials: initialsFor(raw.name),
+    members: raw.members ?? undefined,
+    description: raw.description ?? undefined,
+    createdAt: raw.createdMs ? new Date(raw.createdMs).toISOString() : undefined,
+    createdBy: raw.createdBy ?? undefined,
+    muted: raw.muted,
+    starred: raw.starred,
+    mediaCount: raw.mediaCount,
+    recentMedia: raw.recentMedia.map(toMessage),
+    participants: raw.participants.map((m) => ({
+      id: m.id,
+      name: m.name,
+      phone: m.phone ?? undefined,
+      avatarUrl: m.avatar ? fileUrl(m.avatar, "avatar") : undefined,
+      avatarHue: hueFor(m.id),
+      initials: initialsFor(m.name),
+      isMe: m.isMe,
+      admin: m.admin,
+      about: m.about ?? undefined,
+    })),
+    isAdmin: raw.isAdmin,
+  };
 }
 
 function toGroupRef(g: RawGroupRef): GroupRef {
@@ -185,6 +233,8 @@ export class TauriBackend implements ChatBackend {
   linkThumbnailUrl?: (chatId: string, messageId: string) => Promise<string>;
   lookupNumber?: (phone: string) => Promise<string | null>;
   pinnedMessages?: (chatId: string) => Promise<Message[]>;
+  groupInfo?: (id: string) => Promise<GroupInfo>;
+  groupDetails?: (id: string) => Promise<GroupInfo>;
   setTyping?: (chatId: string, state: TypingState) => Promise<void>;
   watchPresence?: (chatId: string) => Promise<void>;
   privacy?: () => Promise<Privacy>;
@@ -201,6 +251,8 @@ export class TauriBackend implements ChatBackend {
       this.linkThumbnailUrl = async (chatId, messageId) =>
         fileUrl(await invoke<string>("wa_link_thumbnail", { chatId, messageId }), "media");
       this.lookupNumber = (phone) => invoke<string | null>("wa_lookup_number", { phone });
+      this.groupInfo = async (id) => toGroupInfo(await invoke<RawGroupInfo>("wa_group_info", { id }), account);
+      this.groupDetails = async (id) => toGroupInfo(await invoke<RawGroupInfo>("wa_group_details", { id }), account);
       this.pinnedMessages = async (chatId) => (await invoke<RawMessage[]>("wa_pinned_messages", { chatId })).map(toMessage);
       this.setTyping = (chatId, state) => invoke("wa_set_typing", { chatId, state });
       this.watchPresence = (chatId) => invoke("wa_watch_presence", { chatId });
