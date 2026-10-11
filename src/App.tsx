@@ -15,6 +15,7 @@ import {
   type StarredMessage,
 } from "./backend";
 import { ChatView } from "./components/ChatView";
+import { ConfirmDialog, type ConfirmRequest } from "./components/ConfirmDialog";
 import { EmptyState } from "./components/EmptyState";
 import { ForwardDialog } from "./components/ForwardDialog";
 import { MuteDialog } from "./components/MuteDialog";
@@ -239,6 +240,8 @@ function Shell() {
     resolve: () => void;
     reject: (reason: unknown) => void;
   } | null>(null);
+  /** Something that can't be taken back, waiting to be confirmed. */
+  const [confirming, setConfirming] = useState<ConfirmRequest | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
@@ -316,6 +319,15 @@ function Shell() {
         } else if (event.type === "presence") {
           const key = `${backend.account}:${event.chatId}`;
           setPresence((prev) => new Map(prev).set(key, { online: event.online, lastSeen: event.lastSeen ?? prev.get(key)?.lastSeen }));
+        } else if (event.type === "cleared") {
+          messageCache.current.delete(`${backend.account}:${event.chatId}`);
+          if (open?.account !== backend.account || open.id !== event.chatId) return;
+          backend
+            .getMessages(event.chatId)
+            .then((list) => {
+              if (messagesOf.current === `${backend.account}:${event.chatId}`) setMessages(list);
+            })
+            .catch(console.error);
         } else if (event.type === "pins") {
           if (open?.account === backend.account && open.id === event.chatId) setPinsTick((tick) => tick + 1);
         } else if (event.type === "history") {
@@ -798,6 +810,46 @@ function Shell() {
       });
     }
     return new Promise((resolve, reject) => setMuting({ chat, resolve, reject }));
+  }
+
+  /** Where a chat's messages go when it is cleared or deleted, as the dialog says it. */
+  function reachOf(account: AccountId) {
+    return account === "whatsapp" ? "this computer and your phone" : "this computer only; your phone keeps them";
+  }
+
+  function askClearChat(chat: Pick<Chat, "account" | "id">) {
+    const backend = backendFor(chat.account);
+    if (!backend?.clearChat) return;
+    setConfirming({
+      title: "Clear this chat?",
+      body: `The chat stays in your list, empty. Its messages are removed from ${reachOf(chat.account)}.`,
+      option: { label: "Keep starred messages", initial: true },
+      confirmLabel: "Clear chat",
+      danger: true,
+      onConfirm: async (keepStarred) => {
+        await backend.clearChat!(chat.id, keepStarred);
+        patchChat(backend, chat.id, { lastMessage: "", unread: 0, markedUnread: false });
+      },
+    });
+  }
+
+  function askDeleteChat(chat: Pick<Chat, "account" | "id" | "isGroup">) {
+    const backend = backendFor(chat.account);
+    if (!backend?.deleteChat) return;
+    setConfirming({
+      title: "Delete this chat?",
+      body: `Its messages are deleted from ${reachOf(chat.account)}.${chat.isGroup ? " You stay in the group." : ""}`,
+      confirmLabel: "Delete chat",
+      danger: true,
+      onConfirm: async () => {
+        await backend.deleteChat!(chat.id);
+        setChatsBy((prev) => {
+          const list = prev.get(backend);
+          return list ? new Map(prev).set(backend, list.filter((c) => c.id !== chat.id)) : prev;
+        });
+        if (selectedRef.current?.account === chat.account && selectedRef.current.id === chat.id) setSelected(null);
+      },
+    });
   }
 
   function toggleFavorite(chat: Chat) {
@@ -1294,6 +1346,8 @@ function Shell() {
             onToggleArchived={toggleArchived}
             onTogglePinned={togglePinned}
             onToggleMuted={(chat) => void toggleMuted(chat).catch(() => {})}
+            onClearChat={askClearChat}
+            onDeleteChat={askDeleteChat}
             onNewList={(chat) => editList(undefined, chat)}
             onEditList={(name) => editList(name)}
             searchMessages={searchMessages}
@@ -1354,6 +1408,7 @@ function Shell() {
           }}
         />
       ) : null}
+      {confirming ? <ConfirmDialog {...confirming} onClose={() => setConfirming(null)} /> : null}
       {shortcutsOpen ? <ShortcutsDialog onClose={() => setShortcutsOpen(false)} /> : null}
       {forwarding ? (
         <ForwardDialog

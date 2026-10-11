@@ -925,6 +925,22 @@ pub struct ChatStore {
     /// Chats whose whole history is here: the phone had nothing older.
     #[serde(default)]
     history_complete: HashSet<String>,
+    /// Chats cleared or deleted, here or on another device, with the time of
+    /// the last message that went: older ones a history replay brings back
+    /// are dropped, and a deleted chat stays gone until a newer one comes.
+    #[serde(default)]
+    cleared: HashMap<String, i64>,
+    /// Messages to delete from the history database too.
+    #[serde(skip)]
+    purged: Vec<Purge>,
+}
+
+/// Messages of a chat to delete from the history database: all up to
+/// `before_ms`, starred ones left when `keep_starred`.
+pub struct Purge {
+    pub chat: String,
+    pub before_ms: i64,
+    pub keep_starred: bool,
 }
 
 impl Default for ChatStore {
@@ -951,6 +967,8 @@ impl Default for ChatStore {
             pending_stars: HashSet::new(),
             evicted: Vec::new(),
             history_complete: HashSet::new(),
+            cleared: HashMap::new(),
+            purged: Vec::new(),
         }
     }
 }
@@ -1495,6 +1513,12 @@ impl ChatStore {
             reply.author_jid = reply.author_jid.as_deref().map(|j| self.canonical(j));
         }
 
+        // What was cleared stays cleared when history brings it again.
+        if self.cleared.get(&chat_id).is_some_and(|before| message.ts_ms <= *before)
+            && !self.chats.get(&chat_id).is_some_and(|c| c.messages.iter().any(|m| m.id == message.id))
+        {
+            return None;
+        }
         let chat = self.chats.entry(chat_id.clone()).or_default();
         chat.is_group |= incoming.is_group;
         if let Some(known) = chat.messages.iter_mut().find(|m| m.id == message.id) {
@@ -1575,7 +1599,7 @@ impl ChatStore {
             self.learn_mapping(id, lid);
         }
         let chat_id = self.canonical(id);
-        if is_hidden_chat(&chat_id) {
+        if is_hidden_chat(&chat_id) || self.was_deleted(&chat_id, meta.conversation_ts_s.map_or(0, |ts| ts as i64 * 1000)) {
             return;
         }
         let chat = self.chats.entry(chat_id.clone()).or_default();
@@ -1904,13 +1928,66 @@ impl ChatStore {
     /// chat has any message.
     fn chat_for_state(&mut self, jid: &str) -> Option<&mut StoredChat> {
         let chat_id = self.canonical(jid);
-        if is_hidden_chat(&chat_id) {
+        if is_hidden_chat(&chat_id) || self.was_deleted(&chat_id, 0) {
             return None;
         }
         let is_group = chat_id.ends_with("@g.us");
         let chat = self.chats.entry(chat_id).or_default();
         chat.is_group |= is_group;
         Some(chat)
+    }
+
+    /// A chat deleted, and nothing newer than `at_ms` brought it back.
+    fn was_deleted(&self, chat_id: &str, at_ms: i64) -> bool {
+        !self.chats.contains_key(chat_id) && self.cleared.get(chat_id).is_some_and(|before| at_ms <= *before)
+    }
+
+    /// Empties a chat of its messages up to `before_ms`, keeping it in the
+    /// list; starred ones stay when `keep_starred`. Returns whether there was
+    /// such a chat.
+    pub fn clear_chat(&mut self, jid: &str, before_ms: i64, keep_starred: bool) -> bool {
+        let chat_id = self.canonical(jid);
+        let Some(chat) = self.chats.get_mut(&chat_id) else { return false };
+        chat.messages.retain(|m| m.ts_ms > before_ms || keep_starred && m.starred);
+        if chat.messages.iter().all(|m| m.ts_ms <= before_ms) {
+            chat.unread = 0;
+            chat.marked_unread = false;
+        }
+        chat.pins.clear();
+        chat.pin_notes.clear();
+        self.evicted.retain(|(c, m)| *c != chat_id || m.ts_ms > before_ms || keep_starred && m.starred);
+        // Nothing older is to be asked of the phone.
+        self.history_complete.insert(chat_id.clone());
+        self.forget_until(chat_id, before_ms, keep_starred);
+        true
+    }
+
+    /// Deletes a chat and its messages up to `before_ms`. Messages newer than
+    /// that, which came after another device deleted it, keep it listed.
+    pub fn delete_chat(&mut self, jid: &str, before_ms: i64) -> bool {
+        let chat_id = self.canonical(jid);
+        let Some(chat) = self.chats.get(&chat_id) else { return false };
+        if chat.messages.iter().any(|m| m.ts_ms > before_ms) {
+            return self.clear_chat(&chat_id, before_ms, false);
+        }
+        self.chats.remove(&chat_id);
+        self.evicted.retain(|(c, _)| *c != chat_id);
+        self.history_complete.remove(&chat_id);
+        // Its rows go with the chat; this only keeps the cutoff.
+        self.cleared.insert(chat_id, before_ms);
+        true
+    }
+
+    fn forget_until(&mut self, chat_id: String, before_ms: i64, keep_starred: bool) {
+        let before_ms = self.cleared.get(&chat_id).map_or(before_ms, |was| before_ms.max(*was));
+        self.cleared.insert(chat_id.clone(), before_ms);
+        self.purged.push(Purge { chat: chat_id, before_ms, keep_starred });
+    }
+
+    /// When the newest message of a chat was sent, as far as is known: what
+    /// clearing or deleting it now covers.
+    pub fn clear_point(&self, jid: &str) -> i64 {
+        self.chats.get(&self.canonical(jid)).map_or(0, |c| c.messages.iter().map(|m| m.ts_ms).max().unwrap_or(0).max(c.last_ts_ms))
     }
 
     pub fn set_pinned(&mut self, jid: &str, pinned_at_ms: Option<i64>) {
@@ -2821,6 +2898,45 @@ mod tests {
                 edited_ms: None,
             },
         }
+    }
+
+    #[test]
+    fn cleared_messages_stay_cleared() {
+        let chat = "351900000000@s.whatsapp.net";
+        let mut store = ChatStore::default();
+        store.ingest(incoming(chat, "a", 1_000, false), true);
+        let mut starred = incoming(chat, "b", 2_000, false);
+        starred.message.starred = true;
+        store.ingest(starred, true);
+        assert!(store.clear_chat(chat, store.clear_point(chat), true));
+        let ids = |store: &ChatStore| store.chats[chat].messages.iter().map(|m| m.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&store), ["b"]);
+        assert_eq!(store.chats[chat].unread, 0);
+        // History brings the cleared one again; a newer one still comes in.
+        assert!(store.ingest(incoming(chat, "a", 1_000, false), true).is_none());
+        assert!(store.ingest(incoming(chat, "c", 3_000, false), true).is_some());
+        assert_eq!(ids(&store), ["b", "c"]);
+        assert_eq!(store.purged.len(), 1);
+    }
+
+    #[test]
+    fn deleted_chats_stay_gone_until_a_newer_message() {
+        let chat = "351900000000@s.whatsapp.net";
+        let mut store = ChatStore::default();
+        store.ingest(incoming(chat, "a", 1_000, false), true);
+        assert!(store.delete_chat(chat, store.clear_point(chat)));
+        assert!(!store.chats.contains_key(chat));
+        store.ingest(incoming(chat, "a", 1_000, false), true);
+        store.set_archived(chat, true);
+        assert!(!store.chats.contains_key(chat));
+        store.ingest(incoming(chat, "b", 2_000, false), true);
+        assert_eq!(store.chats[chat].messages.len(), 1);
+        // A delete from another device older than what came after it only clears.
+        let other = "351911111111@s.whatsapp.net";
+        store.ingest(incoming(other, "x", 1_000, false), true);
+        store.ingest(incoming(other, "y", 5_000, false), true);
+        assert!(store.delete_chat(other, 2_000));
+        assert_eq!(store.chats[other].messages.len(), 1);
     }
 
     #[test]

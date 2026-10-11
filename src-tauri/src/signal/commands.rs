@@ -63,6 +63,16 @@ pub fn signal_set_muted(mgr: Mgr<'_>, chat_id: String, muted: bool, until_ms: Op
 }
 
 #[tauri::command]
+pub fn signal_delete_chat(mgr: Mgr<'_>, chat_id: String) {
+    mgr.delete_chat(&chat_id);
+}
+
+#[tauri::command]
+pub fn signal_clear_chat(mgr: Mgr<'_>, chat_id: String, keep_starred: bool) {
+    mgr.clear_chat(&chat_id, keep_starred);
+}
+
+#[tauri::command]
 pub fn signal_set_archived(mgr: Mgr<'_>, chat_id: String, archived: bool) {
     mgr.set_archived(&chat_id, archived);
 }

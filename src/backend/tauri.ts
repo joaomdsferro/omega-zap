@@ -444,6 +444,14 @@ export class TauriBackend implements ChatBackend {
     await invoke(`${this.prefix}_set_pinned`, { chatId, pinned });
   }
 
+  async deleteChat(chatId: string): Promise<void> {
+    await invoke(`${this.prefix}_delete_chat`, { chatId });
+  }
+
+  async clearChat(chatId: string, keepStarred: boolean): Promise<void> {
+    await invoke(`${this.prefix}_clear_chat`, { chatId, keepStarred });
+  }
+
   async listContacts(): Promise<Contact[]> {
     const raw = await invoke<RawContact[]>(`${this.prefix}_contacts`);
     return raw.map((c) => ({
@@ -463,6 +471,7 @@ export class TauriBackend implements ChatBackend {
       listen(`${this.prefix}://chats`, () => listener({ type: "chats-changed" })),
       listen<string>(`${this.prefix}://history`, (e) => listener({ type: "history", chatId: e.payload })),
       listen<string>(`${this.prefix}://pins`, (e) => listener({ type: "pins", chatId: e.payload })),
+      listen<string>(`${this.prefix}://cleared`, (e) => listener({ type: "cleared", chatId: e.payload })),
       listen<RawMessage>(`${this.prefix}://message`, (e) =>
         listener({ type: "message", message: toMessage(e.payload) }),
       ),

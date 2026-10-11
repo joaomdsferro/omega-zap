@@ -213,6 +213,19 @@ export class MockBackend implements ChatBackend {
     this.update(chatId, { pinned });
   }
 
+  async deleteChat(chatId: string): Promise<void> {
+    this.chats = this.chats.filter((c) => c.id !== chatId);
+    this.messages.delete(chatId);
+    this.emit({ type: "cleared", chatId });
+    this.emit({ type: "chats-changed" });
+  }
+
+  async clearChat(chatId: string, keepStarred: boolean): Promise<void> {
+    this.messages.set(chatId, (this.messages.get(chatId) ?? []).filter((m) => keepStarred && m.starred));
+    this.emit({ type: "cleared", chatId });
+    this.update(chatId, { lastMessage: "", unread: 0, markedUnread: false });
+  }
+
   private update(chatId: string, patch: Partial<Chat>) {
     const chat = this.chats.find((c) => c.id === chatId);
     if (!chat) return;

@@ -310,6 +310,8 @@ export type BackendEvent =
   | { type: "notice"; notice: Notice }
   /** Older messages of a chat came from the phone. */
   | { type: "history"; chatId: string }
+  /** A chat was cleared or deleted, here or on another device. */
+  | { type: "cleared"; chatId: string }
   /** A message of a chat was pinned or unpinned. */
   | { type: "pins"; chatId: string }
   /** Someone started or stopped typing or recording; `who` names them in a group. */
@@ -398,6 +400,10 @@ export interface ChatBackend {
   setArchived?(chatId: string, archived: boolean): Promise<void>;
   /** Pins a chat to the top of the list, or unpins it. */
   setPinned?(chatId: string, pinned: boolean): Promise<void>;
+  /** Deletes a chat and its messages. */
+  deleteChat?(chatId: string): Promise<void>;
+  /** Empties a chat of its messages, keeping it in the list; starred ones stay when `keepStarred`. */
+  clearChat?(chatId: string, keepStarred: boolean): Promise<void>;
   /** Tells the chat we are typing, recording, or stopped. */
   setTyping?(chatId: string, state: TypingState): Promise<void>;
   /** Asks to hear when the other person comes online or goes away. */

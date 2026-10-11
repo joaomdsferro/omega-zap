@@ -106,6 +106,16 @@ pub async fn wa_set_archived(mgr: Mgr<'_>, chat_id: String, archived: bool) -> R
 }
 
 #[tauri::command]
+pub async fn wa_delete_chat(mgr: Mgr<'_>, chat_id: String) -> Result<(), String> {
+    mgr.delete_chat(&chat_id).await
+}
+
+#[tauri::command]
+pub async fn wa_clear_chat(mgr: Mgr<'_>, chat_id: String, keep_starred: bool) -> Result<(), String> {
+    mgr.clear_chat(&chat_id, keep_starred).await
+}
+
+#[tauri::command]
 pub async fn wa_set_pinned(mgr: Mgr<'_>, chat_id: String, pinned: bool) -> Result<(), String> {
     mgr.set_pinned(&chat_id, pinned).await
 }

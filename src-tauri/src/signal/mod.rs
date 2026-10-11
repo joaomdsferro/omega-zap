@@ -623,6 +623,33 @@ impl SignalManager {
         self.mark_dirty();
     }
 
+    /// Deletes a chat and its messages, on this computer: Signal doesn't tell
+    /// linked devices.
+    pub fn delete_chat(&self, chat_id: &str) {
+        let mut store = lock(&self.store);
+        let before = store.clear_point(chat_id);
+        store.delete_chat(chat_id, before);
+        drop(store);
+        self.chat_emptied(chat_id);
+    }
+
+    /// Empties a chat of its messages on this computer, keeping it in the
+    /// list; starred messages stay when `keep_starred`.
+    pub fn clear_chat(&self, chat_id: &str, keep_starred: bool) {
+        let mut store = lock(&self.store);
+        let before = store.clear_point(chat_id);
+        store.clear_chat(chat_id, before, keep_starred);
+        drop(store);
+        self.chat_emptied(chat_id);
+    }
+
+    /// Tells the UI a chat lost its messages, so an open one shows it.
+    fn chat_emptied(&self, chat_id: &str) {
+        let chat = lock(&self.store).chat_key(chat_id);
+        let _ = self.app.emit("signal://cleared", chat);
+        self.mark_dirty();
+    }
+
     /// Pins a chat to the top of the list or unpins it, on this computer.
     pub fn set_pinned(&self, chat_id: &str, pinned: bool) -> Result<(), String> {
         let mut store = lock(&self.store);

@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use whatsapp_rust::download::{DownloadParams, MediaType};
+use whatsapp_rust::features::SyncActionMessageRange;
 use whatsapp_rust::http::HttpRequest;
 use whatsapp_rust::prelude::*;
 use whatsapp_rust::wacore::store::DevicePropsOverride;
@@ -1340,17 +1341,8 @@ impl WaManager {
     pub async fn set_archived(&self, chat_id: &str, archived: bool) -> Result<(), String> {
         let client = self.connected_client().await?;
         let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
-        let (last, pinned) = {
-            let store = lock(&self.store);
-            (store.last_message_key(chat_id), store.is_pinned(chat_id))
-        };
-        // The phone weighs the change against the newest message it knows of.
-        let range = last.and_then(|last| {
-            let chat: Jid = last.chat.parse().ok()?;
-            let sender = last.sender.and_then(|s| s.parse::<Jid>().ok());
-            let key = message_key(last.id, &chat, last.from_me, sender.as_ref());
-            Some(message_range(last.ts_s, None, vec![(key, last.ts_s)]))
-        });
+        let pinned = lock(&self.store).is_pinned(chat_id);
+        let range = self.last_range(chat_id);
         let actions = client.chat_actions();
         if archived { actions.archive_chat(&jid, range).await } else { actions.unarchive_chat(&jid, range).await }
             .map_err(|e| format!("The chat was not {}: {e}", if archived { "archived" } else { "unarchived" }))?;
@@ -1363,6 +1355,54 @@ impl WaManager {
         lock(&self.store).set_archived(chat_id, archived);
         self.mark_dirty();
         Ok(())
+    }
+
+    /// The range the phone weighs a change to a chat against: its newest
+    /// message.
+    fn last_range(&self, chat_id: &str) -> Option<SyncActionMessageRange> {
+        let last = lock(&self.store).last_message_key(chat_id)?;
+        let chat: Jid = last.chat.parse().ok()?;
+        let sender = last.sender.and_then(|s| s.parse::<Jid>().ok());
+        let key = message_key(last.id, &chat, last.from_me, sender.as_ref());
+        Some(message_range(last.ts_s, None, vec![(key, last.ts_s)]))
+    }
+
+    /// Deletes a chat and its messages, here and on the phone.
+    pub async fn delete_chat(&self, chat_id: &str) -> Result<(), String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
+        let before = lock(&self.store).clear_point(chat_id);
+        client
+            .chat_actions()
+            .delete_chat(&jid, false, self.last_range(chat_id))
+            .await
+            .map_err(|e| format!("The chat was not deleted: {e}"))?;
+        lock(&self.store).delete_chat(chat_id, before);
+        self.chat_emptied(chat_id);
+        Ok(())
+    }
+
+    /// Empties a chat of its messages, here and on the phone, keeping it in
+    /// the list; starred messages stay when `keep_starred`.
+    pub async fn clear_chat(&self, chat_id: &str, keep_starred: bool) -> Result<(), String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
+        let before = lock(&self.store).clear_point(chat_id);
+        client
+            .chat_actions()
+            .clear_chat(&jid, !keep_starred, false, self.last_range(chat_id))
+            .await
+            .map_err(|e| format!("The chat was not cleared: {e}"))?;
+        lock(&self.store).clear_chat(chat_id, before, keep_starred);
+        self.chat_emptied(chat_id);
+        Ok(())
+    }
+
+    /// Tells the UI a chat lost its messages, so an open one shows it.
+    fn chat_emptied(&self, chat_id: &str) {
+        let chat = lock(&self.store).chat_key(chat_id);
+        let _ = self.app.emit("wa://cleared", chat);
+        self.mark_dirty();
     }
 
     /// Pins a chat to the top of the list or unpins it, here and on the
@@ -2202,6 +2242,20 @@ impl WaManager {
                 );
                 self.mark_dirty();
             }
+            Event::DeleteChatUpdate(update) => {
+                let chat = update.jid.to_non_ad_string();
+                let before = range_end(update.action.message_range.as_option(), update.action_timestamp.unwrap_or(update.timestamp).timestamp_millis());
+                if lock(&self.store).delete_chat(&chat, before) {
+                    self.chat_emptied(&chat);
+                }
+            }
+            Event::ClearChatUpdate(update) => {
+                let chat = update.jid.to_non_ad_string();
+                let before = range_end(update.action.message_range.as_option(), update.action_timestamp.unwrap_or(update.timestamp).timestamp_millis());
+                if lock(&self.store).clear_chat(&chat, before, !update.delete_starred) {
+                    self.chat_emptied(&chat);
+                }
+            }
             Event::StarUpdate(update) => {
                 let changed = lock(&self.store).set_starred(
                     &update.chat_jid.to_non_ad_string(),
@@ -2534,6 +2588,15 @@ fn forwarding(context: Option<wa::ContextInfo>, score: u32) -> Option<wa::Contex
 }
 
 /// A group's members as the store keeps them: (id, phone number id, LID).
+/// The time of the last message a delete or clear from another device
+/// covers: its range says, or else when it was made.
+fn range_end(range: Option<&SyncActionMessageRange>, made_ms: i64) -> i64 {
+    range
+        .and_then(|r| r.last_message_timestamp)
+        .filter(|ts| *ts > 0)
+        .map_or(made_ms, |ts| ts * 1000)
+}
+
 fn members_of(metadata: &whatsapp_rust::features::GroupMetadata) -> Vec<store::GroupMember> {
     metadata
         .participants

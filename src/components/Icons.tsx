@@ -254,7 +254,29 @@ export const TrashIcon = (p: IconProps) => (
   </Svg>
 );
 
-/** The mark on a message its sender deleted. */
+/** Leaving a group. */
+export const ExitIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M9 8l-4 4 4 4M5 12h10" />
+  </Svg>
+);
+
+/** Clearing a chat of its messages. */
+export const ClearIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M8 12h8" />
+  </Svg>
+);
+
+export const AddPersonIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="10" cy="8" r="3.5" />
+    <path d="M3.5 20a6.5 6.5 0 0 1 11.6-4M18 14v6M15 17h6" />
+  </Svg>
+);
+
+/** The mark on a message its sender deleted, and blocking someone. */
 export const BlockedIcon = (p: IconProps) => (
   <Svg {...p}>
     <circle cx="12" cy="12" r="8.5" />

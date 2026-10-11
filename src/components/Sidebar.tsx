@@ -5,6 +5,7 @@ import { MessageResults } from "./MessageResults";
 import { matches } from "../lib/search";
 import {
   ArchiveIcon,
+  ClearIcon,
   BackIcon,
   CloseIcon,
   MoreIcon,
@@ -16,6 +17,7 @@ import {
   KeyboardIcon,
   SettingsIcon,
   StarIcon,
+  TrashIcon,
   UnarchiveIcon,
   UnreadIcon,
 } from "./Icons";
@@ -66,6 +68,9 @@ interface SidebarProps {
   onToggleArchived?: (chat: Chat) => void;
   onTogglePinned?: (chat: Chat) => void;
   onToggleMuted?: (chat: Chat) => void;
+  /** Ask before emptying or deleting a chat. */
+  onClearChat?: (chat: Chat) => void;
+  onDeleteChat?: (chat: Chat) => void;
   /** Opens the list editor, with a chat already in the new list. */
   onNewList: (chat?: Chat) => void;
   onEditList: (list: string) => void;
@@ -158,6 +163,8 @@ export function Sidebar({
   onToggleArchived,
   onTogglePinned,
   onToggleMuted,
+  onClearChat,
+  onDeleteChat,
   onNewList,
   onEditList,
   searchMessages,
@@ -289,6 +296,11 @@ export function Sidebar({
           onSelect: () => onToggleList(chat, name),
         })),
         { label: "New list…", icon: <PlusIcon size={18} />, onSelect: () => onNewList(chat) },
+        ...(onClearChat || onDeleteChat ? ["separator" as const] : []),
+        ...(onClearChat ? [{ label: "Clear chat", icon: <ClearIcon size={18} />, onSelect: () => onClearChat(chat) }] : []),
+        ...(onDeleteChat
+          ? [{ label: "Delete chat", icon: <TrashIcon size={18} />, danger: true, onSelect: () => onDeleteChat(chat) }]
+          : []),
       ],
     });
   }
