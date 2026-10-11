@@ -4,8 +4,6 @@ import { authorColor } from "../lib/avatar";
 import { formatMessageTime } from "../lib/format";
 import type { LoadMedia } from "./Attachments";
 
-/** Photos sent one after another this close together are shown as one album. */
-const ALBUM_GAP_MS = 2 * 60_000;
 /** WhatsApp gathers four photos or more; fewer stay as they are. */
 export const ALBUM_MIN = 4;
 
@@ -20,13 +18,14 @@ export function albumPhoto(message: Message): boolean {
   );
 }
 
-/** Whether `next` continues an album that ends with `last`. */
+/** Whether `next` continues an album that ends with `last`. As on WhatsApp, the
+ * photos only have to follow each other, however long apart: any other
+ * message, another sender or another day ends the album. */
 export function continuesAlbum(last: Message, next: Message): boolean {
   return (
     albumPhoto(next) &&
     next.fromMe === last.fromMe &&
-    next.author === last.author &&
-    Date.parse(next.sentAt) - Date.parse(last.sentAt) <= ALBUM_GAP_MS
+    next.author === last.author
   );
 }
 
