@@ -205,6 +205,14 @@ export const PinIcon = (p: IconProps) => (
   </Svg>
 );
 
+/** A map marker, filled with `fill` when given. */
+export const MapPinIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 22s-7-6.1-7-12a7 7 0 0 1 14 0c0 5.9-7 12-7 12z" />
+    <circle cx="12" cy="10" r="2.6" fill="white" stroke="none" />
+  </Svg>
+);
+
 export const ArchiveIcon = (p: IconProps) => (
   <Svg {...p}>
     <rect x="3" y="4" width="18" height="4" rx="1" />

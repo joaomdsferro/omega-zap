@@ -59,6 +59,37 @@ export interface ReactionCount {
   people?: string[];
 }
 
+/** A place shared in a message. */
+export interface Place {
+  lat: number;
+  lng: number;
+  name?: string;
+  address?: string;
+  /** A page about the place, when the sender picked one. */
+  url?: string;
+  /** A small map of it, as a data URL. */
+  thumbnail?: string;
+  /** Shared live: this is where it was when it was sent. */
+  live?: boolean;
+}
+
+/** A contact card shared in a message. */
+export interface ContactCard {
+  name: string;
+  phones?: { number: string; /** Their WhatsApp number, digits only, when the card names one. */ waId?: string }[];
+}
+
+/** A poll; its question is the message's text. */
+export interface Poll {
+  options: { name: string; mine: boolean; /** Who picked it, "You" first. */ people: string[] }[];
+  /** How many options one person can pick; 0 for any number. */
+  selectable: number;
+  /** Votes can be cast from here. */
+  open: boolean;
+  /** How many people voted. */
+  voters: number;
+}
+
 export interface Message {
   id: string;
   chatId: string;
@@ -96,6 +127,9 @@ export interface Message {
   deleted?: boolean;
   /** Changed by its sender after it was sent. */
   edited?: boolean;
+  place?: Place;
+  contacts?: ContactCard[];
+  poll?: Poll;
 }
 
 export interface Chat {
@@ -327,6 +361,8 @@ export interface ChatBackend {
   deleteMessage?(chatId: string, messageId: string, forEveryone: boolean): Promise<Message | null>;
   /** Changes what one of our texts says, for everyone. */
   editMessage?(chatId: string, messageId: string, text: string): Promise<Message>;
+  /** Votes on a poll for the options at `options`; none takes the vote back. */
+  votePoll?(chatId: string, messageId: string, options: number[]): Promise<Message>;
   markRead(chatId: string): Promise<void>;
   /** Marks a chat unread by hand: a dot in the list until it is read. */
   setUnread?(chatId: string, unread: boolean): Promise<void>;

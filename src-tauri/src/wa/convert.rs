@@ -4,7 +4,7 @@ use whatsapp_rust::waproto::whatsapp::web_message_info::Status as WebStatus;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
-use super::store::{Content, Delivery, Incoming, LinkPreview, MsgKind, ReplyRef, StoredMessage, CdnRef};
+use super::store::{CardPhone, Content, ContactCard, Delivery, Incoming, LinkPreview, MsgKind, Place, Poll, ReplyRef, StoredMessage, CdnRef};
 
 fn non_empty(text: &Option<String>) -> Option<String> {
     text.as_ref().filter(|t| !t.trim().is_empty()).cloned()
@@ -179,16 +179,34 @@ pub fn content(message: &wa::Message) -> Option<Content> {
         return Some(c);
     }
     if let Some(location) = base.location_message.as_option() {
-        return Some(Content::media(MsgKind::Media, "Location", non_empty(&location.name)));
+        let mut c = Content::media(MsgKind::Media, "Location", non_empty(&location.comment));
+        with_context(&mut c, &location.context_info);
+        c.place = place(location.degrees_latitude, location.degrees_longitude, &location.jpeg_thumbnail, false).map(|p| Place {
+            name: non_empty(&location.name),
+            address: non_empty(&location.address),
+            url: non_empty(&location.url),
+            live: location.is_live == Some(true),
+            ..p
+        });
+        return Some(c);
     }
-    if base.live_location_message.as_option().is_some() {
-        return Some(Content::media(MsgKind::Media, "Live location", None));
+    if let Some(live) = base.live_location_message.as_option() {
+        let mut c = Content::media(MsgKind::Media, "Live location", non_empty(&live.caption));
+        with_context(&mut c, &live.context_info);
+        c.place = place(live.degrees_latitude, live.degrees_longitude, &live.jpeg_thumbnail, true);
+        return Some(c);
     }
     if let Some(contact) = base.contact_message.as_option() {
-        return Some(Content::media(MsgKind::Media, "Contact", non_empty(&contact.display_name)));
+        let mut c = Content::media(MsgKind::Media, "Contact", None);
+        with_context(&mut c, &contact.context_info);
+        c.contacts.extend(card(contact));
+        return Some(c);
     }
-    if base.contacts_array_message.as_option().is_some() {
-        return Some(Content::media(MsgKind::Media, "Contacts", None));
+    if let Some(contacts) = base.contacts_array_message.as_option() {
+        let mut c = Content::media(MsgKind::Media, "Contacts", None);
+        with_context(&mut c, &contacts.context_info);
+        c.contacts = contacts.contacts.iter().filter_map(card).collect();
+        return Some(c);
     }
     let poll = [
         &base.poll_creation_message,
@@ -200,9 +218,127 @@ pub fn content(message: &wa::Message) -> Option<Content> {
     .into_iter()
     .find_map(|p| p.as_option());
     if let Some(poll) = poll {
-        return Some(Content::media(MsgKind::Media, "Poll", non_empty(&poll.name)));
+        let mut c = Content::media(MsgKind::Media, "Poll", non_empty(&poll.name));
+        with_context(&mut c, &poll.context_info);
+        // The secret travels beside the message, outside any wrapper.
+        let secret = [message, base]
+            .into_iter()
+            .find_map(|m| m.message_context_info.as_option().and_then(|info| encoded(&info.message_secret)));
+        c.poll = Some(Poll {
+            options: poll.options.iter().filter_map(|o| o.option_name.clone()).collect(),
+            selectable: poll.selectable_options_count.unwrap_or(0),
+            secret,
+            votes: Vec::new(),
+        });
+        return Some(c);
     }
     None
+}
+
+/// A shared place, without its name and address.
+fn place(lat: Option<f64>, lng: Option<f64>, thumbnail: &Option<Vec<u8>>, live: bool) -> Option<Place> {
+    Some(Place {
+        lat: lat?,
+        lng: lng?,
+        name: None,
+        address: None,
+        url: None,
+        thumbnail: encoded(thumbnail).map(|b| format!("data:image/jpeg;base64,{b}")),
+        live,
+    })
+}
+
+/// A contact card from its vCard: the name and every phone number.
+fn card(contact: &wa::message::ContactMessage) -> Option<ContactCard> {
+    let vcard = contact.vcard.as_deref().unwrap_or_default();
+    let (name, phones) = parse_vcard(vcard);
+    let name = non_empty(&contact.display_name).or(name)?;
+    Some(ContactCard { name, phones })
+}
+
+/// The formatted name and phone numbers of a vCard. WhatsApp marks a
+/// number that has an account with `waid=<digits>`.
+pub(crate) fn parse_vcard(vcard: &str) -> (Option<String>, Vec<CardPhone>) {
+    // Long lines are folded onto the next one, which starts with a space.
+    let unfolded = vcard.replace("\r\n ", "").replace("\n ", "");
+    let mut name = None;
+    let mut phones = Vec::new();
+    for line in unfolded.lines() {
+        let Some((key, value)) = line.split_once(':') else { continue };
+        let mut params = key.split(';');
+        // "item1.TEL" groups a number with its label.
+        let field = params.next().unwrap_or_default();
+        let field = field.rsplit('.').next().unwrap_or(field).to_ascii_uppercase();
+        let value = value.trim();
+        match field.as_str() {
+            "FN" if !value.is_empty() => name = Some(value.replace("\\,", ",")),
+            "TEL" if !value.is_empty() => {
+                let wa_id = params
+                    .find_map(|p| p.trim().strip_prefix("waid=").or_else(|| p.trim().strip_prefix("WAID=")))
+                    .map(str::to_string)
+                    .filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()));
+                phones.push(CardPhone { number: value.to_string(), wa_id });
+            }
+            _ => {}
+        }
+    }
+    (name, phones)
+}
+
+/// A vote on a poll, still sealed.
+pub struct SealedVote {
+    /// The poll.
+    pub target: String,
+    /// Who made the poll, as the vote names it: `None` for us.
+    pub creator: Option<String>,
+    pub payload: Vec<u8>,
+    pub iv: Vec<u8>,
+    pub at_ms: i64,
+}
+
+/// The vote a live message carries.
+pub fn poll_vote(message: &wa::Message, sent_ms: i64) -> Option<SealedVote> {
+    let update = message.get_base_message().poll_update_message.as_option()?;
+    let key = update.poll_creation_message_key.as_option()?;
+    let vote = update.vote.as_option()?;
+    Some(SealedVote {
+        target: key.id.clone()?,
+        creator: if key.from_me == Some(true) { None } else { key.participant.clone().or_else(|| key.remote_jid.clone()) },
+        payload: vote.enc_payload.clone()?,
+        iv: vote.enc_iv.clone()?,
+        at_ms: update.sender_timestamp_ms.filter(|t| *t > 0).unwrap_or(sent_ms),
+    })
+}
+
+/// Which options `hashes` pick, as the poll's options are hashed.
+pub fn picked(options: &[String], hashes: &[Vec<u8>]) -> Vec<usize> {
+    hashes
+        .iter()
+        .filter_map(|hash| {
+            options
+                .iter()
+                .position(|name| whatsapp_rust::wacore::poll::compute_option_hash(name).as_slice() == hash.as_slice())
+        })
+        .collect()
+}
+
+/// The votes a history-sync poll carries, already opened by the phone:
+/// who voted (`None` for us), what, and when.
+pub fn history_votes(chat_id: &str, item: &wa::HistorySyncMsg) -> Vec<(Option<String>, Vec<Vec<u8>>, i64)> {
+    let Some(web) = item.message.as_option() else { return Vec::new() };
+    web.poll_updates
+        .iter()
+        .filter_map(|update| {
+            let key = update.poll_update_message_key.as_option()?;
+            let voter = if key.from_me == Some(true) {
+                None
+            } else {
+                Some(key.participant.clone().unwrap_or_else(|| chat_id.to_string()))
+            };
+            let vote = update.vote.as_option()?;
+            Some((voter, vote.selected_options.clone(), update.sender_timestamp_ms.unwrap_or_default()))
+        })
+        .collect()
 }
 
 /// The id of the message a live revoke takes back.
@@ -418,7 +554,10 @@ pub fn live(message: &wa::Message, info: &MessageInfo) -> Option<Incoming> {
 pub fn history(chat_id: &str, item: &wa::HistorySyncMsg) -> Option<Incoming> {
     let web = item.message.as_option()?;
     let key = web.key.as_option()?;
-    let content = content(web.message.as_option()?)?;
+    let mut content = content(web.message.as_option()?)?;
+    if let Some(poll) = content.poll.as_mut().filter(|p| p.secret.is_none()) {
+        poll.secret = encoded(&web.message_secret);
+    }
     let id = key.id.clone()?;
     let from_me = key.from_me.unwrap_or(false);
     let is_group = chat_id.ends_with("@g.us");
@@ -456,4 +595,29 @@ pub fn history(chat_id: &str, item: &wa::HistorySyncMsg) -> Option<Incoming> {
             edited_ms: None,
         },
     })
+}
+
+#[cfg(test)]
+mod card_tests {
+    use super::*;
+
+    #[test]
+    fn vcards_give_names_and_numbers() {
+        let vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nN:;Maya;;;\r\nFN:Maya Chen\r\n\
+            item1.TEL;waid=351912345678:+351 912 345 678\r\nitem1.X-ABLabel:Mobile\r\n\
+            TEL;type=HOME:+1 555 0100\r\nEND:VCARD";
+        let (name, phones) = parse_vcard(vcard);
+        assert_eq!(name.as_deref(), Some("Maya Chen"));
+        assert_eq!(phones.len(), 2);
+        assert_eq!(phones[0].wa_id.as_deref(), Some("351912345678"));
+        assert_eq!(phones[0].number, "+351 912 345 678");
+        assert_eq!(phones[1].wa_id, None);
+    }
+
+    #[test]
+    fn votes_pick_options_by_hash() {
+        let options = vec!["Pizza".to_string(), "Sushi".to_string()];
+        let hash = whatsapp_rust::wacore::poll::compute_option_hash("Sushi").to_vec();
+        assert_eq!(picked(&options, &[hash, vec![1, 2]]), [1]);
+    }
 }

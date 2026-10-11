@@ -329,6 +329,7 @@ pub fn run() {
             wa::commands::wa_group_info,
             wa::commands::wa_group_details,
             wa::commands::wa_edit_message,
+            wa::commands::wa_vote_poll,
             wa::commands::wa_starred,
             wa::commands::wa_search,
             wa::commands::wa_older_messages,

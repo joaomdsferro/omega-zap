@@ -57,6 +57,10 @@ interface ChatViewProps {
   onDelete?: (message: Message, forEveryone: boolean) => Promise<void>;
   /** Changes what one of our texts says, for everyone. */
   onEdit?: (message: Message, text: string) => Promise<void>;
+  /** Votes on a poll for the options picked; none takes the vote back. */
+  onVote?: (message: Message, options: number[]) => Promise<void>;
+  /** Opens a chat with a number from a contact card, digits only. */
+  onMessageNumber?: (waId: string, name: string) => void;
   /** A message to scroll to and highlight once it has loaded. */
   focusMessageId?: string | null;
   onFocused?: () => void;
@@ -90,7 +94,7 @@ interface ChatViewProps {
   pinsTick?: number;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, onVote, onMessageNumber, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
   const [personId, setPersonId] = useState<string | null>(null);
   const closePerson = useCallback(() => setPersonId(null), []);
   const loadShownPerson = useCallback(() => loadPerson!(personId!), [loadPerson, personId]);
@@ -668,6 +672,8 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                     onForward={forwardOne}
                     onDelete={deleteOne}
                     onEdit={onEdit ? setEditing : undefined}
+                    onVote={onVote}
+                    onMessageContact={onMessageNumber}
                     onJumpTo={setJumpTo}
                     onOpenPerson={loadPerson ? setPersonId : undefined}
                     flash={flashed === message.id}

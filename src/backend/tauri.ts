@@ -8,6 +8,9 @@ import { signalBody } from "../lib/markup";
 import { MAX_SEND_BYTES, base64Json, fileDetails } from "../lib/outgoing";
 import type {
   Pins,
+  Place,
+  Poll,
+  ContactCard,
   Attachment,
   BackendEvent,
   Chat,
@@ -90,6 +93,9 @@ interface RawMessage {
   starred: boolean;
   deleted: boolean;
   edited?: boolean;
+  place?: Place;
+  contacts?: ContactCard[];
+  poll?: Poll;
 }
 
 interface RawGroupRef {
@@ -223,6 +229,9 @@ function toMessage(raw: RawMessage): Message {
     starred: raw.starred,
     deleted: raw.deleted,
     edited: raw.edited,
+    place: raw.place,
+    contacts: raw.contacts,
+    poll: raw.poll,
   };
 }
 
@@ -239,6 +248,7 @@ export class TauriBackend implements ChatBackend {
   pinMessage?: (chatId: string, messageId: string, secs: number | null) => Promise<void>;
   groupInfo?: (id: string) => Promise<GroupInfo>;
   editMessage?: (chatId: string, messageId: string, text: string) => Promise<Message>;
+  votePoll?: (chatId: string, messageId: string, options: number[]) => Promise<Message>;
   groupDetails?: (id: string) => Promise<GroupInfo>;
   setTyping?: (chatId: string, state: TypingState) => Promise<void>;
   watchPresence?: (chatId: string) => Promise<void>;
@@ -262,6 +272,7 @@ export class TauriBackend implements ChatBackend {
       this.linkThumbnailUrl = async (chatId, messageId) =>
         fileUrl(await invoke<string>("wa_link_thumbnail", { chatId, messageId }), "media");
       this.lookupNumber = (phone) => invoke<string | null>("wa_lookup_number", { phone });
+      this.votePoll = async (chatId, messageId, options) => toMessage(await invoke<RawMessage>("wa_vote_poll", { chatId, messageId, options }));
       this.groupInfo = async (id) => toGroupInfo(await invoke<RawGroupInfo>("wa_group_info", { id }), account);
       this.groupDetails = async (id) => toGroupInfo(await invoke<RawGroupInfo>("wa_group_details", { id }), account);
       this.pinnedMessages = async (chatId) => {

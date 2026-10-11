@@ -10,6 +10,8 @@ import { Attachments } from "./Attachments";
 import type { LoadMedia } from "./Attachments";
 import { LinkCard, openLink } from "./LinkCard";
 import { canEdit } from "./EditDialog";
+import { PollCard } from "./PollCard";
+import { ContactCards, PlaceCard } from "./SharedCards";
 import { canForward } from "./ForwardDialog";
 import {
   BlockedIcon,
@@ -70,6 +72,10 @@ interface MessageBubbleProps {
   pinned?: boolean;
   /** Changes what one of our texts says, while it still can be. */
   onEdit?: (message: Message) => void;
+  /** Votes on a poll for the options picked; none takes the vote back. */
+  onVote?: (message: Message, options: number[]) => Promise<void>;
+  /** Opens a chat with a number from a contact card, digits only. */
+  onMessageContact?: (waId: string, name: string) => void;
   /** Pins the message for everyone, or unpins it when `pinned`. */
   onPin?: (message: Message) => void;
   /** Starts selecting messages, with this one picked. */
@@ -276,7 +282,7 @@ const LONG_PRESS_MS = 450;
 /** WhatsApp's forwarding score from which a message counts as forwarded many times. */
 const FORWARDED_MANY = 5;
 
-export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight, pinned, onEdit, onPin, onSelect }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight, pinned, onEdit, onPin, onSelect, onVote, onMessageContact }: MessageBubbleProps) {
   const { settings } = useSettings();
   const [picking, setPicking] = useState(false);
   // The reactions' details, opened from their pill.
@@ -294,7 +300,10 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
   const reactions = message.reactions ?? [];
   const myReaction = reactions.find((reaction) => reaction.mine)?.emoji;
   const mine = message.fromMe;
-  const hasText = Boolean(message.text);
+  // A poll's text is its question, shown in the poll.
+  const hasText = Boolean(message.text) && !message.poll;
+  /** Drawn as itself rather than as a file placeholder. */
+  const shared = Boolean(message.poll || message.place || message.contacts?.length);
   const bigEmoji = useMemo(
     () => (message.kind === "text" && !message.attachments?.length ? emojiOnlyCount(message.text ?? "") : 0),
     [message.kind, message.attachments, message.text],
@@ -556,7 +565,19 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
           <Photo message={message} loadMedia={loadMedia} onOpen={onOpenPhoto && (() => onOpenPhoto(message, 0))} />
         ) : null}
 
-        {message.kind === "media" && !message.attachments?.length ? (
+        {message.poll && !deleted ? (
+          <PollCard
+            question={message.text ?? ""}
+            poll={message.poll}
+            onVote={onVote ? (options) => onVote(message, options) : undefined}
+          />
+        ) : null}
+
+        {message.place && !deleted ? <PlaceCard place={message.place} /> : null}
+
+        {message.contacts?.length && !deleted ? <ContactCards cards={message.contacts} onMessage={onMessageContact} /> : null}
+
+        {message.kind === "media" && !message.attachments?.length && !shared ? (
           <div className="mb-1 flex items-center gap-3 rounded-md bg-(--quote-bg) px-3 py-2.5">
             <FileIcon size={26} className="shrink-0 text-(--icon)" />
             <span className="min-w-0 truncate text-[14px]">{message.mediaLabel ?? "Attachment"}</span>

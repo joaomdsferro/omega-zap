@@ -52,6 +52,21 @@ export class MockBackend implements ChatBackend {
     return [...(this.messages.get(chatId) ?? [])];
   }
 
+  async votePoll(chatId: string, messageId: string, picked: number[]): Promise<Message> {
+    const list = this.messages.get(chatId) ?? [];
+    const at = list.findIndex((m) => m.id === messageId);
+    const poll = list[at]?.poll;
+    if (!poll) throw new Error("That poll is gone.");
+    const options = poll.options.map((option, index) => {
+      const people = option.people.filter((p) => p !== "You");
+      const mine = picked.includes(index);
+      return { ...option, mine, people: mine ? ["You", ...people] : people };
+    });
+    const voters = new Set(options.flatMap((o) => o.people)).size;
+    list[at] = { ...list[at], poll: { ...poll, options, voters } };
+    return list[at];
+  }
+
   async editMessage(chatId: string, messageId: string, text: string): Promise<Message> {
     const list = this.messages.get(chatId) ?? [];
     const at = list.findIndex((m) => m.id === messageId);

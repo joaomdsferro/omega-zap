@@ -667,6 +667,15 @@ function Shell() {
     };
   }, [selectedBackend]);
 
+  const votePoll = useMemo(() => {
+    const backend = selectedBackend;
+    if (!backend?.votePoll) return undefined;
+    return async (message: Message, options: number[]) => {
+      const voted = await backend.votePoll!(message.chatId, message.id, options);
+      setMessages((prev) => upsert(prev, voted));
+    };
+  }, [selectedBackend]);
+
   const editMessage = useMemo(() => {
     const backend = selectedBackend;
     if (!backend?.editMessage) return undefined;
@@ -908,6 +917,18 @@ function Shell() {
         return saved ?? { id, account: numberBackend.account, name, initials: initialsFor(name), avatarHue: hueFor(id) };
       }
     : undefined;
+  /** Opens a chat with a number from a contact card, named as the card names it unless it is saved. */
+  async function messageNumber(waId: string, name: string) {
+    try {
+      const found = await lookupNumber!(waId);
+      if (!found) return setError(`${name} is not on WhatsApp.`);
+      const saved = namedContacts?.some((c) => c.account === found.account && c.id === found.id);
+      openContact(saved ? found : { ...found, name, initials: initialsFor(name) });
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    }
+  }
+
   const unreadOf = (backend: ChatBackend | null) =>
     (backend ? (chatsBy.get(backend) ?? []) : []).reduce((sum, c) => sum + (c.muted || c.archived ? 0 : Math.max(c.unread, c.markedUnread ? 1 : 0)), 0);
   const rail: RailAccount[] = ACCOUNT_IDS.map((id) => {
@@ -1141,6 +1162,8 @@ function Shell() {
         historyTick={historyTick}
         searchMessages={searchMessages}
         onEdit={canSend ? editMessage : undefined}
+        onVote={canSend ? votePoll : undefined}
+        onMessageNumber={lookupNumber ? (waId, name) => void messageNumber(waId, name) : undefined}
         loadPinned={loadPinned}
         onPin={canSend ? pinMessage : undefined}
         pinsTick={pinsTick}

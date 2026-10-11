@@ -1,5 +1,8 @@
 export type {
   PinNote,
+  Place,
+  Poll,
+  ContactCard,
   Pins,
   Attachment,
   AttachmentKind,

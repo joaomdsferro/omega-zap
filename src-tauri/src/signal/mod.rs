@@ -1223,6 +1223,9 @@ impl SignalManager {
                     wa_media: None,
                     link: None,
                     forwarded: 0,
+                    place: None,
+                    contacts: Vec::new(),
+                    poll: None,
                 };
                 let id = if from_me { ts.to_string() } else { self.message_id(&sender, ts) };
                 let incoming = Incoming {

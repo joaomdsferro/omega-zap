@@ -1093,6 +1093,64 @@ impl WaManager {
         Ok(dto)
     }
 
+    /// Opens a vote on a poll with the poll's secret and records it.
+    /// Returns the poll's message when it changed.
+    async fn open_vote(&self, client: &Client, chat: &str, voter: &str, vote: convert::SealedVote) -> Option<MessageDto> {
+        let Some((options, _, secret, _)) = lock(&self.store).poll_of(chat, &vote.target) else {
+            log::info!("whatsapp: a vote on a poll not kept here was skipped");
+            return None;
+        };
+        let Some(secret) = secret.and_then(|s| BASE64.decode(s).ok()) else {
+            log::info!("whatsapp: a vote on a poll without its secret was skipped");
+            return None;
+        };
+        let creator = match &vote.creator {
+            Some(creator) => creator.parse::<Jid>().ok()?,
+            None => client.pn()?.to_non_ad(),
+        };
+        let voter_jid: Jid = voter.parse().ok()?;
+        let ciphertext = whatsapp_rust::wacore::poll::PollVoteCiphertext { enc_payload: &vote.payload, enc_iv: &vote.iv };
+        let hashes = match client.polls().decrypt_vote(ciphertext, &secret, &vote.target, &creator, &voter_jid).await {
+            Ok(hashes) => hashes,
+            Err(e) => {
+                log::warn!("whatsapp: a poll vote could not be opened: {e}");
+                return None;
+            }
+        };
+        lock(&self.store).set_poll_vote(chat, &vote.target, voter, convert::picked(&options, &hashes), vote.at_ms)
+    }
+
+    /// Votes on a poll for the options at `picked`; none takes our vote back.
+    pub async fn vote_poll(&self, chat_id: &str, message_id: &str, picked: Vec<usize>) -> Result<MessageDto, String> {
+        self.recall(chat_id, message_id);
+        let (options, selectable, secret, creator) =
+            lock(&self.store).poll_of(chat_id, message_id).ok_or("That poll is gone.")?;
+        let secret = secret
+            .and_then(|s| BASE64.decode(s).ok())
+            .ok_or("This poll can't be voted on from here: WhatsApp didn't send its key.")?;
+        if selectable > 0 && picked.len() > selectable as usize {
+            return Err(format!("Pick up to {selectable}."));
+        }
+        let names: Vec<String> = picked.iter().filter_map(|&i| options.get(i).cloned()).collect();
+        let client = self.connected_client().await?;
+        let creator: Jid = match creator {
+            Some(creator) => creator.parse().map_err(|e| format!("Unknown poll author {creator}: {e}"))?,
+            None => client.pn().ok_or("WhatsApp is not connected.")?.to_non_ad(),
+        };
+        let chat: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
+        client
+            .polls()
+            .vote(chat, message_id, &creator, &secret, &names)
+            .await
+            .map_err(|e| format!("The vote was not sent: {e}"))?;
+        let mut store = lock(&self.store);
+        let me = store.own_id().ok_or("WhatsApp is not connected.")?.to_string();
+        let dto = store.set_poll_vote(chat_id, message_id, &me, picked, store::now_ms());
+        drop(store);
+        self.mark_dirty();
+        dto.ok_or_else(|| "That poll is gone.".into())
+    }
+
     /// Changes what one of our texts says, for everyone, within WhatsApp's
     /// edit window.
     pub async fn edit_message(&self, chat_id: &str, message_id: &str, text: &str) -> Result<MessageDto, String> {
@@ -1938,11 +1996,14 @@ impl WaManager {
                 let mut dtos: Vec<MessageDto> = Vec::new();
                 let mut notices: Vec<Notice> = Vec::new();
                 let mut pinned_in: Vec<String> = Vec::new();
+                // Opened once the store is free: (chat, voter, vote).
+                let mut votes: Vec<(String, String, convert::SealedVote)> = Vec::new();
                 // Reactions and deletions can be for messages only the history has.
                 for m in batch.iter() {
                     let target = convert::revoke(&m.message)
                         .or_else(|| convert::reaction(&m.message).map(|(target, _)| target))
-                        .or_else(|| convert::edit(&m.message, 0).map(|edit| edit.target));
+                        .or_else(|| convert::edit(&m.message, 0).map(|edit| edit.target))
+                        .or_else(|| convert::poll_vote(&m.message, 0).map(|vote| vote.target));
                     if let Some(target) = target {
                         self.recall(&m.info.source.chat.to_non_ad_string(), &target);
                     }
@@ -1963,6 +2024,14 @@ impl WaManager {
                             }
                             let editor = (!m.info.source.is_from_me).then_some(sender);
                             dtos.extend(store.edit_message(&chat, &edit.target, editor.as_deref(), edit.content, edit.at_ms));
+                            continue;
+                        }
+                        if let Some(vote) = convert::poll_vote(&m.message, m.info.timestamp.timestamp_millis()) {
+                            let sender = m.info.source.sender.to_non_ad_string();
+                            if let Some(alt) = &m.info.source.sender_alt {
+                                store.learn_mapping(&sender, &alt.to_non_ad_string());
+                            }
+                            votes.push((m.info.source.chat.to_non_ad_string(), sender, vote));
                             continue;
                         }
                         if convert::is_sealed_edit(&m.message) {
@@ -2004,6 +2073,9 @@ impl WaManager {
                             }
                         }
                     }
+                }
+                for (chat, voter, vote) in votes {
+                    dtos.extend(self.open_vote(&client, &chat, &voter, vote).await);
                 }
                 for dto in dtos {
                     let _ = self.app.emit("wa://message", dto);
@@ -2233,7 +2305,15 @@ impl WaManager {
                 }
                 if let Some(incoming) = convert::history(&c.id, item) {
                     let id = incoming.message.id.clone();
+                    let options = incoming.message.content.poll.as_ref().map(|p| p.options.clone());
                     store.ingest(incoming, false);
+                    // The phone sends a poll's votes already opened.
+                    for (voter, hashes, at_ms) in options.as_ref().map(|_| convert::history_votes(&c.id, item)).unwrap_or_default() {
+                        let voter = voter.or_else(|| store.own_id().map(str::to_string));
+                        if let (Some(voter), Some(options)) = (voter, &options) {
+                            store.set_poll_vote(&c.id, &id, &voter, convert::picked(options, &hashes), at_ms);
+                        }
+                    }
                     for (author, emoji) in convert::history_reactions(&c.id, item) {
                         let author = author.or_else(|| store.own_id().map(str::to_string));
                         if let Some(author) = author {

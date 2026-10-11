@@ -134,6 +134,11 @@ pub async fn wa_send_file(mgr: Mgr<'_>, request: tauri::ipc::Request<'_>) -> Res
 }
 
 #[tauri::command]
+pub async fn wa_vote_poll(mgr: Mgr<'_>, chat_id: String, message_id: String, options: Vec<usize>) -> Result<MessageDto, String> {
+    mgr.vote_poll(&chat_id, &message_id, options).await
+}
+
+#[tauri::command]
 pub async fn wa_edit_message(mgr: Mgr<'_>, chat_id: String, message_id: String, text: String) -> Result<MessageDto, String> {
     mgr.edit_message(&chat_id, &message_id, &text).await
 }

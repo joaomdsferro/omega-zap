@@ -148,6 +148,69 @@ pub struct Reaction {
     pub emoji: String,
 }
 
+/// A place shared in a message.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Place {
+    pub lat: f64,
+    pub lng: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// A page about the place, when the sender picked one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// A small map of it, as a data URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
+    /// Shared live: this is where it was when it was sent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live: bool,
+}
+
+/// A contact card shared in a message.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactCard {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub phones: Vec<CardPhone>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CardPhone {
+    /// As the card writes it.
+    pub number: String,
+    /// Their WhatsApp number, when the card names one: digits only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wa_id: Option<String>,
+}
+
+/// A poll: its question is the message's text.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct Poll {
+    pub options: Vec<String>,
+    /// How many options one person can pick; 0 for any number.
+    #[serde(default)]
+    pub selectable: u32,
+    /// The secret votes are sealed with (base64). Without it they can't be read
+    /// or cast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    /// Each person's latest vote.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub votes: Vec<PollVote>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PollVote {
+    pub voter: String,
+    /// Indexes into the poll's options.
+    pub options: Vec<usize>,
+    pub at_ms: i64,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Content {
     pub kind: MsgKind,
@@ -171,6 +234,12 @@ pub struct Content {
     /// forwarding score); 0 when it was written by its sender.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub forwarded: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<Place>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contacts: Vec<ContactCard>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll: Option<Poll>,
 }
 
 /// What search looks at in a message: its text and, for a file, its name.
@@ -231,6 +300,9 @@ impl Content {
             wa_media: None,
             link: None,
             forwarded: 0,
+            place: None,
+            contacts: Vec::new(),
+            poll: None,
         }
     }
 
@@ -246,6 +318,9 @@ impl Content {
             wa_media: None,
             link: None,
             forwarded: 0,
+            place: None,
+            contacts: Vec::new(),
+            poll: None,
         }
     }
 
@@ -264,6 +339,14 @@ impl Content {
 
     /// One-line summary used for chat previews and quotes.
     pub fn preview(&self) -> String {
+        match self.contacts.as_slice() {
+            [] => {}
+            [one] => return format!("Contact: {}", one.name),
+            [first, rest @ ..] => return format!("Contacts: {} and {} more", first.name, rest.len()),
+        }
+        if let Some(name) = self.place.as_ref().and_then(|p| p.name.as_deref()).filter(|_| self.text.is_none()) {
+            return format!("{}: {name}", self.media_label.as_deref().unwrap_or("Location"));
+        }
         match (self.kind, &self.text, &self.media_label) {
             (MsgKind::Text, Some(text), _) => text.clone(),
             (MsgKind::Voice, _, _) => "Voice message".into(),
@@ -580,6 +663,34 @@ pub struct MessageDto {
     /// Changed by its sender after it was sent.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub edited: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub place: Option<Place>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub contacts: Vec<ContactCard>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poll: Option<PollDto>,
+}
+
+/// A poll as the UI shows it.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PollDto {
+    pub options: Vec<PollOptionDto>,
+    /// How many options one person can pick; 0 for any number.
+    pub selectable: u32,
+    /// Votes can be read and cast: the poll's secret is known.
+    pub open: bool,
+    /// How many people voted.
+    pub voters: u32,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PollOptionDto {
+    pub name: String,
+    pub mine: bool,
+    /// Who picked it, "You" first.
+    pub people: Vec<String>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -1418,6 +1529,18 @@ impl ChatStore {
                     known.id = reply.id.clone();
                 }
             }
+            // Stored when polls, places and contact cards were only labels.
+            if known.content.place.is_none() {
+                known.content.place = message.content.place.take();
+            }
+            if known.content.contacts.is_empty() {
+                known.content.contacts = std::mem::take(&mut message.content.contacts);
+            }
+            match (known.content.poll.as_mut(), message.content.poll.take()) {
+                (None, poll) => known.content.poll = poll,
+                (Some(known), Some(poll)) if known.secret.is_none() => known.secret = poll.secret,
+                _ => {}
+            }
             // An edit's card is newer than the one the message came with.
             if known.edited_ms.is_none()
                 && known.content.link.as_ref().is_none_or(|link| link.large.is_none())
@@ -2196,6 +2319,42 @@ impl ChatStore {
         })
     }
 
+    /// A poll's options, how many can be picked, its secret, and who made it:
+    /// `None` for us, else as the message arrived.
+    pub fn poll_of(&self, chat: &str, id: &str) -> Option<(Vec<String>, u32, Option<String>, Option<String>)> {
+        let (_, message) = self.find_message(chat, id)?;
+        let poll = message.content.poll.as_ref().filter(|_| message.deleted.is_none())?;
+        let creator = (!message.from_me).then(|| {
+            let wire = message.wire.as_ref().and_then(|w| w.sender.clone());
+            wire.or_else(|| message.author_jid.clone()).unwrap_or_else(|| self.canonical(chat))
+        });
+        Some((poll.options.clone(), poll.selectable, poll.secret.clone(), creator))
+    }
+
+    /// Sets someone's vote on a poll, unless a newer one is known. No
+    /// options takes the vote back. Returns the poll's message when it changed.
+    pub fn set_poll_vote(&mut self, chat: &str, id: &str, voter: &str, options: Vec<usize>, at_ms: i64) -> Option<MessageDto> {
+        let chat_id = self.canonical(chat);
+        let voter = self.canonical(voter);
+        let message = self.chats.get_mut(&chat_id)?.messages.iter_mut().find(|m| m.id == id)?;
+        let poll = message.content.poll.as_mut()?;
+        let mut options: Vec<usize> = options.into_iter().filter(|&i| i < poll.options.len()).collect();
+        options.sort_unstable();
+        options.dedup();
+        match poll.votes.iter_mut().find(|v| v.voter == voter) {
+            Some(known) if known.at_ms > at_ms => return None,
+            Some(known) => {
+                known.options = options;
+                known.at_ms = at_ms;
+            }
+            None if options.is_empty() => return None,
+            // A vote taken back stays, empty, so an older one replayed doesn't return.
+            None => poll.votes.push(PollVote { voter, options, at_ms }),
+        }
+        let message = message.clone();
+        Some(self.to_dto(&chat_id, &message))
+    }
+
     /// The message a stored message quotes, if any.
     pub fn reply_of(&self, chat: &str, id: &str) -> Option<ReplyRef> {
         self.find_message(chat, id)?.1.content.reply_to.clone()
@@ -2555,6 +2714,35 @@ impl ChatStore {
             starred: m.starred,
             deleted: m.deleted.is_some(),
             edited: m.edited_ms.is_some() && m.deleted.is_none(),
+            place: m.content.place.clone(),
+            contacts: m.content.contacts.clone(),
+            poll: m.content.poll.as_ref().map(|poll| self.poll_dto(poll)),
+        }
+    }
+
+    fn poll_dto(&self, poll: &Poll) -> PollDto {
+        let mut options: Vec<PollOptionDto> = poll
+            .options
+            .iter()
+            .map(|name| PollOptionDto { name: name.clone(), mine: false, people: Vec::new() })
+            .collect();
+        for vote in &poll.votes {
+            let mine = self.own_ids.contains(&self.canonical(&vote.voter));
+            for &index in &vote.options {
+                let Some(option) = options.get_mut(index) else { continue };
+                if mine {
+                    option.mine = true;
+                    option.people.insert(0, "You".into());
+                } else {
+                    option.people.push(self.display_name(&vote.voter));
+                }
+            }
+        }
+        PollDto {
+            options,
+            selectable: poll.selectable,
+            open: poll.secret.is_some(),
+            voters: poll.votes.iter().filter(|v| !v.options.is_empty()).count() as u32,
         }
     }
 
@@ -2884,6 +3072,26 @@ mod tests {
         assert!(!chats[1].pinned);
         assert!(chats.iter().find(|c| c.id == "2@s.whatsapp.net").is_some_and(|c| c.archived));
         assert!(chats.iter().filter(|c| c.id != "2@s.whatsapp.net").all(|c| !c.archived));
+    }
+
+    #[test]
+    fn poll_votes_keep_each_voters_latest() {
+        let mut store = ChatStore::default();
+        store.set_own_ids(["me@s.whatsapp.net".to_string()]);
+        let chat = "1@s.whatsapp.net";
+        let mut poll = incoming(chat, "p", now_ms(), false);
+        poll.message.content = Content::media(MsgKind::Media, "Poll", Some("Lunch?".into()));
+        poll.message.content.poll = Some(Poll { options: vec!["Pizza".into(), "Sushi".into()], selectable: 1, ..Default::default() });
+        store.ingest(poll, false);
+        let shown = store.set_poll_vote(chat, "p", chat, vec![1], 10).expect("voted");
+        let shown = shown.poll.expect("a poll");
+        assert_eq!((shown.voters, shown.options[1].people.len(), shown.open), (1, 1, false));
+        assert!(store.set_poll_vote(chat, "p", chat, vec![0], 5).is_none(), "an older vote replayed");
+        let shown = store.set_poll_vote(chat, "p", "me@s.whatsapp.net", vec![0, 7], 20).unwrap().poll.unwrap();
+        assert!(shown.options[0].mine && shown.options[0].people == ["You"], "out-of-range options dropped");
+        let shown = store.set_poll_vote(chat, "p", chat, Vec::new(), 30).unwrap().poll.unwrap();
+        assert_eq!(shown.voters, 1, "a vote taken back");
+        assert!(store.set_poll_vote(chat, "p", chat, vec![1], 25).is_none(), "and not brought back by an older one");
     }
 
     #[test]
