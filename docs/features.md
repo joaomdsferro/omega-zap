@@ -37,7 +37,9 @@ Everything Omega Zap does today, network by network. For what is still missing, 
   starred messages, a mute switch, and the members (admins marked), searchable, each opening their
   contact info. WhatsApp only.
 - **Pinned messages.** Messages pinned in a WhatsApp chat show in a bar over the conversation, one at a
-  time; click it to go to the message and bring up the next. Pinned messages carry a small pin.
+  time; click it to go to the message and bring up the next. Pinned messages carry a small pin, and the
+  conversation says who pinned what ("You pinned a message"). Pin or unpin from the message menu, for
+  24 hours, 7 days or 30 days.
 - **Edits.** On WhatsApp an edited message shows its new text with "Edited". Your own texts can be
   edited from the message menu for 15 minutes after sending.
 - **Search.** The sidebar search finds chats and then messages across every chat; **Ctrl+F** searches
@@ -66,7 +68,8 @@ WhatsApp only, for now.
 - **Formatting** as WhatsApp writes it (`*bold*`, `_italic_`, `~strike~`, `` `code` ``, quotes and
   lists), also for Signal's styles. **Ctrl+B** and **Ctrl+I** in the message box.
 - **Apple emoji**, as WhatsApp Web and Signal Desktop draw them, with an emoji and characters panel and
-  `:name` suggestions while typing.
+  `:name` suggestions while typing. The Slack and GitHub shortcodes work too: `:laughing`, `:+1`, and
+  closing one with a colon (`:fire:`) puts the emoji in at once.
 - **Mentions** show the person's name.
 - **Replies**: clicking a quote jumps to the quoted message.
 - **Reactions** on both networks. Hover a message to react. Each emoji shows its own count, yours
@@ -97,12 +100,15 @@ WhatsApp only, for now.
 - **Themes**: WhatsApp light and dark, Omega Zap ink and mint, or following the desktop.
 - **Zoom** with **Ctrl +**, **Ctrl −**, **Ctrl 0** or **Ctrl** + mouse wheel, from 50% to 200%.
 - **Resizable chat list**: drag its edge; double-click to reset.
+- **Keyboard shortcuts**: WhatsApp Web's, plus **Ctrl+N** new chat, **Ctrl+K** search, **Ctrl+Tab** or
+  **Alt+↑/↓** to move between chats, **Ctrl+1…9**, **Ctrl+E** emoji, **↑** to edit your last message and
+  **Escape** to close a chat. **Ctrl+/** (or **⋮ → Keyboard shortcuts**) lists them all.
 
 ## Not done yet
 
 - Windows and macOS builds
 - Recording voice messages
-- Pinning messages and editing captions from this computer; Signal edits and pinned messages
+- Editing captions from this computer; Signal edits and pinned messages
 - An app lock (a password for the stored data)
 - More than one account per network, WhatsApp Business, Telegram
 - Signal: typing indicators, starting a chat by phone number (saved contacts work), fetching history
