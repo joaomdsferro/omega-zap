@@ -50,6 +50,18 @@ pub fn signal_mark_read(mgr: Mgr<'_>, chat_id: String) {
     mgr.mark_read(&chat_id);
 }
 
+/// Signal tells linked devices nothing more about a person; the groups in
+/// common come from what this computer knows.
+#[tauri::command]
+pub fn signal_person_details(mgr: Mgr<'_>, id: String) -> crate::store::PersonDetailsDto {
+    mgr.person_details(&id)
+}
+
+#[tauri::command]
+pub fn signal_set_muted(mgr: Mgr<'_>, chat_id: String, muted: bool) {
+    mgr.set_muted(&chat_id, muted);
+}
+
 #[tauri::command]
 pub fn signal_set_unread(mgr: Mgr<'_>, chat_id: String, unread: bool) {
     mgr.set_unread(&chat_id, unread);

@@ -1,18 +1,27 @@
-import { useEffect, useState } from "react";
-import type { Person } from "../backend";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { Message, Person, PersonDetails } from "../backend";
+import type { LoadMedia } from "./Attachments";
 import { Avatar } from "./Avatar";
-import { CloseIcon } from "./Icons";
+import { BackIcon, ChevronRightIcon, FileIcon, MuteIcon, NewChatIcon, StarIcon } from "./Icons";
 
 interface ContactInfoProps {
   load: () => Promise<Person>;
+  /** About, full-size picture and groups in common, which take a moment longer. */
+  loadDetails?: () => Promise<PersonDetails>;
+  loadMedia?: LoadMedia;
   onClose: () => void;
-  /** Opens a chat with them; absent for ourselves. */
-  onMessage?: (person: Person) => void;
+  /** Opens the chat with them, or one of its messages. Absent for ourselves. */
+  onMessage?: (person: Person, messageId?: string) => void;
+  onOpenGroup?: (id: string) => void;
+  onStarred?: () => void;
+  onMute?: (person: Person, muted: boolean) => Promise<void>;
 }
 
 /** Someone's contact info, as WhatsApp shows it beside the chat. */
-export function ContactInfo({ load, onClose, onMessage }: ContactInfoProps) {
+export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, onOpenGroup, onStarred, onMute }: ContactInfoProps) {
   const [person, setPerson] = useState<Person | null>(null);
+  const [details, setDetails] = useState<PersonDetails | null>(null);
+  const [detailsDone, setDetailsDone] = useState(!loadDetails);
 
   useEffect(() => {
     let alive = true;
@@ -25,51 +34,209 @@ export function ContactInfo({ load, onClose, onMessage }: ContactInfoProps) {
   }, [load]);
 
   useEffect(() => {
+    if (!loadDetails) return;
+    let alive = true;
+    loadDetails()
+      .then((loaded) => alive && setDetails(loaded))
+      .catch(console.error)
+      .finally(() => alive && setDetailsDone(true));
+    return () => {
+      alive = false;
+    };
+  }, [loadDetails]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => event.key === "Escape" && onClose();
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
+  async function toggleMute() {
+    if (!person || !onMute) return;
+    const muted = !person.muted;
+    setPerson({ ...person, muted });
+    await onMute(person, muted).catch(() => setPerson({ ...person, muted: !muted }));
+  }
+
+  const groups = details?.commonGroups ?? [];
   return (
     <aside
-      className="absolute inset-y-0 right-0 z-40 flex w-[min(400px,100%)] flex-col border-l border-(--divider) bg-(--panel-bg)"
+      className="absolute inset-y-0 right-0 z-40 flex w-[min(420px,100%)] flex-col border-l border-(--divider) bg-(--panel-bg)"
       aria-label="Contact info"
     >
-      <header className="flex h-15 shrink-0 items-center gap-6 bg-(--panel-header-bg) px-4">
+      <header className="flex h-15 shrink-0 items-center gap-4 bg-(--panel-header-bg) px-3">
         <button
           type="button"
           onClick={onClose}
-          aria-label="Close contact info"
+          aria-label="Back"
           className="flex h-10 w-10 items-center justify-center rounded-full text-(--icon) hover:bg-(--hover-bg)"
         >
-          <CloseIcon size={22} />
+          <BackIcon size={22} />
         </button>
         <h2 className="text-[16px] text-(--text-primary)">Contact info</h2>
       </header>
       {person ? (
         <div className="flex-1 overflow-y-auto">
-          <div className="flex flex-col items-center px-6 pt-7 pb-5 text-center">
-            <Avatar name={person.name} initials={person.initials} hue={person.avatarHue} src={person.avatarUrl} size={200} />
-            <h3 className="mt-4 text-[22px] text-(--text-primary)">{person.name}</h3>
+          <section className="flex flex-col items-center px-6 pt-7 pb-6 text-center">
+            <Avatar
+              name={person.name}
+              initials={person.initials}
+              hue={person.avatarHue}
+              src={details?.photoUrl ?? person.avatarUrl}
+              size={200}
+            />
+            <h3 className="mt-4 text-[22px] leading-7 text-(--text-primary)">{person.name}</h3>
             {person.phone && person.phone !== person.name ? (
               <p className="mt-1 text-[16px] text-(--text-secondary)">{person.phone}</p>
             ) : null}
-            {person.profileName ? <p className="mt-1 text-[14px] text-(--text-secondary)">~{person.profileName}</p> : null}
-            {!person.saved && !person.isMe ? <p className="mt-1 text-[13px] text-(--text-secondary)">Not in your contacts</p> : null}
-          </div>
-          {onMessage && !person.isMe ? (
-            <div className="flex justify-center border-t border-(--divider) py-4">
+            {person.profileName ? <p className="mt-0.5 text-[14px] text-(--text-secondary)">~{person.profileName}</p> : null}
+            {onMessage && !person.isMe ? (
               <button
                 type="button"
                 onClick={() => onMessage(person)}
-                className="rounded-full border border-(--divider) px-6 py-2 text-[14px] text-(--accent) hover:bg-(--hover-bg)"
+                className="mt-5 flex w-21 flex-col items-center gap-1.5 rounded-xl border border-(--divider) py-2.5 text-[13px] text-(--text-primary) hover:bg-(--hover-bg)"
               >
+                <NewChatIcon size={22} className="text-(--accent)" />
                 Message
               </button>
-            </div>
+            ) : null}
+          </section>
+
+          {details?.about ? (
+            <Section>
+              <h4 className="text-[14px] text-(--text-secondary)">About</h4>
+              <p className="mt-1 text-[15px] break-words whitespace-pre-wrap text-(--text-primary)">{details.about}</p>
+            </Section>
+          ) : null}
+
+          {person.mediaCount > 0 ? (
+            <Section>
+              <Row
+                icon={<FileIcon size={20} />}
+                label="Media, links and docs"
+                value={String(person.mediaCount)}
+                onClick={onMessage && (() => onMessage(person, person.recentMedia[0]?.id))}
+              />
+              {person.recentMedia.length > 0 ? (
+                <div className="mt-2 grid grid-cols-3 gap-2 px-2">
+                  {person.recentMedia.map((message) => (
+                    <Thumb key={message.id} message={message} loadMedia={loadMedia} onOpen={onMessage && (() => onMessage(person, message.id))} />
+                  ))}
+                </div>
+              ) : null}
+            </Section>
+          ) : null}
+
+          {person.hasChat ? (
+            <Section>
+              {person.starred > 0 ? (
+                <Row icon={<StarIcon size={20} />} label="Starred messages" value={String(person.starred)} onClick={onStarred} />
+              ) : null}
+              {onMute ? (
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={person.muted}
+                  onClick={toggleMute}
+                  className="flex w-full items-center gap-5 rounded-lg px-3 py-3 text-left hover:bg-(--hover-bg)"
+                >
+                  <MuteIcon size={20} className="text-(--text-secondary)" />
+                  <span className="flex-1 text-[15px] text-(--text-primary)">Mute notifications</span>
+                  <span
+                    className={["flex h-6 w-11 shrink-0 items-center rounded-full px-0.5 transition-colors", person.muted ? "bg-(--accent)" : "bg-(--text-secondary)/40"].join(" ")}
+                    aria-hidden
+                  >
+                    <span className={["h-5 w-5 rounded-full bg-white transition-transform", person.muted ? "translate-x-5" : ""].join(" ")} />
+                  </span>
+                </button>
+              ) : null}
+            </Section>
+          ) : null}
+
+          {groups.length > 0 || !detailsDone ? (
+            <Section>
+              <h4 className="px-3 text-[14px] text-(--text-secondary)">
+                {detailsDone ? `${groups.length} ${groups.length === 1 ? "group" : "groups"} in common` : "Groups in common…"}
+              </h4>
+              <ul className="mt-1">
+                {groups.map((group) => (
+                  <li key={group.id}>
+                    <button
+                      type="button"
+                      onClick={onOpenGroup && (() => onOpenGroup(group.id))}
+                      disabled={!onOpenGroup}
+                      className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-(--hover-bg)"
+                    >
+                      <Avatar name={group.name} initials={group.initials} hue={group.avatarHue} src={group.avatarUrl} size={40} group />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[15px] text-(--text-primary)">{group.name}</span>
+                        {group.members ? <span className="block text-[13px] text-(--text-secondary)">{group.members} members</span> : null}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          ) : null}
+
+          {!person.saved && !person.isMe ? (
+            <p className="px-8 py-5 text-center text-[13px] text-(--text-secondary)">Not in your contacts</p>
           ) : null}
         </div>
       ) : null}
     </aside>
+  );
+}
+
+function Section({ children }: { children: ReactNode }) {
+  return <section className="border-t-8 border-(--panel-header-bg) px-3 py-3">{children}</section>;
+}
+
+function Row({ icon, label, value, onClick }: { icon: ReactNode; label: string; value?: string; onClick?: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      className="flex w-full items-center gap-5 rounded-lg px-3 py-3 text-left hover:bg-(--hover-bg) disabled:cursor-default disabled:hover:bg-transparent"
+    >
+      <span className="text-(--text-secondary)">{icon}</span>
+      <span className="flex-1 text-[15px] text-(--text-primary)">{label}</span>
+      {value ? <span className="text-[14px] text-(--text-secondary)">{value}</span> : null}
+      {onClick ? <ChevronRightIcon size={18} className="text-(--text-secondary)" /> : null}
+    </button>
+  );
+}
+
+/** A photo or video from the chat with them, square. */
+function Thumb({ message, loadMedia, onOpen }: { message: Message; loadMedia?: LoadMedia; onOpen?: () => void }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const video = useRef(message.kind !== "image");
+  useEffect(() => {
+    if (!loadMedia || !message.hasMedia) return;
+    let alive = true;
+    loadMedia(message)
+      .then((loaded) => alive && setUrl(loaded))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [message, loadMedia]);
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      disabled={!onOpen}
+      aria-label={video.current ? "Open video" : "Open photo"}
+      className="aspect-square overflow-hidden rounded-lg bg-(--hover-bg)"
+    >
+      {url ? (
+        video.current ? (
+          <video src={`${url}#t=0.1`} muted playsInline preload="metadata" className="size-full object-cover" />
+        ) : (
+          <img src={url} alt="" draggable={false} className="size-full object-cover" />
+        )
+      ) : null}
+    </button>
   );
 }

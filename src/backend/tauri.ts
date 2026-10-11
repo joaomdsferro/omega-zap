@@ -19,6 +19,7 @@ import type {
   MessageKind,
   OutgoingLink,
   Person,
+  PersonDetails,
   Notice,
   ReactionCount,
   StarredMessage,
@@ -259,10 +260,20 @@ export class TauriBackend implements ChatBackend {
   }
 
   async person(id: string): Promise<Person> {
-    const raw = await invoke<{ id: string; name: string; profileName: string | null; phone: string | null; avatar: string | null; isMe: boolean; saved: boolean }>(
-      `${this.prefix}_person`,
-      { id },
-    );
+    const raw = await invoke<{
+      id: string;
+      name: string;
+      profileName: string | null;
+      phone: string | null;
+      avatar: string | null;
+      isMe: boolean;
+      saved: boolean;
+      hasChat: boolean;
+      muted: boolean;
+      starred: number;
+      mediaCount: number;
+      recentMedia: RawMessage[];
+    }>(`${this.prefix}_person`, { id });
     return {
       id: raw.id,
       account: this.account,
@@ -274,7 +285,36 @@ export class TauriBackend implements ChatBackend {
       initials: initialsFor(raw.name),
       isMe: raw.isMe,
       saved: raw.saved,
+      hasChat: raw.hasChat,
+      muted: raw.muted,
+      starred: raw.starred,
+      mediaCount: raw.mediaCount,
+      recentMedia: raw.recentMedia.map(toMessage),
     };
+  }
+
+  async personDetails(id: string): Promise<PersonDetails> {
+    const raw = await invoke<{
+      about: string | null;
+      photo: string | null;
+      commonGroups: { id: string; name: string; avatar: string | null; members: number | null }[];
+    }>(`${this.prefix}_person_details`, { id });
+    return {
+      about: raw.about ?? undefined,
+      photoUrl: raw.photo ? fileUrl(raw.photo, "avatar") : undefined,
+      commonGroups: raw.commonGroups.map((g) => ({
+        id: g.id,
+        name: g.name,
+        avatarUrl: g.avatar ? fileUrl(g.avatar, "avatar") : undefined,
+        avatarHue: hueFor(g.id),
+        initials: initialsFor(g.name),
+        members: g.members ?? undefined,
+      })),
+    };
+  }
+
+  async setMuted(chatId: string, muted: boolean): Promise<void> {
+    await invoke(`${this.prefix}_set_muted`, { chatId, muted });
   }
 
   async listContacts(): Promise<Contact[]> {

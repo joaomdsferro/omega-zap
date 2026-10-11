@@ -360,6 +360,9 @@ struct StoredChat {
     /// How many people are in the group, us included, once looked up.
     members: Option<u32>,
     members_checked_ms: i64,
+    /// Who is in the group, once looked up: finds the groups in common.
+    participants: Vec<String>,
+    participants_checked_ms: i64,
 }
 
 /// A group message counts as read once everyone else has read it.
@@ -514,6 +517,34 @@ pub struct PersonDto {
     pub is_me: bool,
     /// Whether they are a saved contact.
     pub saved: bool,
+    /// The chat with them, when there is one, and what it holds.
+    pub has_chat: bool,
+    pub muted: bool,
+    pub starred: u32,
+    /// Photos, videos, files and links in the chat with them.
+    pub media_count: u32,
+    /// The latest photos and videos there, newest first.
+    pub recent_media: Vec<MessageDto>,
+}
+
+/// What someone's contact info adds from the network.
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonDetailsDto {
+    pub about: Option<String>,
+    /// File name of their picture at full size inside the avatars directory.
+    pub photo: Option<String>,
+    pub common_groups: Vec<GroupRefDto>,
+}
+
+/// A group, as listed in someone's contact info.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupRefDto {
+    pub id: String,
+    pub name: String,
+    pub avatar: Option<String>,
+    pub members: Option<u32>,
 }
 
 /// A chat list the user made, such as "Family" or "Work".
@@ -950,6 +981,20 @@ impl ChatStore {
         let id = self.canonical(id);
         let is_me = self.own_ids.contains(&id);
         let saved = self.contact_names.get(&id);
+        let chat = self.chats.get(&id);
+        let media: Vec<&StoredMessage> = chat
+            .map(|c| {
+                c.messages
+                    .iter()
+                    .filter(|m| m.deleted.is_none())
+                    .filter(|m| {
+                        matches!(m.content.kind, MsgKind::Image | MsgKind::Media)
+                            || !m.content.attachments.is_empty()
+                            || m.content.link.is_some()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let profile = self.push_names.get(&id).filter(|p| saved.is_some_and(|s| s != *p) || saved.is_none());
         PersonDto {
             name: if is_me { "You".into() } else { self.display_name(&id) },
@@ -962,8 +1007,69 @@ impl ChatStore {
             },
             is_me,
             saved: saved.is_some(),
+            has_chat: chat.is_some(),
+            muted: chat.is_some_and(|c| c.muted_until_ms.is_some_and(|until| until > now_ms())),
+            starred: chat.map_or(0, |c| c.messages.iter().filter(|m| m.starred).count() as u32),
+            media_count: media.len() as u32,
+            recent_media: media
+                .iter()
+                .rev()
+                .filter(|m| matches!(m.content.kind, MsgKind::Image) || m.content.attachments.iter().any(|a| a.kind() == "video"))
+                .take(3)
+                .map(|m| self.to_dto(&id, m))
+                .collect(),
             id,
         }
+    }
+
+    /// Group chats whose members were never looked up, or not for a week.
+    pub fn groups_to_look_up(&self) -> Vec<String> {
+        let stale = now_ms() - 7 * 24 * 3_600_000;
+        self.chats
+            .iter()
+            .filter(|(id, chat)| chat.is_group && !is_hidden_chat(id) && chat.participants_checked_ms < stale)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// Records who is in a group: (id, phone number id, LID) for each member.
+    pub fn set_group_participants(&mut self, group: &str, members: &[(String, Option<String>, Option<String>)]) {
+        for (_, pn, lid) in members {
+            if let (Some(pn), Some(lid)) = (pn, lid) {
+                self.learn_mapping(lid, pn);
+            }
+        }
+        let ids: Vec<String> = members.iter().map(|(id, _, _)| self.canonical(id)).collect();
+        let group = self.canonical(group);
+        if let Some(chat) = self.chats.get_mut(&group) {
+            chat.members = Some(ids.len() as u32);
+            chat.participants = ids;
+            chat.participants_checked_ms = now_ms();
+        }
+    }
+
+    /// The groups someone is in with us, as far as their members are known.
+    pub fn common_groups(&self, person: &str) -> Vec<GroupRefDto> {
+        let person = self.canonical(person);
+        let mut out: Vec<(i64, GroupRefDto)> = self
+            .chats
+            .iter()
+            .filter(|(id, chat)| chat.is_group && !is_hidden_chat(id))
+            .filter(|(_, chat)| chat.participants.iter().any(|p| self.canonical(p) == person))
+            .map(|(id, chat)| {
+                (
+                    chat.last_ts_ms,
+                    GroupRefDto {
+                        id: id.clone(),
+                        name: self.chat_name(id, chat),
+                        avatar: chat.avatar_id.as_deref().map(|pic| avatar_file(id, pic)),
+                        members: chat.members,
+                    },
+                )
+            })
+            .collect();
+        out.sort_by(|a, b| b.0.cmp(&a.0));
+        out.into_iter().map(|(_, group)| group).collect()
     }
 
     fn chat_name(&self, id: &str, chat: &StoredChat) -> String {

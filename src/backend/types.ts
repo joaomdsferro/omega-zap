@@ -147,6 +147,31 @@ export interface Person {
   initials: string;
   isMe: boolean;
   saved: boolean;
+  /** The chat with them, when there is one, and what it holds. */
+  hasChat: boolean;
+  muted: boolean;
+  starred: number;
+  /** Photos, videos, files and links in the chat with them. */
+  mediaCount: number;
+  /** The latest photos and videos there, newest first. */
+  recentMedia: Message[];
+}
+
+/** What someone's contact info adds from the network. */
+export interface PersonDetails {
+  about?: string;
+  /** Their picture at full size. */
+  photoUrl?: string;
+  commonGroups: GroupRef[];
+}
+
+export interface GroupRef {
+  id: string;
+  name: string;
+  avatarUrl?: string;
+  avatarHue: number;
+  initials: string;
+  members?: number;
 }
 
 export interface Contact {
@@ -230,6 +255,10 @@ export interface ChatBackend {
   listContacts(): Promise<Contact[]>;
   /** Someone's contact info, from what this computer knows. */
   person?(id: string): Promise<Person>;
+  /** About, full-size picture and groups in common: slower, from the network. */
+  personDetails?(id: string): Promise<PersonDetails>;
+  /** Mutes a chat for good, or unmutes it. */
+  setMuted?(chatId: string, muted: boolean): Promise<void>;
   /** The chat id for a phone number, or `null` when the number isn't on the network. */
   lookupNumber?(phone: string): Promise<string | null>;
   subscribe(listener: (event: BackendEvent) => void): () => void;

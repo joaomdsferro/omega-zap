@@ -737,8 +737,12 @@ function Shell() {
     () => (selectedBackend?.person ? (id: string) => selectedBackend.person!(id) : undefined),
     [selectedBackend],
   );
+  const loadPersonDetails = useMemo(
+    () => (selectedBackend?.personDetails ? (id: string) => selectedBackend.personDetails!(id) : undefined),
+    [selectedBackend],
+  );
 
-  function openContact(contact: Contact) {
+  function openContact(contact: Contact, messageId?: string) {
     const known = chats.find((c) => c.account === contact.account && c.id === contact.id);
     if (!known) {
       setDraft({
@@ -753,7 +757,7 @@ function Shell() {
         unread: 0,
       });
     }
-    openChat(contact.account, contact.id);
+    openChat(contact.account, contact.id, messageId);
   }
 
   // Phone numbers can be looked up on WhatsApp, once it is linked.
@@ -894,7 +898,15 @@ function Shell() {
         searchMessages={searchMessages}
         onFocused={clearFocus}
         loadPerson={loadPerson}
-        onMessagePerson={(person) => openContact(person)}
+        loadPersonDetails={loadPersonDetails}
+        onMessagePerson={(person, messageId) => openContact(person, messageId)}
+        onOpenChatId={(id) => openChat(selectedChat.account, id)}
+        onStarred={() => setPanel("starred")}
+        onMuteChat={
+          selectedBackend?.setMuted
+            ? (chatId, muted) => selectedBackend.setMuted!(chatId, muted).catch((e) => setError(String(e)))
+            : undefined
+        }
       />
     );
   } else if (unified ? anyLinked : focus.status.linked) {

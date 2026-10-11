@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Chat, Message, OutgoingLink, Person, StarredMessage } from "../backend";
+import type { Chat, Message, OutgoingLink, Person, PersonDetails, StarredMessage } from "../backend";
 import { ContactInfo } from "./ContactInfo";
 import { listenForFileDrops } from "../lib/dropped";
 import { formatDayLabel, sameDay } from "../lib/format";
@@ -54,8 +54,14 @@ interface ChatViewProps {
   onFocused?: () => void;
   /** Someone's contact info, opened from a sender's name or a mention. */
   loadPerson?: (id: string) => Promise<Person>;
-  /** Opens a chat with someone from their contact info. */
-  onMessagePerson?: (person: Person) => void;
+  /** About, full-size picture and groups in common for someone's contact info. */
+  loadPersonDetails?: (id: string) => Promise<PersonDetails>;
+  /** Opens a chat with someone from their contact info, or one of its messages. */
+  onMessagePerson?: (person: Person, messageId?: string) => void;
+  /** Opens another chat of this account, such as a group in common. */
+  onOpenChatId?: (id: string) => void;
+  onStarred?: () => void;
+  onMuteChat?: (chatId: string, muted: boolean) => Promise<void>;
   /** Loads the messages from before `before` (an ISO time); false when there are none. */
   onLoadOlder?: (before: string) => Promise<boolean>;
   /** Changes when older messages of this chat came from the phone: there may be more to load. */
@@ -64,10 +70,13 @@ interface ChatViewProps {
   searchMessages?: (query: string, chatId?: string) => Promise<StarredMessage[]>;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, onMessagePerson }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat }: ChatViewProps) {
   const [personId, setPersonId] = useState<string | null>(null);
   const closePerson = useCallback(() => setPersonId(null), []);
   const loadShownPerson = useCallback(() => loadPerson!(personId!), [loadPerson, personId]);
+  const loadShownDetails = useCallback(() => loadPersonDetails!(personId!), [loadPersonDetails, personId]);
+  // Someone's contact info belongs to the chat it was opened from.
+  useEffect(() => setPersonId(null), [chat.id, chat.account]);
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -375,18 +384,27 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
         </div>
       ) : null}
       <header className="flex h-15 shrink-0 items-center gap-3 border-l border-(--divider) bg-(--panel-header-bg) px-4">
-        <Avatar
-          name={chat.name}
-          initials={chat.initials}
-          hue={chat.avatarHue}
-          src={chat.avatarUrl}
-          size={40}
-          group={chat.isGroup}
-        />
-        <div className="min-w-0">
-          <h2 className="truncate text-[16px] leading-5.25 text-(--text-primary)">{chat.name}</h2>
-          <p className="truncate text-[13px] leading-5 text-(--text-secondary)">{subtitle}</p>
-        </div>
+        {/* A chat with one person opens their contact info, as on WhatsApp. */}
+        <button
+          type="button"
+          onClick={() => setPersonId(chat.id)}
+          disabled={chat.isGroup || !loadPerson}
+          aria-label={chat.isGroup || !loadPerson ? undefined : `Contact info for ${chat.name}`}
+          className="flex min-w-0 items-center gap-3 text-left disabled:cursor-default"
+        >
+          <Avatar
+            name={chat.name}
+            initials={chat.initials}
+            hue={chat.avatarHue}
+            src={chat.avatarUrl}
+            size={40}
+            group={chat.isGroup}
+          />
+          <div className="min-w-0">
+            <h2 className="truncate text-[16px] leading-5.25 text-(--text-primary)">{chat.name}</h2>
+            <p className="truncate text-[13px] leading-5 text-(--text-secondary)">{subtitle}</p>
+          </div>
+        </button>
         <span className="ml-auto flex items-center gap-2">
           <button
             type="button"
@@ -507,15 +525,27 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
         <ContactInfo
           key={personId}
           load={loadShownPerson}
+          loadDetails={loadPersonDetails ? loadShownDetails : undefined}
+          loadMedia={loadMedia}
           onClose={closePerson}
           onMessage={
             onMessagePerson
-              ? (person) => {
+              ? (person, messageId) => {
                   setPersonId(null);
-                  onMessagePerson(person);
+                  onMessagePerson(person, messageId);
                 }
               : undefined
           }
+          onOpenGroup={
+            onOpenChatId
+              ? (id) => {
+                  setPersonId(null);
+                  onOpenChatId(id);
+                }
+              : undefined
+          }
+          onStarred={onStarred}
+          onMute={onMuteChat ? (person, muted) => onMuteChat(person.id, muted) : undefined}
         />
       ) : null}
 

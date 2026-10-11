@@ -51,6 +51,16 @@ pub fn wa_mark_read(mgr: Mgr<'_>, chat_id: String) {
 }
 
 #[tauri::command]
+pub async fn wa_person_details(mgr: Mgr<'_>, id: String) -> Result<crate::store::PersonDetailsDto, String> {
+    mgr.person_details(&id).await
+}
+
+#[tauri::command]
+pub async fn wa_set_muted(mgr: Mgr<'_>, chat_id: String, muted: bool) -> Result<(), String> {
+    mgr.set_muted(&chat_id, muted).await
+}
+
+#[tauri::command]
 pub async fn wa_set_unread(mgr: Mgr<'_>, chat_id: String, unread: bool) -> Result<(), String> {
     mgr.set_unread(&chat_id, unread).await
 }

@@ -14,6 +14,8 @@ export type {
   Notice,
   OutgoingLink,
   Person,
+  PersonDetails,
+  GroupRef,
   ReactionCount,
   ReplyQuote,
   StarredMessage,

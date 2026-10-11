@@ -585,6 +585,16 @@ impl SignalManager {
 
     /// Clears the unread count and has the bridge pass the news on: to our
     /// other devices, and to the senders when the account sends read receipts.
+    pub fn person_details(&self, id: &str) -> crate::store::PersonDetailsDto {
+        crate::store::PersonDetailsDto { common_groups: lock(&self.store).common_groups(id), ..Default::default() }
+    }
+
+    /// Mutes a chat for good, or unmutes it, on this computer.
+    pub fn set_muted(&self, chat_id: &str, muted: bool) {
+        lock(&self.store).set_muted(chat_id, muted.then_some(i64::MAX));
+        self.mark_dirty();
+    }
+
     /// Marks a chat unread, or read. Signal keeps no such mark for linked
     /// devices, so it stays on this computer.
     pub fn set_unread(&self, chat_id: &str, unread: bool) {

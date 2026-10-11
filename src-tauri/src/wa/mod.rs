@@ -1043,7 +1043,78 @@ impl WaManager {
         self.client().await.ok_or_else(|| "WhatsApp is not connected.".to_string())
     }
 
-    /// Adds a chat to the favorites or takes it out, on the phone too.
+    /// Mutes a chat for good, or unmutes it, here and on the phone.
+    pub async fn set_muted(&self, chat_id: &str, muted: bool) -> Result<(), String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
+        let actions = client.chat_actions();
+        if muted { actions.mute_chat(&jid).await } else { actions.unmute_chat(&jid).await }
+            .map_err(|e| format!("The chat was not {}: {e}", if muted { "muted" } else { "unmuted" }))?;
+        lock(&self.store).set_muted(chat_id, muted.then_some(i64::MAX));
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// What someone's contact info needs from the network: their about, their
+    /// picture at full size, and the groups we share. Each part that fails is
+    /// left out.
+    pub async fn person_details(&self, id: &str) -> Result<store::PersonDetailsDto, String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = id.parse().map_err(|e| format!("Not a person: {e}"))?;
+        let about = match client.contacts().get_user_info(std::slice::from_ref(&jid)).await {
+            Ok(info) => info.into_values().next().and_then(|i| i.status).filter(|s| !s.trim().is_empty()),
+            Err(e) => {
+                log::warn!("whatsapp: about lookup failed: {e}");
+                None
+            }
+        };
+        let photo = self.full_picture(&client, id, &jid).await;
+        // Members of the groups not looked up lately, a few at a time.
+        let groups = lock(&self.store).groups_to_look_up();
+        for batch in groups.chunks(8) {
+            let lookups: Vec<_> = batch
+                .iter()
+                .filter_map(|group| group.parse::<Jid>().ok())
+                .map(|group| {
+                    let client = client.clone();
+                    tauri::async_runtime::spawn(async move { (group.clone(), client.groups().fetch_metadata(&group).await) })
+                })
+                .collect();
+            for lookup in lookups {
+                let Ok((group, result)) = lookup.await else { continue };
+                match result {
+                    Ok(metadata) => {
+                        let members = members_of(&metadata);
+                        lock(&self.store).set_group_participants(&group.to_non_ad_string(), &members);
+                    }
+                    Err(e) => log::warn!("whatsapp: group members lookup failed: {e}"),
+                }
+            }
+        }
+        self.mark_dirty();
+        let common_groups = lock(&self.store).common_groups(id);
+        Ok(store::PersonDetailsDto { about, photo, common_groups })
+    }
+
+    /// Someone's profile picture at full size, saved encrypted beside the
+    /// small ones. Its file name, when they have one we may see.
+    async fn full_picture(&self, client: &Client, id: &str, jid: &Jid) -> Option<String> {
+        let dir = self.dir.join(AVATAR_DIR);
+        let lookup = client.contacts().lookup_profile_picture(jid, false, None).await.ok()?;
+        let ProfilePictureLookup::Found(picture) = lookup else { return None };
+        let owner = format!("{id}-full");
+        let file = store::avatar_file(&owner, &picture.id);
+        if dir.join(&file).exists() {
+            return Some(file);
+        }
+        let response = client.http_client.execute(HttpRequest::get(picture.url.as_str())).await.ok()?;
+        if response.status_code != 200 || response.body.is_empty() {
+            return None;
+        }
+        crate::vault::get().write(&dir.join(&file), &response.body).ok()?;
+        Some(file)
+    }
+
     /// Marks a chat unread, or read, here and on the phone.
     pub async fn set_unread(&self, chat_id: &str, unread: bool) -> Result<(), String> {
         self.send_unread_mark(chat_id, unread).await?;
@@ -1062,6 +1133,7 @@ impl WaManager {
             .map_err(|e| format!("The chat was not marked {}: {e}", if unread { "unread" } else { "read" }))
     }
 
+    /// Adds a chat to the favorites or takes it out, on the phone too.
     pub async fn set_favorite(&self, chat_id: &str, favorite: bool) -> Result<(), String> {
         let client = self.connected_client().await?;
         let ids = lock(&self.store).favorites_with(chat_id, favorite);
@@ -1350,14 +1422,19 @@ impl WaManager {
     fn count_members(self: &Arc<Self>, generation: u64, client: Arc<Client>, group: Jid) {
         let mgr = self.clone();
         tauri::async_runtime::spawn(async move {
-            let members = match client.groups().fetch_metadata(&group).await {
-                Ok(metadata) => metadata.participants.len() as u32,
+            let metadata = match client.groups().fetch_metadata(&group).await {
+                Ok(metadata) => metadata,
                 Err(e) => return log::warn!("whatsapp: group size lookup failed: {e}"),
             };
             if mgr.generation.load(Ordering::SeqCst) != generation {
                 return;
             }
-            let changed = lock(&mgr.store).set_group_members(&group.to_non_ad_string(), members);
+            let members = members_of(&metadata);
+            let changed = {
+                let mut store = lock(&mgr.store);
+                store.set_group_participants(&group.to_non_ad_string(), &members);
+                store.set_group_members(&group.to_non_ad_string(), members.len() as u32)
+            };
             for dto in changed {
                 let _ = mgr.app.emit("wa://message", dto);
             }
@@ -1960,4 +2037,19 @@ fn forwarding(context: Option<wa::ContextInfo>, score: u32) -> Option<wa::Contex
         forwarding_score: Some(score),
         ..context.unwrap_or_default()
     })
+}
+
+/// A group's members as the store keeps them: (id, phone number id, LID).
+fn members_of(metadata: &whatsapp_rust::features::GroupMetadata) -> Vec<(String, Option<String>, Option<String>)> {
+    metadata
+        .participants
+        .iter()
+        .map(|p| {
+            (
+                p.jid.to_non_ad_string(),
+                p.phone_number.as_ref().map(|j| j.to_non_ad_string()),
+                p.lid.as_ref().map(|j| j.to_non_ad_string()),
+            )
+        })
+        .collect()
 }
