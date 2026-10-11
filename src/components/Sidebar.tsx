@@ -3,7 +3,7 @@ import type { Chat, StarredMessage } from "../backend";
 import { ChatList } from "./ChatList";
 import { MessageResults } from "./MessageResults";
 import { matches } from "../lib/search";
-import { MoreIcon, NewChatIcon, PlusIcon, SearchIcon, SettingsIcon, StarIcon, UnreadIcon } from "./Icons";
+import { CloseIcon, MoreIcon, NewChatIcon, PlusIcon, SearchIcon, SettingsIcon, StarIcon, UnreadIcon } from "./Icons";
 import { PopupMenu, type MenuEntry } from "./PopupMenu";
 
 /** A built-in filter, or `list:` and the name of a custom list. */
@@ -268,8 +268,22 @@ export function Sidebar({
               if (e.key === "Escape") setQuery("");
             }}
             placeholder="Search chats and messages"
-            className="h-9 w-full rounded-lg bg-(--search-bg) pr-3 pl-12 text-[15px] text-(--text-primary) outline-none placeholder:text-(--text-secondary) focus-visible:outline-none"
+            className="h-9 w-full rounded-lg bg-(--search-bg) pr-10 pl-12 text-[15px] text-(--text-primary) outline-none placeholder:text-(--text-secondary) focus-visible:outline-none"
           />
+          {query ? (
+            <button
+              type="button"
+              onClick={() => {
+                setQuery("");
+                document.getElementById("chat-search")?.focus();
+              }}
+              aria-label="Clear search"
+              title="Clear search (Esc)"
+              className="absolute top-1/2 right-1.5 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-(--icon) hover:bg-(--hover-bg)"
+            >
+              <CloseIcon size={16} />
+            </button>
+          ) : null}
         </div>
       </div>
 
