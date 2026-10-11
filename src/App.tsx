@@ -227,7 +227,7 @@ function Shell() {
   const messageCache = useRef(new Map<string, Message[]>());
   /** The chat whose messages `messages` holds. */
   const messagesOf = useRef<string | null>(null);
-  const [forwarding, setForwarding] = useState<Message | null>(null);
+  const [forwarding, setForwarding] = useState<Message[] | null>(null);
   /** Who is typing where, by `account:id`, as the list words it. */
   const [typing, setTyping] = useState<Map<string, string>>(new Map());
   const typingTimers = useRef(new Map<string, number>());
@@ -934,41 +934,46 @@ function Shell() {
     (chat) => backendFor(chat.account)?.demo || accounts[chat.account].status.state === "connected",
   );
 
-  async function forward(message: Message, targets: Chat[]) {
-    const text = message.text;
+  /** Sends messages, oldest first, on to each of `targets`. */
+  async function forward(messages: Message[], targets: Chat[]) {
     // Attachments are fetched once and uploaded again to each chat.
-    let files: File[] = [];
-    if (message.hasMedia || message.attachments?.length) {
-      const load = selectedBackend?.mediaUrl;
-      if (!load) throw new Error("The attachment can't be read here.");
-      const count = message.attachments?.length || 1;
-      files = await Promise.all(
-        Array.from({ length: count }, async (_, index) => {
-          const response = await fetch(await load(message.chatId, message.id, index));
-          if (!response.ok) throw new Error("The attachment could not be read.");
-          const blob = await response.blob();
-          const attachment = message.attachments?.[index];
-          const type = attachment?.mime || blob.type || "application/octet-stream";
-          const name = attachment?.fileName || message.mediaLabel?.match(/[^/\\]+\.\w{1,8}$/)?.[0] || `forwarded.${type.split("/")[1]?.split(/[;+]/)[0] || "bin"}`;
-          return new File([blob], name, { type });
-        }),
-      );
-    }
-    if (!text && !files.length) return;
-    const score = (message.forwarded ?? 0) + 1;
+    const load = selectedBackend?.mediaUrl;
+    const parts = await Promise.all(
+      messages.map(async (message) => {
+        let files: File[] = [];
+        if (message.hasMedia || message.attachments?.length) {
+          if (!load) throw new Error("The attachment can't be read here.");
+          const count = message.attachments?.length || 1;
+          files = await Promise.all(
+            Array.from({ length: count }, async (_, index) => {
+              const response = await fetch(await load(message.chatId, message.id, index));
+              if (!response.ok) throw new Error("The attachment could not be read.");
+              const blob = await response.blob();
+              const attachment = message.attachments?.[index];
+              const type = attachment?.mime || blob.type || "application/octet-stream";
+              const name = attachment?.fileName || message.mediaLabel?.match(/[^/\\]+\.\w{1,8}$/)?.[0] || `forwarded.${type.split("/")[1]?.split(/[;+]/)[0] || "bin"}`;
+              return new File([blob], name, { type });
+            }),
+          );
+        }
+        return { text: message.text, files, score: (message.forwarded ?? 0) + 1 };
+      }),
+    );
     const failed: string[] = [];
     for (const target of targets) {
       const backend = backendFor(target.account);
       try {
         if (!backend) throw new Error("not linked");
         const sent: Message[] = [];
-        if (files.length) {
-          if (!backend.sendFile) throw new Error("no files here");
-          for (const [index, file] of files.entries()) {
-            sent.push(await backend.sendFile(target.id, file, index === 0 ? text || undefined : undefined, undefined, score));
+        for (const { text, files, score } of parts) {
+          if (files.length) {
+            if (!backend.sendFile) throw new Error("no files here");
+            for (const [index, file] of files.entries()) {
+              sent.push(await backend.sendFile(target.id, file, index === 0 ? text || undefined : undefined, undefined, score));
+            }
+          } else if (text) {
+            sent.push(await backend.sendText(target.id, text, undefined, undefined, score));
           }
-        } else if (text) {
-          sent.push(await backend.sendText(target.id, text, undefined, undefined, score));
         }
         const open = selectedRef.current;
         if (open?.account === target.account && open.id === target.id) {
@@ -978,7 +983,8 @@ function Shell() {
         failed.push(target.name);
       }
     }
-    if (failed.length) throw new Error(`The message was not sent to ${failed.join(", ")}.`);
+    const what = messages.length === 1 ? "The message was" : "The messages were";
+    if (failed.length) throw new Error(`${what} not sent to ${failed.join(", ")}.`);
   }
 
   function subtitleFor(chat: Chat) {
@@ -1327,7 +1333,7 @@ function Shell() {
       {shortcutsOpen ? <ShortcutsDialog onClose={() => setShortcutsOpen(false)} /> : null}
       {forwarding ? (
         <ForwardDialog
-          message={forwarding}
+          messages={forwarding}
           chats={forwardTargets}
           showAccount={showAccount}
           onForward={(targets) => forward(forwarding, targets)}

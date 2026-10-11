@@ -10,6 +10,7 @@ import { Attachments } from "./Attachments";
 import type { LoadMedia } from "./Attachments";
 import { LinkCard, openLink } from "./LinkCard";
 import { canEdit } from "./EditDialog";
+import { canForward } from "./ForwardDialog";
 import {
   BlockedIcon,
   ChevronDownIcon,
@@ -22,6 +23,7 @@ import {
   MoreIcon,
   PlayIcon,
   ReplyIcon,
+  SelectIcon,
   SmileIcon,
   StarIcon,
   Ticks,
@@ -70,6 +72,8 @@ interface MessageBubbleProps {
   onEdit?: (message: Message) => void;
   /** Pins the message for everyone, or unpins it when `pinned`. */
   onPin?: (message: Message) => void;
+  /** Starts selecting messages, with this one picked. */
+  onSelect?: (message: Message) => void;
 }
 
 function Tail({ mine }: { mine: boolean }) {
@@ -272,7 +276,7 @@ const LONG_PRESS_MS = 450;
 /** WhatsApp's forwarding score from which a message counts as forwarded many times. */
 const FORWARDED_MANY = 5;
 
-export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight, pinned, onEdit, onPin }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight, pinned, onEdit, onPin, onSelect }: MessageBubbleProps) {
   const { settings } = useSettings();
   const [picking, setPicking] = useState(false);
   // The reactions' details, opened from their pill.
@@ -381,7 +385,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
         : null,
       whatsapp ? null : copy,
       // Attachments are uploaded again; ones not on this computer yet are fetched first.
-      onForward && !deleted && (message.hasMedia || message.attachments?.length || (text && message.kind === "text"))
+      onForward && canForward(message)
         ? { label: "Forward", icon: <ForwardIcon size={20} />, onSelect: () => onForward(message) }
         : null,
       !deleted && onPin ? { label: pinned ? "Unpin" : "Pin", icon: <PinIcon size={20} />, onSelect: () => onPin(message) } : null,
@@ -393,6 +397,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
           }
         : null,
       onEdit && canEdit(message) ? { label: "Edit", icon: <EditIcon size={20} />, onSelect: () => onEdit(message) } : null,
+      onSelect ? { label: "Select", icon: <SelectIcon size={20} />, onSelect: () => onSelect(message) } : null,
     ];
     const items: MenuEntry[] = actions.filter((item) => item !== null);
     if (onDelete) {

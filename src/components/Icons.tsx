@@ -125,6 +125,13 @@ export const CheckIcon = (p: IconProps) => (
   </Svg>
 );
 
+export const SelectIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="4" y="4" width="16" height="16" rx="3" />
+    <path d="m8.5 12.2 2.4 2.4 4.6-4.8" />
+  </Svg>
+);
+
 export const EditIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16zM13.5 6.5l4 4" />

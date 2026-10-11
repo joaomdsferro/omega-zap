@@ -8,16 +8,22 @@ import { CheckIcon, CloseIcon, SearchIcon, SendIcon } from "./Icons";
 /** How many chats one message can be forwarded to at once, as on the phone. */
 const MAX_TARGETS = 5;
 
+/** Whether a message can be sent on: attachments are uploaded again, texts sent as they are. */
+export function canForward(message: Message): boolean {
+  return !message.deleted && Boolean(message.hasMedia || message.attachments?.length || (message.text && message.kind === "text"));
+}
+
 interface ForwardDialogProps {
-  message: Message;
+  /** The messages to send on, oldest first. */
+  messages: Message[];
   chats: Chat[];
   showAccount?: boolean;
-  /** Sends the message to every chosen chat. */
+  /** Sends the messages to every chosen chat. */
   onForward: (targets: Chat[]) => Promise<void>;
   onClose: () => void;
 }
 
-export function ForwardDialog({ message, chats, showAccount, onForward, onClose }: ForwardDialogProps) {
+export function ForwardDialog({ messages, chats, showAccount, onForward, onClose }: ForwardDialogProps) {
   const [selected, setSelected] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -105,7 +111,7 @@ export function ForwardDialog({ message, chats, showAccount, onForward, onClose 
             <CloseIcon size={20} />
           </button>
           <h2 id="forward-title" className="flex-1 text-[19px] font-medium text-(--text-primary)">
-            Forward message to
+            {messages.length === 1 ? "Forward message to" : `Forward ${messages.length} messages to`}
           </h2>
         </header>
 
@@ -122,7 +128,9 @@ export function ForwardDialog({ message, chats, showAccount, onForward, onClose 
               className="h-9 w-full rounded-lg bg-(--search-bg) pr-3 pl-9 text-[14px] text-(--text-primary) outline-none placeholder:text-(--text-secondary) focus-visible:outline-none"
             />
           </div>
-          <p className="mt-2 line-clamp-2 text-[13px] text-(--text-secondary)">{message.text}</p>
+          {messages.length === 1 && messages[0].text ? (
+            <p className="mt-2 line-clamp-2 text-[13px] text-(--text-secondary)">{messages[0].text}</p>
+          ) : null}
         </div>
 
         <ul className="min-h-30 flex-1 overflow-y-auto pb-2" aria-label="Chats">

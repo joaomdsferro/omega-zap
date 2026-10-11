@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Chat, GroupInfo as Group, Message, OutgoingLink, Person, PersonDetails, PinNote, Pins, StarredMessage, TypingState } from "../backend";
 import { ContactInfo } from "./ContactInfo";
 import { GroupInfo } from "./GroupInfo";
@@ -14,10 +14,11 @@ import { MediaViewer } from "./MediaViewer";
 import type { ViewerItem } from "./MediaViewer";
 import { DeleteDialog } from "./DeleteDialog";
 import { EditDialog, canEdit } from "./EditDialog";
+import { canForward } from "./ForwardDialog";
 import { MessageBubble } from "./MessageBubble";
 import { PinnedBar } from "./PinnedBar";
 import { PinDialog } from "./PinDialog";
-import { ChevronDownIcon, PinIcon } from "./Icons";
+import { CheckIcon, ChevronDownIcon, CloseIcon, ForwardIcon, PinIcon, StarIcon, TrashIcon } from "./Icons";
 import { ChatSearch, searchChat } from "./ChatSearch";
 import { searchWords } from "../lib/search";
 import { SearchIcon } from "./Icons";
@@ -50,8 +51,8 @@ interface ChatViewProps {
   /** Reacts to a message, when the account supports it. */
   onReact?: (message: Message, emoji: string) => void;
   onStar?: (message: Message) => void;
-  /** Sends a message on to other chats. */
-  onForward?: (message: Message) => void;
+  /** Sends messages on to other chats. */
+  onForward?: (messages: Message[]) => void;
   /** Deletes a message for us, or for everyone. */
   onDelete?: (message: Message, forEveryone: boolean) => Promise<void>;
   /** Changes what one of our texts says, for everyone. */
@@ -331,7 +332,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
   );
 
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
-  const [deleting, setDeleting] = useState<Message | null>(null);
+  const [deleting, setDeleting] = useState<Message[] | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
   /** Files picked, dropped or pasted, waiting for Send. */
   const [pending, setPending] = useState<File[]>([]);
@@ -344,6 +345,71 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
     setPending([]);
     setJumpTo(null);
   }, [chatKey]);
+
+  // Messages picked to act on together, as WhatsApp's "Select messages".
+  const [picked, setPicked] = useState<{ chatKey: string; ids: Set<string> } | null>(null);
+  const selection = picked?.chatKey === chatKey ? picked.ids : null;
+  const chosen = useMemo(() => (selection ? messages.filter((m) => selection.has(m.id)) : []), [selection, messages]);
+  /** The message picked last, where a Shift+click range starts. */
+  const pickedLast = useRef<string | null>(null);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const startSelecting = useMemo(
+    () =>
+      onForward || onDelete || onStar
+        ? (message: Message) => {
+            pickedLast.current = message.id;
+            setPicked({ chatKey, ids: new Set([message.id]) });
+          }
+        : undefined,
+    [onForward, onDelete, onStar, chatKey],
+  );
+  const stopSelecting = useCallback(() => setPicked(null), []);
+
+  /** Picks or unpicks `ids` (an album's photos go together); with Shift, picks everything from the last one picked. */
+  function togglePicked(ids: string[], range: boolean) {
+    setPicked((prev) => {
+      if (!prev || prev.chatKey !== chatKey) return prev;
+      const next = new Set(prev.ids);
+      const list = messagesRef.current;
+      const from = range && pickedLast.current ? list.findIndex((m) => m.id === pickedLast.current) : -1;
+      if (from !== -1) {
+        const to = list.findIndex((m) => m.id === ids[0]);
+        const [lo, hi] = from < to ? [from, to + ids.length - 1] : [to, from];
+        for (const m of list.slice(lo, hi + 1)) next.add(m.id);
+      } else if (ids.every((id) => next.has(id))) {
+        for (const id of ids) next.delete(id);
+      } else {
+        for (const id of ids) next.add(id);
+      }
+      pickedLast.current = ids[ids.length - 1];
+      return { chatKey, ids: next };
+    });
+  }
+
+  // Escape stops selecting, unless something over the chat takes it first.
+  useEffect(() => {
+    if (!selection) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || document.querySelector('[aria-modal="true"], [role="menu"]')) return;
+      event.preventDefault();
+      stopSelecting();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [selection, stopSelecting]);
+
+  const forwardOne = useMemo(() => (onForward ? (message: Message) => onForward([message]) : undefined), [onForward]);
+  const deleteOne = useMemo(() => (onDelete ? (message: Message) => setDeleting([message]) : undefined), [onDelete]);
+
+  /** Stars all of the picked messages, or unstars them when all are starred already. */
+  function starPicked() {
+    if (!onStar) return;
+    const live = chosen.filter((m) => !m.deleted);
+    const unstar = live.every((m) => m.starred);
+    for (const message of live) if (Boolean(message.starred) === unstar) onStar(message);
+    stopSelecting();
+  }
 
   // A quoted message that is deleted can't be replied to any more.
   const replyTarget = replyingTo && messages.find((m) => m.id === replyingTo.id && !m.deleted);
@@ -452,6 +518,21 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
 
   const openPhoto = useCallback((photo: Message, index: number) => setViewing(`${photo.id}#${index}`), []);
 
+  /** Wraps a bubble or album so that, while selecting, a click picks it. */
+  function selectable(key: string, group: Message[], node: ReactNode, mine: boolean) {
+    return (
+      <Selectable
+        key={key}
+        selecting={selection !== null}
+        checked={selection !== null && group.every((m) => selection.has(m.id))}
+        label={mine ? "Your message" : `Message from ${group[0].author ?? chat.name}`}
+        onToggle={(range) => togglePicked(group.map((m) => m.id), range)}
+      >
+        {node}
+      </Selectable>
+    );
+  }
+
   return (
     <section
       ref={section}
@@ -541,15 +622,17 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                 const prev = day[index - 1];
                 if (album) {
                   const tail = !prev || prev.fromMe !== message.fromMe || (!message.fromMe && prev.author !== message.author);
-                  const grid = (
+                  const grid = selectable(
+                    message.id,
+                    album,
                     <Album
-                      key={message.id}
                       messages={album}
                       tail={tail}
                       showAuthor={Boolean(chat.isGroup) && tail && !message.fromMe}
                       loadMedia={loadMedia}
                       onOpen={loadMedia ? (photo) => openPhoto(photo, 0) : undefined}
-                    />
+                    />,
+                    message.fromMe,
                   );
                   if (!album.some((photo) => photo.id === unread.current.id)) return grid;
                   return (
@@ -567,9 +650,10 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                   !prev ||
                   prev.fromMe !== message.fromMe ||
                   (!message.fromMe && prev.author !== message.author);
-                const bubble = (
+                const bubble = selectable(
+                  message.id,
+                  [message],
                   <MessageBubble
-                    key={message.id}
                     message={message}
                     account={chat.account}
                     tail={newRun}
@@ -581,8 +665,8 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                     onReact={onReact}
                     onStar={onStar}
                     onReply={canSend ? setReplyingTo : undefined}
-                    onForward={onForward}
-                    onDelete={onDelete ? setDeleting : undefined}
+                    onForward={forwardOne}
+                    onDelete={deleteOne}
                     onEdit={onEdit ? setEditing : undefined}
                     onJumpTo={setJumpTo}
                     onOpenPerson={loadPerson ? setPersonId : undefined}
@@ -590,7 +674,9 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                     highlight={searchHits.has(message.id) ? searchMarks : undefined}
                     pinned={pinnedIds.has(message.id)}
                     onPin={togglePin}
-                  />
+                    onSelect={startSelecting}
+                  />,
+                  message.fromMe,
                 );
                 if (message.id !== unread.current.id) return bubble;
                 return (
@@ -687,9 +773,12 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
 
       {deleting && onDelete ? (
         <DeleteDialog
-          message={deleting}
+          messages={deleting}
           account={chat.account}
-          onDelete={(forEveryone) => onDelete(deleting, forEveryone)}
+          onDelete={async (forEveryone) => {
+            for (const message of deleting) await onDelete(message, forEveryone);
+            stopSelecting();
+          }}
           onClose={() => setDeleting(null)}
         />
       ) : null}
@@ -701,6 +790,26 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
         <PinDialog full={pins.length >= 3} onPin={(secs) => onPin(pinning, secs)} onClose={() => setPinning(null)} />
       ) : null}
 
+      {selection ? (
+        <SelectionBar
+          count={chosen.length}
+          starred={chosen.length > 0 && chosen.every((m) => m.starred || m.deleted)}
+          onStar={onStar && chosen.some((m) => !m.deleted) ? starPicked : undefined}
+          onDelete={onDelete && chosen.length ? () => setDeleting(chosen) : undefined}
+          onForward={
+            onForward && chosen.length && chosen.every(canForward)
+              ? () => {
+                  onForward(chosen);
+                  stopSelecting();
+                }
+              : undefined
+          }
+          forwardNote={chosen.some((m) => !canForward(m)) ? "Some of these messages can't be forwarded" : undefined}
+          onClose={stopSelecting}
+        />
+      ) : null}
+      {/* Kept while selecting, so what was typed stays. */}
+      <div className={selection ? "hidden" : "contents"}>
       <Composer
         chatId={chatKey}
         account={chat.account}
@@ -729,7 +838,102 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
         onSend={send}
         onTyping={onTyping}
       />
+      </div>
     </section>
+  );
+}
+
+interface SelectableProps {
+  selecting: boolean;
+  checked: boolean;
+  /** Who the message is from, for screen readers. */
+  label: string;
+  onToggle: (range: boolean) => void;
+  children: ReactNode;
+}
+
+/**
+ * A message row that, while selecting, has a checkbox and is picked by a
+ * click anywhere on it; what is inside takes no clicks then. Outside of
+ * selecting it adds nothing to the layout, and the bubble inside keeps its
+ * place in the tree either way so it isn't drawn again.
+ */
+function Selectable({ selecting, checked, label, onToggle, children }: SelectableProps) {
+  return (
+    <div
+      role={selecting ? "checkbox" : undefined}
+      aria-checked={selecting ? checked : undefined}
+      aria-label={selecting ? label : undefined}
+      tabIndex={selecting ? 0 : undefined}
+      onClick={selecting ? (event) => onToggle(event.shiftKey) : undefined}
+      onKeyDown={
+        selecting
+          ? (event) => {
+              if (event.key !== " " && event.key !== "Enter") return;
+              event.preventDefault();
+              onToggle(event.shiftKey);
+            }
+          : undefined
+      }
+      className={
+        selecting
+          ? [
+              "flex items-center pl-4 outline-none select-none focus-visible:bg-(--hover-bg)/60",
+              checked ? "bg-[color-mix(in_oklab,var(--accent)_16%,transparent)]" : "hover:bg-(--hover-bg)/40",
+            ].join(" ")
+          : "contents"
+      }
+    >
+      {selecting ? (
+        <span
+          aria-hidden
+          className={[
+            "flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-sm border-2",
+            checked ? "border-(--accent) bg-(--accent) text-(--on-accent)" : "border-(--text-secondary) bg-(--panel-bg)",
+          ].join(" ")}
+        >
+          {checked ? <CheckIcon size={13} strokeWidth={3} /> : null}
+        </span>
+      ) : null}
+      <div className={selecting ? "pointer-events-none min-w-0 flex-1 pb-0.5" : "contents"}>{children}</div>
+    </div>
+  );
+}
+
+interface SelectionBarProps {
+  count: number;
+  /** All of the picked messages are starred: the star button unstars them. */
+  starred: boolean;
+  onStar?: () => void;
+  onDelete?: () => void;
+  onForward?: () => void;
+  /** Why Forward is off, when it is off for some of the messages. */
+  forwardNote?: string;
+  onClose: () => void;
+}
+
+/** Takes the composer's place while messages are being selected. */
+function SelectionBar({ count, starred, onStar, onDelete, onForward, forwardNote, onClose }: SelectionBarProps) {
+  const button =
+    "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-(--icon) hover:bg-(--hover-bg) disabled:opacity-40 disabled:hover:bg-transparent";
+  return (
+    <div role="toolbar" aria-label="Selected messages" className="flex h-15.5 shrink-0 items-center gap-2 bg-(--composer-bg) px-4">
+      <button type="button" onClick={onClose} aria-label="Cancel selection" title="Cancel (Esc)" className={button}>
+        <CloseIcon size={22} />
+      </button>
+      <p className="min-w-0 flex-1 truncate text-[15px] text-(--text-primary)" aria-live="polite">
+        {count} selected
+      </p>
+      <button type="button" onClick={onStar} disabled={!onStar} aria-label={starred ? "Unstar" : "Star"} title={starred ? "Unstar" : "Star"} className={button}>
+        <StarIcon size={22} filled={starred} />
+      </button>
+      <button type="button" onClick={onDelete} disabled={!onDelete} aria-label="Delete" title="Delete" className={button}>
+        <TrashIcon size={22} />
+      </button>
+      <button type="button" onClick={onForward} disabled={!onForward} aria-label="Forward" title={forwardNote ?? "Forward"} className={button}>
+        <ForwardIcon size={22} />
+      </button>
+    </div>
   );
 }
 

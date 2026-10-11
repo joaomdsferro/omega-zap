@@ -9,20 +9,23 @@ const DELETE_FOR_EVERYONE_MS: Record<AccountId, number> = {
 };
 
 interface DeleteDialogProps {
-  message: Message;
+  messages: Message[];
   account: AccountId;
   onDelete: (forEveryone: boolean) => Promise<void>;
   onClose: () => void;
 }
 
-export function DeleteDialog({ message, account, onDelete, onClose }: DeleteDialogProps) {
+export function DeleteDialog({ messages, account, onDelete, onClose }: DeleteDialogProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dialog = useRef<HTMLDivElement>(null);
-  const forEveryone =
-    message.fromMe &&
-    !message.deleted &&
-    Date.now() - new Date(message.sentAt).getTime() < DELETE_FOR_EVERYONE_MS[account];
+  // Several go for everyone only when each of them still can.
+  const forEveryone = messages.every(
+    (message) =>
+      message.fromMe &&
+      !message.deleted &&
+      Date.now() - new Date(message.sentAt).getTime() < DELETE_FOR_EVERYONE_MS[account],
+  );
 
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
@@ -82,7 +85,7 @@ export function DeleteDialog({ message, account, onDelete, onClose }: DeleteDial
         style={{ boxShadow: "0 17px 50px rgba(11,20,26,.19), 0 12px 15px rgba(11,20,26,.24)" }}
       >
         <h2 id="delete-title" className="text-[16px] text-(--text-primary)">
-          Delete message?
+          {messages.length === 1 ? "Delete message?" : `Delete ${messages.length} messages?`}
         </h2>
         {error ? <p className="mt-3 text-[13px] text-(--danger)" role="alert">{error}</p> : null}
         <div className="mt-6 flex flex-col items-end gap-1">
