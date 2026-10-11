@@ -331,8 +331,8 @@ export class TauriBackend implements ChatBackend {
     };
   }
 
-  async setMuted(chatId: string, muted: boolean): Promise<void> {
-    await invoke(`${this.prefix}_set_muted`, { chatId, muted });
+  async setMuted(chatId: string, muted: boolean, untilMs?: number): Promise<void> {
+    await invoke(`${this.prefix}_set_muted`, { chatId, muted, untilMs: untilMs ?? null });
   }
 
   async setArchived(chatId: string, archived: boolean): Promise<void> {

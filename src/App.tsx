@@ -15,6 +15,7 @@ import {
 import { ChatView } from "./components/ChatView";
 import { EmptyState } from "./components/EmptyState";
 import { ForwardDialog } from "./components/ForwardDialog";
+import { MuteDialog } from "./components/MuteDialog";
 import { LinkScreen } from "./components/LinkScreen";
 import { ListEditor, chatKey } from "./components/ListEditor";
 import { NavRail, type RailAccount, type SidebarView } from "./components/NavRail";
@@ -219,6 +220,12 @@ function Shell() {
   /** The chat whose messages `messages` holds. */
   const messagesOf = useRef<string | null>(null);
   const [forwarding, setForwarding] = useState<Message | null>(null);
+  /** A chat asking how long to be muted for, and who waits on the answer. */
+  const [muting, setMuting] = useState<{
+    chat: Pick<Chat, "account" | "id">;
+    resolve: () => void;
+    reject: (reason: unknown) => void;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const selectedRef = useRef(selected);
@@ -684,8 +691,18 @@ function Shell() {
     changeChat(chat, { pinned: !chat.pinned }, (b) => b.setPinned?.(chat.id, !chat.pinned));
   }
 
-  function toggleMuted(chat: Chat) {
-    changeChat(chat, { muted: !chat.muted }, (b) => b.setMuted?.(chat.id, !chat.muted));
+  /** Unmutes a chat, or asks for how long to mute it. Settles once it is done, failing when cancelled. */
+  function toggleMuted(chat: Pick<Chat, "account" | "id" | "muted">): Promise<void> {
+    if (chat.muted) {
+      return new Promise((resolve, reject) => {
+        changeChat(chat as Chat, { muted: false }, (b) => {
+          const done = b.setMuted?.(chat.id, false);
+          done?.then(resolve, reject);
+          return done;
+        });
+      });
+    }
+    return new Promise((resolve, reject) => setMuting({ chat, resolve, reject }));
   }
 
   function toggleFavorite(chat: Chat) {
@@ -938,7 +955,7 @@ function Shell() {
         onStarred={() => setPanel("starred")}
         onMuteChat={
           selectedBackend?.setMuted
-            ? (chatId, muted) => selectedBackend.setMuted!(chatId, muted).catch((e) => setError(String(e)))
+            ? (chatId, muted) => toggleMuted({ account: selectedChat.account, id: chatId, muted: !muted })
             : undefined
         }
       />
@@ -1046,7 +1063,7 @@ function Shell() {
             onToggleList={toggleList}
             onToggleArchived={toggleArchived}
             onTogglePinned={togglePinned}
-            onToggleMuted={toggleMuted}
+            onToggleMuted={(chat) => void toggleMuted(chat).catch(() => {})}
             onNewList={(chat) => editList(undefined, chat)}
             onEditList={(name) => editList(name)}
             searchMessages={searchMessages}
@@ -1086,6 +1103,22 @@ function Shell() {
         />
       ) : null}
 
+      {muting ? (
+        <MuteDialog
+          onMute={async (untilMs) => {
+            const backend = backendFor(muting.chat.account);
+            if (!backend?.setMuted) throw new Error("This chat can't be muted.");
+            await backend.setMuted(muting.chat.id, true, untilMs);
+            patchChat(backend, muting.chat.id, { muted: true });
+            muting.resolve();
+          }}
+          onClose={() => {
+            // Closed without muting: whoever asked puts its switch back.
+            muting.reject(new Error("cancelled"));
+            setMuting(null);
+          }}
+        />
+      ) : null}
       {forwarding ? (
         <ForwardDialog
           message={forwarding}

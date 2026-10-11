@@ -1043,14 +1043,19 @@ impl WaManager {
         self.client().await.ok_or_else(|| "WhatsApp is not connected.".to_string())
     }
 
-    /// Mutes a chat for good, or unmutes it, here and on the phone.
-    pub async fn set_muted(&self, chat_id: &str, muted: bool) -> Result<(), String> {
+    /// Mutes a chat until a time, or for good without one, or unmutes it,
+    /// here and on the phone.
+    pub async fn set_muted(&self, chat_id: &str, muted: bool, until_ms: Option<i64>) -> Result<(), String> {
         let client = self.connected_client().await?;
         let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
         let actions = client.chat_actions();
-        if muted { actions.mute_chat(&jid).await } else { actions.unmute_chat(&jid).await }
-            .map_err(|e| format!("The chat was not {}: {e}", if muted { "muted" } else { "unmuted" }))?;
-        lock(&self.store).set_muted(chat_id, muted.then_some(i64::MAX));
+        match (muted, until_ms) {
+            (true, Some(until)) => actions.mute_chat_until(&jid, until).await,
+            (true, None) => actions.mute_chat(&jid).await,
+            (false, _) => actions.unmute_chat(&jid).await,
+        }
+        .map_err(|e| format!("The chat was not {}: {e}", if muted { "muted" } else { "unmuted" }))?;
+        lock(&self.store).set_muted(chat_id, muted.then(|| until_ms.unwrap_or(i64::MAX)));
         self.mark_dirty();
         Ok(())
     }

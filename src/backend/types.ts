@@ -262,8 +262,8 @@ export interface ChatBackend {
   person?(id: string): Promise<Person>;
   /** About, full-size picture and groups in common: slower, from the network. */
   personDetails?(id: string): Promise<PersonDetails>;
-  /** Mutes a chat for good, or unmutes it. */
-  setMuted?(chatId: string, muted: boolean): Promise<void>;
+  /** Mutes a chat until `untilMs`, or for good without it, or unmutes it. */
+  setMuted?(chatId: string, muted: boolean, untilMs?: number): Promise<void>;
   /** Moves a chat to Archived, which unpins it, or back to the list. */
   setArchived?(chatId: string, archived: boolean): Promise<void>;
   /** Pins a chat to the top of the list, or unpins it. */

@@ -239,6 +239,7 @@ textarea {
   select,
   summary,
   label[for],
+  label:has(> input:is([type="checkbox"], [type="radio"])),
   [role="button"],
   [role="option"],
   [role="radio"],

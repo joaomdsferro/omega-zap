@@ -56,8 +56,8 @@ pub async fn wa_person_details(mgr: Mgr<'_>, id: String) -> Result<crate::store:
 }
 
 #[tauri::command]
-pub async fn wa_set_muted(mgr: Mgr<'_>, chat_id: String, muted: bool) -> Result<(), String> {
-    mgr.set_muted(&chat_id, muted).await
+pub async fn wa_set_muted(mgr: Mgr<'_>, chat_id: String, muted: bool, until_ms: Option<i64>) -> Result<(), String> {
+    mgr.set_muted(&chat_id, muted, until_ms).await
 }
 
 #[tauri::command]

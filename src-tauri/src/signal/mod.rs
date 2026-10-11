@@ -591,9 +591,10 @@ impl SignalManager {
         crate::store::PersonDetailsDto { common_groups: lock(&self.store).common_groups(id), ..Default::default() }
     }
 
-    /// Mutes a chat for good, or unmutes it, on this computer.
-    pub fn set_muted(&self, chat_id: &str, muted: bool) {
-        lock(&self.store).set_muted(chat_id, muted.then_some(i64::MAX));
+    /// Mutes a chat until a time, or for good without one, or unmutes it,
+    /// on this computer.
+    pub fn set_muted(&self, chat_id: &str, muted: bool, until_ms: Option<i64>) {
+        lock(&self.store).set_muted(chat_id, muted.then(|| until_ms.unwrap_or(i64::MAX)));
         self.mark_dirty();
     }
 

@@ -58,8 +58,8 @@ pub fn signal_person_details(mgr: Mgr<'_>, id: String) -> crate::store::PersonDe
 }
 
 #[tauri::command]
-pub fn signal_set_muted(mgr: Mgr<'_>, chat_id: String, muted: bool) {
-    mgr.set_muted(&chat_id, muted);
+pub fn signal_set_muted(mgr: Mgr<'_>, chat_id: String, muted: bool, until_ms: Option<i64>) {
+    mgr.set_muted(&chat_id, muted, until_ms);
 }
 
 #[tauri::command]
