@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { AccountId } from "../accounts/accounts";
 import type { DeliveryStatus, LinkPreview, Message, ReplyQuote } from "../backend";
@@ -26,6 +26,7 @@ import {
 } from "./Icons";
 import { PopupMenu } from "./PopupMenu";
 import type { MenuAction, MenuEntry } from "./PopupMenu";
+import { ReactionDetails } from "./ReactionDetails";
 import { ReactionPicker, type PickerAnchor } from "./ReactionPicker";
 import { Emoji, emojiOnlyCount, withEmoji } from "../lib/emoji";
 import { Formatted, FormattedLine } from "../lib/markup";
@@ -261,6 +262,9 @@ const FORWARDED_MANY = 5;
 export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, flash, highlight }: MessageBubbleProps) {
   const { settings } = useSettings();
   const [picking, setPicking] = useState(false);
+  // The reactions' details, opened from their pill.
+  const [details, setDetails] = useState<PickerAnchor | null>(null);
+  const closeDetails = useCallback(() => setDetails(null), []);
   /** The full emoji grid instead of the quick row. */
   const [allEmoji, setAllEmoji] = useState(false);
   /** Where the message's menu is open, in viewport pixels. */
@@ -417,19 +421,12 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
   const pillClass =
     "flex h-[22px] items-center gap-1 rounded-full border px-1.5 text-[12px] leading-none text-(--text-secondary)";
   const plainPill = "border-(--divider) bg-(--panel-bg)";
-  // Signal shows the three most picked and folds the rest into a "+N".
+  // Each emoji with its own count, ours always among them, then the total.
   const ranked = [...reactions].sort((a, b) => b.count - a.count);
   const total = reactions.reduce((sum, reaction) => sum + reaction.count, 0);
-  // Signal shows three reactions; yours is always one of them.
   const shown = ranked.slice(0, 3);
   const mineRanked = ranked.find((reaction) => reaction.mine);
   if (mineRanked && !shown.includes(mineRanked)) shown[shown.length - 1] = mineRanked;
-  // WhatsApp: yours in a pill of its own, everyone else's gathered in the next.
-  const others = ranked
-    .map((reaction) => (reaction.mine ? { ...reaction, count: reaction.count - 1 } : reaction))
-    .filter((reaction) => reaction.count > 0);
-  const othersTotal = total - (myReaction ? 1 : 0);
-  const minePill = "border-(--accent) bg-[color-mix(in_oklab,var(--accent)_18%,var(--panel-bg))]";
 
   return (
     <div
@@ -582,70 +579,54 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
         </span>
 
         {reactions.length > 0 ? (
-          <div className={["absolute -bottom-4.5 flex gap-1", mine ? "right-2" : "left-2"].join(" ")}>
-            {account === "whatsapp" ? (
-              <>
-                {myReaction ? (
-                  // Yours, on its own so it is never lost among the others; tapping takes it back.
-                  <button
-                    type="button"
-                    disabled={!onReact}
-                    onClick={() => onReact?.(message, myReaction)}
-                    aria-label={`Your reaction: ${myReaction}. Remove it`}
-                    className={`${pillClass} ${minePill} disabled:cursor-default`}
-                    style={{ boxShadow: "var(--bubble-shadow)" }}
-                  >
-                    <Emoji emoji={myReaction} size={15} />
-                  </button>
-                ) : null}
-                {others.length > 0 ? (
-                  // Everyone else's in one pill, as WhatsApp gathers them; tapping it opens the picker.
-                  <button
-                    type="button"
-                    disabled={!onReact}
-                    onClick={(event) => (picking ? setPicking(false) : openPickerAt(event.currentTarget))}
-                    aria-label={`${othersTotal} ${othersTotal === 1 ? "reaction" : "reactions"}: ${others.map((r) => r.emoji).join(" ")}`}
-                    className={`${pillClass} ${plainPill} disabled:cursor-default`}
-                    style={{ boxShadow: "var(--bubble-shadow)" }}
-                  >
-                    <span className="flex gap-0.5">
-                      {others.slice(0, 3).map((reaction) => (
-                        <Emoji key={reaction.emoji} emoji={reaction.emoji} size={15} />
-                      ))}
-                    </span>
-                    {othersTotal > 1 ? <span className="tabular-nums">{othersTotal}</span> : null}
-                  </button>
-                ) : null}
-              </>
-            ) : (
-              <>
-                {shown.map((reaction) => (
-                  <button
-                    key={reaction.emoji}
-                    type="button"
-                    disabled={!onReact}
-                    onClick={() => onReact?.(message, reaction.emoji)}
-                    aria-label={`${reaction.emoji} ${reaction.count}${reaction.mine ? ", including you" : ""}`}
-                    aria-pressed={reaction.mine}
-                    className={[
-                      pillClass,
-                      "disabled:cursor-default",
-                      reaction.mine ? minePill : plainPill,
-                    ].join(" ")}
-                    style={{ boxShadow: "var(--bubble-shadow)" }}
-                  >
-                    <Emoji emoji={reaction.emoji} size={15} />
-                    {reaction.count > 1 ? <span className="tabular-nums">{reaction.count}</span> : null}
-                  </button>
-                ))}
-                {ranked.length > 3 ? (
-                  <span className={`${pillClass} ${plainPill}`} style={{ boxShadow: "var(--bubble-shadow)" }}>
-                    +{ranked.filter((reaction) => !shown.includes(reaction)).reduce((sum, reaction) => sum + reaction.count, 0)}
-                  </span>
-                ) : null}
-              </>
-            )}
+          <div className={["absolute -bottom-4.5 flex", mine ? "right-2" : "left-2"].join(" ")}>
+            <button
+              type="button"
+              data-reaction-pills
+              onClick={(event) => {
+                if (details) return setDetails(null);
+                const box = event.currentTarget.getBoundingClientRect();
+                setDetails({ x: box.left + box.width / 2, top: box.top, bottom: box.bottom });
+              }}
+              aria-label={`${total} ${total === 1 ? "reaction" : "reactions"}: ${ranked.map((r) => `${r.emoji} ${r.count}`).join(", ")}${myReaction ? `, yours ${myReaction}` : ""}`}
+              aria-expanded={Boolean(details)}
+              className={`${pillClass} ${plainPill} gap-1.5`}
+              style={{ boxShadow: "var(--bubble-shadow)" }}
+            >
+              {shown.map((reaction) => (
+                <span
+                  key={reaction.emoji}
+                  className={[
+                    "flex items-center gap-0.5 tabular-nums",
+                    // Ours, tinted, so it is never lost among the others.
+                    reaction.mine ? "-mx-1 rounded-full bg-[color-mix(in_oklab,var(--accent)_28%,transparent)] px-1 py-px text-(--text-primary)" : "",
+                  ].join(" ")}
+                >
+                  <Emoji emoji={reaction.emoji} size={15} />
+                  {reaction.count > 1 ? reaction.count : null}
+                </span>
+              ))}
+              {ranked.length > 1 ? (
+                <span className="border-l border-(--divider) pl-1.5 font-semibold tabular-nums">{total}</span>
+              ) : null}
+            </button>
           </div>
+        ) : null}
+
+        {details ? (
+          <ReactionDetails
+            reactions={ranked}
+            anchor={details}
+            onRemove={
+              react
+                ? (emoji) => {
+                    setDetails(null);
+                    react(message, emoji);
+                  }
+                : undefined
+            }
+            onClose={closeDetails}
+          />
         ) : null}
 
         {picking && react ? (

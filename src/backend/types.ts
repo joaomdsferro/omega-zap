@@ -55,6 +55,8 @@ export interface ReactionCount {
   emoji: string;
   count: number;
   mine: boolean;
+  /** Who picked it, "You" first. */
+  people?: string[];
 }
 
 export interface Message {

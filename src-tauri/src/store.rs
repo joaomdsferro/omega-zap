@@ -442,6 +442,8 @@ pub struct ReactionDto {
     pub emoji: String,
     pub count: u32,
     pub mine: bool,
+    /// Who picked it, "You" first.
+    pub people: Vec<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -1946,13 +1948,19 @@ impl ChatStore {
     fn reaction_dtos(&self, reactions: &[Reaction]) -> Vec<ReactionDto> {
         let mut out: Vec<ReactionDto> = Vec::new();
         for reaction in reactions {
-            let mine = self.own_ids.contains(&reaction.author);
+            let mine = self.own_ids.contains(&self.canonical(&reaction.author));
+            let name = if mine { "You".to_string() } else { self.display_name(&reaction.author) };
             match out.iter_mut().find(|r| r.emoji == reaction.emoji) {
                 Some(found) => {
                     found.count += 1;
                     found.mine |= mine;
+                    if mine {
+                        found.people.insert(0, name);
+                    } else {
+                        found.people.push(name);
+                    }
                 }
-                None => out.push(ReactionDto { emoji: reaction.emoji.clone(), count: 1, mine }),
+                None => out.push(ReactionDto { emoji: reaction.emoji.clone(), count: 1, mine, people: vec![name] }),
             }
         }
         out
