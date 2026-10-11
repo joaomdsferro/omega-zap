@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Chat, Contact, GroupInfo as Group, GroupMember, MemberChange, Message, OutgoingLink, Person, PersonDetails, PinNote, Pins, StarredMessage, TypingState } from "../backend";
+import type { Chat, Contact, GroupInfo as Group, GroupMember, MemberChange, Message, OutgoingLink, OutgoingMedia, Person, PersonDetails, PinNote, Pins, StarredMessage, StickerLibrary, StickerShelf, TypingState } from "../backend";
 import { ContactInfo } from "./ContactInfo";
 import { GroupInfo } from "./GroupInfo";
 import { listenForFileDrops } from "../lib/dropped";
@@ -41,6 +41,10 @@ interface ChatViewProps {
   onSend: (text: string, files: File[], replyTo?: string, onFileSent?: () => void, link?: OutgoingLink) => Promise<void>;
   /** Files can be sent in this chat. */
   canAttach?: boolean;
+  /** Sends a sticker or GIF, answering `replyTo`; absent where they can't be sent. */
+  onSendMedia?: (item: OutgoingMedia, replyTo?: string) => Promise<void>;
+  /** The account's stickers, for the panel and for stickers' own actions in messages. */
+  stickers?: StickerShelf;
   /** Reports something that went wrong, such as a dropped file that can't be read. */
   onError?: (message: string) => void;
   /** Where to load a message's attachment from, when the account can fetch it. */
@@ -110,7 +114,7 @@ interface ChatViewProps {
   pinsTick?: number;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, onVote, onMessageNumber, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onBlock, onClearChat, onDeleteChat, onExitGroup, onEditGroup, onChangeMembers, loadContacts, groupTick, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onSendMedia, stickers, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, onVote, onMessageNumber, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onBlock, onClearChat, onDeleteChat, onExitGroup, onEditGroup, onChangeMembers, loadContacts, groupTick, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
   const [personId, setPersonId] = useState<string | null>(null);
   const closePerson = useCallback(() => setPersonId(null), []);
   const loadShownPerson = useCallback(() => loadPerson!(personId!), [loadPerson, personId]);
@@ -471,6 +475,51 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
     setPending([]);
   }
 
+  async function sendMedia(item: OutgoingMedia) {
+    pinned.current = null;
+    stickToBottom.current = true;
+    await onSendMedia!(item, replyTarget?.id);
+    setReplyingTo(null);
+  }
+
+  // Which stickers are favorites and which packs are ours, for a sticker's menu in a message.
+  const [library, setLibrary] = useState<StickerLibrary | null>(null);
+  useEffect(() => {
+    if (!stickers) return;
+    let alive = true;
+    const load = () => void stickers.library().then((l) => alive && setLibrary(l)).catch(() => {});
+    load();
+    const stop = stickers.subscribe(load);
+    return () => {
+      alive = false;
+      stop();
+    };
+  }, [stickers]);
+  const stickerActions = useMemo(() => {
+    if (!stickers || !library) return undefined;
+    const favorites = new Set(library.favorites.map((s) => s.id));
+    const own = library.packs.filter((p) => !p.store);
+    const fail = (e: unknown) => onError?.(String(e));
+    return (message: Message): MenuEntry[] => {
+      const id = message.attachments?.find((a) => a.kind === "sticker")?.stickerId;
+      if (!id || message.deleted) return [];
+      const target = { chatId: message.chatId, messageId: message.id };
+      const favorite = favorites.has(id);
+      const items: MenuEntry[] = [
+        {
+          label: favorite ? "Remove from favorites" : "Add to favorites",
+          icon: <StarIcon size={20} filled={favorite} />,
+          onSelect: () => stickers.setFavorite(target, !favorite).catch(fail),
+        },
+      ];
+      if (own.length) {
+        items.push({ heading: "Add to pack" });
+        for (const pack of own) items.push({ label: pack.name, onSelect: () => stickers.addToPack(pack.id, target).catch(fail) });
+      }
+      return items;
+    };
+  }, [stickers, library, onError]);
+
   // Files can be added while the account connects; they wait for Send.
   const attaching = Boolean(canAttach);
   const [dragging, setDragging] = useState(false);
@@ -738,6 +787,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                     pinned={pinnedIds.has(message.id)}
                     onPin={togglePin}
                     onSelect={startSelecting}
+                    moreActions={stickerActions}
                   />,
                   message.fromMe,
                 );
@@ -936,6 +986,9 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
             : undefined
         }
         onSend={send}
+        onSendMedia={onSendMedia ? sendMedia : undefined}
+        stickers={stickers}
+        onError={onError}
         onTyping={onTyping}
       />
       )}

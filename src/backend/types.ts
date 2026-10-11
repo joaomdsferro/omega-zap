@@ -48,6 +48,8 @@ export interface Attachment {
   size: number;
   width?: number;
   height?: number;
+  /** A WhatsApp sticker's id in the sticker library. */
+  stickerId?: string;
 }
 
 /** One emoji on a message, with everyone who picked it counted together. */
@@ -353,6 +355,101 @@ export interface Privacy {
 
 export type PrivacyCategory = "last" | "online" | "readreceipts";
 
+/** A sticker kept to send: recent, favorite or in a pack. */
+export interface LibrarySticker {
+  id: string;
+  width: number;
+  height: number;
+  /** Unknown until its file has been looked at. */
+  animated?: boolean;
+  favorite: boolean;
+  emojis: string[];
+}
+
+export interface StickerPack {
+  id: string;
+  name: string;
+  publisher: string;
+  /** One of WhatsApp's own packs; otherwise made here, and can be changed. */
+  store: boolean;
+  /** The pack's tray picture, for a store pack. */
+  tray?: string;
+  stickers: LibrarySticker[];
+}
+
+export interface StickerLibrary {
+  recent: LibrarySticker[];
+  favorites: LibrarySticker[];
+  packs: StickerPack[];
+  /** GIFs we sent, the latest first. */
+  gifs: { id: string; width: number; height: number }[];
+}
+
+/** A pack in WhatsApp's sticker store. */
+export interface StorePack {
+  id: string;
+  name: string;
+  publisher: string;
+  description: string;
+  animated: boolean;
+  tray?: string;
+  previews: string[];
+  /** Bytes. */
+  size: number;
+  installed: boolean;
+}
+
+/** A GIF found by search, as it is sent. */
+export interface GifPick {
+  slug: string;
+  mp4: string;
+  width: number;
+  height: number;
+  still?: string;
+}
+
+export interface GifResult {
+  slug: string;
+  title: string;
+  /** A small animated picture for the grid. */
+  preview: string;
+  width: number;
+  height: number;
+  send: GifPick;
+}
+
+/** A sticker or GIF to send. */
+export type OutgoingMedia =
+  | { kind: "sticker"; id: string }
+  /** A picture made into a sticker as it is sent. */
+  | { kind: "new-sticker"; picture: Blob }
+  | { kind: "gif"; pick: GifPick }
+  | { kind: "recent-gif"; id: string };
+
+/** A sticker in the library, or the one in a message. */
+export type StickerTarget = { id: string } | { chatId: string; messageId: string };
+
+/** An account's stickers: recent, favorites (synced with the phone where it can) and packs. */
+export interface StickerShelf {
+  library(): Promise<StickerLibrary>;
+  /** Downloads a library sticker or GIF if needed and returns where to load it from. */
+  fileUrl(id: string): Promise<string>;
+  setFavorite(target: StickerTarget, favorite: boolean): Promise<void>;
+  /** The packs in the network's sticker store. */
+  store(): Promise<StorePack[]>;
+  installPack(id: string): Promise<void>;
+  removePack(id: string): Promise<void>;
+  /** Makes an empty pack of our own; returns its id. */
+  createPack(name: string): Promise<string>;
+  renamePack(id: string, name: string): Promise<void>;
+  addToPack(packId: string, target: StickerTarget): Promise<void>;
+  removeFromPack(packId: string, id: string): Promise<void>;
+  /** Makes a sticker from a picture and puts it in one of our packs. */
+  addNewSticker(packId: string, picture: Blob): Promise<void>;
+  /** Called whenever the library changes, here or on the phone. */
+  subscribe(listener: () => void): () => void;
+}
+
 export interface ChatBackend {
   readonly account: AccountId;
   /** Sample chats instead of a linked account. */
@@ -373,6 +470,10 @@ export interface ChatBackend {
    * sent on from another chat.
    */
   sendText(chatId: string, text: string, replyTo?: string, link?: OutgoingLink, forwarded?: number): Promise<Message>;
+  /** Sends a sticker or GIF. */
+  sendMedia?(chatId: string, item: OutgoingMedia, replyTo?: string): Promise<Message>;
+  /** Stickers kept to send; absent where stickers can't be sent. */
+  readonly stickers?: StickerShelf;
   /** Uploads a file and sends it, with `caption` under it. */
   sendFile?(chatId: string, file: File, caption?: string, replyTo?: string, forwarded?: number): Promise<Message>;
   /**

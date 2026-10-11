@@ -81,6 +81,8 @@ interface MessageBubbleProps {
   onPin?: (message: Message) => void;
   /** Starts selecting messages, with this one picked. */
   onSelect?: (message: Message) => void;
+  /** Further actions for the message's menu, such as a sticker's. */
+  moreActions?: (message: Message) => MenuEntry[];
 }
 
 function Tail({ mine }: { mine: boolean }) {
@@ -268,7 +270,7 @@ const LONG_PRESS_MS = 450;
 /** WhatsApp's forwarding score from which a message counts as forwarded many times. */
 const FORWARDED_MANY = 5;
 
-export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight, pinned, onEdit, onPin, onSelect, onVote, onMessageContact }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight, pinned, onEdit, onPin, onSelect, onVote, onMessageContact, moreActions }: MessageBubbleProps) {
   const { settings } = useSettings();
   const [picking, setPicking] = useState(false);
   // The reactions' details, opened from their pill.
@@ -399,6 +401,8 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
       onSelect ? { label: "Select", icon: <SelectIcon size={20} />, onSelect: () => onSelect(message) } : null,
     ];
     const items: MenuEntry[] = actions.filter((item) => item !== null);
+    const more = moreActions?.(message) ?? [];
+    if (more.length) items.push("separator", ...more);
     if (onDelete) {
       if (items.length > 0) items.push("separator");
       items.push({ label: "Delete", icon: <TrashIcon size={20} />, onSelect: () => onDelete(message) });

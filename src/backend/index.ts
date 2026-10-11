@@ -30,6 +30,15 @@ export type {
   ReplyQuote,
   StarredMessage,
   TypingState,
+  LibrarySticker,
+  StickerPack,
+  StickerLibrary,
+  StickerShelf,
+  StickerTarget,
+  StorePack,
+  GifPick,
+  GifResult,
+  OutgoingMedia,
 } from "./types";
 export { MockBackend } from "./mock";
 export { TauriBackend } from "./tauri";

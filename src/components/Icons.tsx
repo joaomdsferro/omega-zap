@@ -417,3 +417,25 @@ export const KeyboardIcon = (p: IconProps) => (
     <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M18 14h.01M9 14h6" />
   </Svg>
 );
+
+export const GifIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="3" />
+    <path d="M10 10.2a2 2 0 0 0-1.6-.7c-1.3 0-2 1-2 2.5s.7 2.5 2 2.5c.9 0 1.6-.5 1.6-1.5v-.6H8.8M12.7 9.6v4.8M15.4 14.4V9.6h2.4M15.4 12h2" strokeWidth={1.5} />
+  </Svg>
+);
+
+export const StickerIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M20 13V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h6z" />
+    <path d="M20 13h-4a3 3 0 0 0-3 3v4" />
+    <path d="M9 10v.5M14 10v.5" strokeWidth={2.2} />
+  </Svg>
+);
+
+export const ClockIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5l3 2" />
+  </Svg>
+);

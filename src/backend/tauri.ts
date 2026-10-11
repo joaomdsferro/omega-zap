@@ -32,6 +32,8 @@ import type {
   PrivacyCategory,
   ReactionCount,
   StarredMessage,
+  StickerShelf,
+  OutgoingMedia,
   TypingState,
 } from "./types";
 
@@ -89,7 +91,7 @@ interface RawMessage {
   authorId: string | null;
   status: DeliveryStatus | null;
   hasMedia: boolean;
-  attachments: { kind: Attachment["kind"]; mime: string; fileName: string | null; size: number; width: number | null; height: number | null }[];
+  attachments: { kind: Attachment["kind"]; mime: string; fileName: string | null; size: number; width: number | null; height: number | null; stickerId?: string }[];
   mediaWidth: number | null;
   mediaHeight: number | null;
   forwarded: number;
@@ -224,6 +226,7 @@ function toMessage(raw: RawMessage): Message {
           size: a.size,
           width: a.width ?? undefined,
           height: a.height ?? undefined,
+          stickerId: a.stickerId,
         }))
       : undefined,
     mediaWidth: raw.mediaWidth ?? undefined,
@@ -271,6 +274,8 @@ export class TauriBackend implements ChatBackend {
   leaveGroup?: (id: string) => Promise<void>;
   editGroup?: (id: string, changes: { name?: string; description?: string }) => Promise<GroupInfo>;
   changeMembers?: (id: string, change: MemberChange, members: string[]) => Promise<GroupInfo>;
+  sendMedia?: (chatId: string, item: OutgoingMedia, replyTo?: string) => Promise<Message>;
+  stickers?: StickerShelf;
 
   constructor(readonly account: AccountId) {
     this.prefix = COMMAND_PREFIX[account];
@@ -286,6 +291,44 @@ export class TauriBackend implements ChatBackend {
       return toMessage(await invoke<RawMessage>(`${this.prefix}_edit_message`, args));
     };
     if (account === "whatsapp") {
+      this.sendMedia = async (chatId, item, replyTo) => {
+        const reply = replyTo ?? null;
+        switch (item.kind) {
+          case "sticker":
+            return toMessage(await invoke<RawMessage>("wa_send_sticker", { chatId, id: item.id, replyTo: reply }));
+          case "new-sticker":
+            return toMessage(
+              await invoke<RawMessage>("wa_send_new_sticker", new Uint8Array(await item.picture.arrayBuffer()), {
+                headers: { "x-chat": chatId, "x-reply": replyTo ?? "" },
+              }),
+            );
+          case "gif":
+            return toMessage(await invoke<RawMessage>("wa_send_gif", { chatId, pick: item.pick, replyTo: reply }));
+          case "recent-gif":
+            return toMessage(await invoke<RawMessage>("wa_send_recent_gif", { chatId, id: item.id, replyTo: reply }));
+        }
+      };
+      const target = (t: { id: string } | { chatId: string; messageId: string }) =>
+        "id" in t ? { id: t.id, chatId: null, messageId: null } : { id: null, chatId: t.chatId, messageId: t.messageId };
+      this.stickers = {
+        library: () => invoke("wa_sticker_library"),
+        fileUrl: async (id) => fileUrl(await invoke<string>("wa_library_media", { id }), "media"),
+        setFavorite: (t, favorite) => invoke("wa_set_sticker_favorite", { ...target(t), favorite }),
+        store: () => invoke("wa_sticker_store"),
+        installPack: (id) => invoke("wa_install_pack", { id }),
+        removePack: (id) => invoke("wa_remove_pack", { id }),
+        createPack: (name) => invoke<string>("wa_create_pack", { name }),
+        renamePack: (id, name) => invoke("wa_rename_pack", { id, name }),
+        addToPack: (packId, t) => invoke("wa_add_to_pack", { packId, ...target(t) }),
+        removeFromPack: (packId, id) => invoke("wa_remove_from_pack", { packId, id }),
+        addNewSticker: async (packId, picture) => {
+          await invoke("wa_add_new_sticker", new Uint8Array(await picture.arrayBuffer()), { headers: { "x-pack": packId } });
+        },
+        subscribe: (listener) => {
+          const pending = listen("wa://stickers", () => listener());
+          return () => void pending.then((unlisten) => unlisten());
+        },
+      };
       this.linkThumbnailUrl = async (chatId, messageId) =>
         fileUrl(await invoke<string>("wa_link_thumbnail", { chatId, messageId }), "media");
       this.lookupNumber = (phone) => invoke<string | null>("wa_lookup_number", { phone });

@@ -14,6 +14,7 @@ import {
   type MemberChange,
   type Message,
   type OutgoingLink,
+  type OutgoingMedia,
   type PrivacyCategory,
   type StarredMessage,
 } from "./backend";
@@ -637,6 +638,17 @@ function Shell() {
       throw e;
     }
   }
+
+  const sendMedia = useMemo(() => {
+    const backend = selectedBackend;
+    const chatId = selectedId;
+    if (!backend?.sendMedia || !chatId) return undefined;
+    // Errors are shown by the panel that sent it.
+    return async (item: OutgoingMedia, replyTo?: string) => {
+      const message = await backend.sendMedia!(chatId, item, replyTo);
+      setMessages((prev) => upsert(prev, message));
+    };
+  }, [selectedBackend, selectedId]);
 
   const loadMedia = useMemo(() => {
     const load = selectedBackend?.mediaUrl;
@@ -1271,6 +1283,8 @@ function Shell() {
         cannotSendReason={`Waiting for ${ACCOUNTS[selectedChat.account].label} to connect…`}
         onSend={handleSend}
         canAttach={Boolean(selectedBackend?.sendFile)}
+        onSendMedia={sendMedia}
+        stickers={selectedBackend?.stickers}
         onError={setError}
         loadMedia={loadMedia}
         openMedia={openMedia}

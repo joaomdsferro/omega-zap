@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { AccountId } from "../accounts/accounts";
-import type { LinkPreview, OutgoingLink, ReplyQuote, TypingState } from "../backend";
+import type { LinkPreview, OutgoingLink, OutgoingMedia, ReplyQuote, StickerShelf, TypingState } from "../backend";
 import { Emoji } from "../lib/emoji";
 import { emojiForShortcode, searchEmoji } from "../lib/emojiSearch";
 import { SHORTCUTS, matches } from "../lib/shortcuts";
@@ -10,8 +10,8 @@ import { FormattedLine } from "../lib/markup";
 import { outgoingLink } from "../lib/outgoing";
 import { useSettings } from "../settings/settings";
 import { CloseIcon, FileIcon, MicIcon, PlusIcon, SendIcon, SmileIcon } from "./Icons";
+import { MediaPanel } from "./MediaPanel";
 import { MessageInput, type MessageInputHandle } from "./MessageInput";
-import { EmojiGrid } from "./ReactionPicker";
 
 interface ComposerProps {
   chatId: string;
@@ -33,6 +33,10 @@ interface ComposerProps {
   onTyping?: (chatId: string, state: TypingState) => void;
   /** ↑ in an empty box: edits our last message, if one can be. */
   onEditLast?: () => void;
+  /** Sends a sticker or GIF, answering `replyTo`; absent where they can't be sent. */
+  onSendMedia?: (item: OutgoingMedia) => Promise<void>;
+  stickers?: StickerShelf;
+  onError?: (message: string) => void;
 }
 
 /** "Typing" is said again this often while it goes on: the other side forgets it after a while. */
@@ -160,7 +164,7 @@ function useTypedLink(text: string, enabled: boolean) {
   return found?.url === url ? { url, preview: found.preview, loading: false } : { url, preview: null, loading: true };
 }
 
-export function Composer({ chatId, account, disabled, disabledReason, replyTo, onCancelReply, onSend, files = [], onAddFiles, onRemoveFile, onTyping, onEditLast }: ComposerProps) {
+export function Composer({ chatId, account, disabled, disabledReason, replyTo, onCancelReply, onSend, files = [], onAddFiles, onRemoveFile, onTyping, onEditLast, onSendMedia, stickers, onError }: ComposerProps) {
   const { settings } = useSettings();
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
@@ -188,10 +192,12 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
     if (!emojiOpen) return;
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (!panel.current?.contains(target) && !emojiButton.current?.contains(target)) setEmojiOpen(false);
+      // A sticker's menu opens outside the panel but belongs to it.
+      const inMenu = target instanceof Element && target.closest('[role="menu"]');
+      if (!panel.current?.contains(target) && !emojiButton.current?.contains(target) && !inMenu) setEmojiOpen(false);
     };
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !event.defaultPrevented && !document.querySelector('[role="menu"]')) {
         event.preventDefault();
         setEmojiOpen(false);
         input.current?.focus();
@@ -313,11 +319,20 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
         <div
           ref={panel}
           role="dialog"
-          aria-label="Emoji"
-          className="reaction-pop absolute bottom-full left-3 z-40 mb-2 flex h-[340px] w-[364px] max-w-[calc(100%-24px)] flex-col overflow-hidden rounded-2xl bg-(--panel-bg)"
+          aria-label={onSendMedia ? "Emoji, GIFs and stickers" : "Emoji"}
+          className={[
+            "reaction-pop absolute bottom-full left-3 z-40 mb-2 flex w-[364px] max-w-[calc(100%-24px)] flex-col overflow-hidden rounded-2xl bg-(--panel-bg)",
+            onSendMedia ? "h-[420px] max-h-[calc(100vh-160px)]" : "h-[340px]",
+          ].join(" ")}
           style={{ boxShadow: "0 2px 5px rgba(11,20,26,.26), 0 2px 10px rgba(11,20,26,.16)" }}
         >
-          <EmojiGrid account={account} autoFocus={false} characters onPick={(emoji) => input.current?.insert(emoji)} />
+          <MediaPanel
+            account={account}
+            onEmoji={(emoji) => input.current?.insert(emoji)}
+            onSend={onSendMedia && !disabled ? onSendMedia : undefined}
+            stickers={stickers}
+            onError={onError}
+          />
         </div>
       ) : null}
       {suggestions.length ? (
