@@ -1726,8 +1726,10 @@ impl WaManager {
                 name: c.name.as_deref().or(c.display_name.as_deref()),
                 pn_jid: c.pn_jid.as_deref(),
                 lid_jid: c.lid_jid.as_deref(),
-                unread: c.unread_count,
-                marked_unread: c.marked_as_unread,
+                // A page asked for later carries the read state of when the
+                // phone kept it, not of now.
+                unread: c.unread_count.filter(|_| !on_demand),
+                marked_unread: c.marked_as_unread.filter(|_| !on_demand),
                 pinned_at_s: c.pinned,
                 archived: c.archived,
                 mute_end: c.mute_end_time,

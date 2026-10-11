@@ -193,6 +193,7 @@ impl HistoryDb {
             store.chats.insert(id, chat);
         }
         store.migrate_attachments();
+        store.repair_unread();
         Ok(Some(store))
     }
 

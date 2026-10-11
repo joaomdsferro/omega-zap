@@ -45,7 +45,7 @@ const ChatRow = memo(function ChatRow({
   onPeek,
   onMenu,
 }: ChatRowProps) {
-  const unread = chat.unread > 0;
+  const unread = chat.unread > 0 || !!chat.markedUnread;
   const row = useRef<HTMLLIElement>(null);
   useEffect(() => {
     if (highlighted) row.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -119,10 +119,13 @@ const ChatRow = memo(function ChatRow({
             <p className="min-w-0 flex-1 truncate text-[14px] leading-5"><FormattedLine text={chat.lastMessage ?? ""} emojiSize={18} /></p>
             {chat.muted ? <MuteIcon size={16} aria-label="Muted" /> : null}
             {chat.pinned ? <PinIcon size={16} aria-label="Pinned" /> : null}
-            {unread ? (
+            {chat.unread > 0 ? (
               <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-(--badge-bg) px-1.5 text-[12px] font-semibold text-(--badge-text)">
                 {chat.unread}
               </span>
+            ) : chat.markedUnread ? (
+              // Marked unread by hand, as WhatsApp shows it: a dot with no count.
+              <span className="mx-1 size-3 shrink-0 rounded-full bg-(--badge-bg)" aria-label="Marked unread" />
             ) : null}
             {/* Room for the options button, which only shows on hover. */}
             {onMenu ? (

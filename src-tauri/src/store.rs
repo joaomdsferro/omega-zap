@@ -349,6 +349,9 @@ struct StoredChat {
     archived: bool,
     muted_until_ms: Option<i64>,
     unread: u32,
+    /// Marked unread by hand, on this or another device: shown as a dot
+    /// until the chat is read.
+    marked_unread: bool,
     last_ts_ms: i64,
     messages: Vec<StoredMessage>,
     /// Server id of the profile picture saved on disk, if the chat has one.
@@ -399,6 +402,7 @@ pub struct ChatSummary {
     pub last_from_me: bool,
     pub last_status: Option<Delivery>,
     pub unread: u32,
+    pub marked_unread: bool,
     pub pinned: bool,
     pub muted: bool,
     pub is_group: bool,
@@ -816,6 +820,7 @@ impl ChatStore {
         into.archived |= from.archived;
         into.muted_until_ms = into.muted_until_ms.max(from.muted_until_ms);
         into.unread += from.unread;
+        into.marked_unread |= from.marked_unread;
         into.last_ts_ms = into.last_ts_ms.max(from.last_ts_ms);
         let mut evicted = Vec::new();
         for message in from.messages {
@@ -997,6 +1002,7 @@ impl ChatStore {
         // read what came after it.
         if message.from_me && message.ts_ms >= chat.last_ts_ms {
             chat.unread = 0;
+            chat.marked_unread = false;
         }
         chat.last_ts_ms = chat.last_ts_ms.max(message.ts_ms);
         let evicted = insert_message(chat, message.clone());
@@ -1022,11 +1028,14 @@ impl ChatStore {
         if let Some(name) = meta.name.filter(|n| !n.trim().is_empty()) {
             chat.name = Some(name.to_string());
         }
+        // Nothing is unread behind our own last message: a count that says
+        // otherwise is older than it.
+        let ours_last = chat.messages.last().is_some_and(|m| m.from_me);
         if let Some(unread) = meta.unread {
-            chat.unread = unread;
+            chat.unread = if ours_last { 0 } else { unread };
         }
-        if meta.marked_unread == Some(true) {
-            chat.unread = chat.unread.max(1);
+        if let Some(marked) = meta.marked_unread {
+            chat.marked_unread = marked;
         }
         // App state is the authority on these and can arrive first, so history
         // only fills them in and never clears them.
@@ -1384,7 +1393,10 @@ impl ChatStore {
         if let Some(chat) = self.chat_for_state(jid)
             && at_ms >= chat.last_ts_ms
         {
-            chat.unread = if read { 0 } else { chat.unread.max(1) };
+            if read {
+                chat.unread = 0;
+            }
+            chat.marked_unread = !read;
         }
     }
 
@@ -1721,10 +1733,20 @@ impl ChatStore {
         Some(self.to_dto(&chat_id, &message))
     }
 
+    /// Counts left behind our own last message, which older history used to
+    /// bring back after we had replied.
+    pub fn repair_unread(&mut self) {
+        for chat in self.chats.values_mut() {
+            if chat.messages.last().is_some_and(|m| m.from_me) {
+                chat.unread = 0;
+            }
+        }
+    }
+
     /// Clears the unread count. Returns the messages it stood for, newest
     /// first, so their senders can be told.
     pub fn has_unread(&self, chat: &str) -> bool {
-        self.chats.get(&self.canonical(chat)).is_some_and(|c| c.unread > 0)
+        self.chats.get(&self.canonical(chat)).is_some_and(|c| c.unread > 0 || c.marked_unread)
     }
 
     pub fn mark_read(&mut self, chat: &str) -> Vec<ReadTarget> {
@@ -1733,6 +1755,7 @@ impl ChatStore {
             return Vec::new();
         };
         let unread = std::mem::take(&mut stored.unread) as usize;
+        stored.marked_unread = false;
         stored
             .messages
             .iter()
@@ -1764,7 +1787,7 @@ impl ChatStore {
             .iter()
             .filter(|(id, chat)| !chat.archived && !chat.messages.is_empty() && !is_hidden_chat(id))
             .filter(|(_, chat)| !chat.muted_until_ms.is_some_and(|until| until > now))
-            .fold(0u32, |sum, (_, chat)| sum.saturating_add(chat.unread))
+            .fold(0u32, |sum, (_, chat)| sum.saturating_add(chat.unread.max(chat.marked_unread as u32)))
     }
 
     pub fn list_chats(&self) -> Vec<ChatSummary> {
@@ -1800,6 +1823,7 @@ impl ChatStore {
                     last_from_me: last.is_some_and(|m| m.from_me),
                     last_status: last.and_then(|m| m.status),
                     unread: chat.unread,
+                    marked_unread: chat.marked_unread && chat.unread == 0,
                     pinned: chat.pinned_at.is_some(),
                     muted: chat.muted_until_ms.is_some_and(|until| until > now),
                     is_group: chat.is_group,
@@ -2065,6 +2089,39 @@ mod tests {
 
         store.ingest(incoming("1@s.whatsapp.net", "d", 4, true), true);
         assert_eq!(store.list_chats()[0].unread, 0);
+
+        // History that comes later, such as an older page asked of the
+        // phone, can't bring back a count behind our own last message.
+        store.ingest_conversation(ConversationMeta {
+            id: "1@s.whatsapp.net",
+            name: None,
+            pn_jid: None,
+            lid_jid: None,
+            unread: Some(2),
+            marked_unread: None,
+            pinned_at_s: None,
+            archived: None,
+            mute_end: None,
+            conversation_ts_s: None,
+        });
+        assert_eq!(store.list_chats()[0].unread, 0);
+    }
+
+    #[test]
+    fn marked_unread_is_a_dot_until_read() {
+        let mut store = ChatStore::default();
+        store.ingest(incoming("1@s.whatsapp.net", "a", 1, false), false);
+        store.set_read_elsewhere("1@s.whatsapp.net", false, 5);
+        let chat = &store.list_chats()[0];
+        assert!(chat.marked_unread && chat.unread == 0);
+        assert_eq!(store.unread_total(), 1);
+
+        store.ingest(incoming("1@s.whatsapp.net", "b", 6, false), true);
+        let chat = &store.list_chats()[0];
+        assert!(!chat.marked_unread && chat.unread == 1);
+
+        store.mark_read("1@s.whatsapp.net");
+        assert!(!store.has_unread("1@s.whatsapp.net"));
     }
 
     #[test]

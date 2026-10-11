@@ -11,7 +11,7 @@ type Filter = "all" | "unread" | "favorites" | "private" | "groups" | `list:${st
 
 const FILTERS: { id: Filter; label: string; test: (chat: Chat) => boolean }[] = [
   { id: "all", label: "All", test: () => true },
-  { id: "unread", label: "Unread", test: (c) => c.unread > 0 },
+  { id: "unread", label: "Unread", test: (c) => c.unread > 0 || !!c.markedUnread },
   { id: "favorites", label: "Favorites", test: (c) => Boolean(c.favorite) },
   { id: "private", label: "Private", test: (c) => !c.isGroup },
   { id: "groups", label: "Groups", test: (c) => Boolean(c.isGroup) },
@@ -269,7 +269,7 @@ export function Sidebar({
               key={f.id}
               active={active.id === f.id}
               label={f.label}
-              count={f.id === "all" ? undefined : chats.filter((c) => c.unread > 0 && f.test(c)).length}
+              count={f.id === "all" ? undefined : chats.filter((c) => (c.unread > 0 || c.markedUnread) && f.test(c)).length}
               onClick={() => setChosen(f.id)}
               onContextMenu={
                 list

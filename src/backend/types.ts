@@ -106,6 +106,8 @@ export interface Chat {
   lastFromMe?: boolean;
   lastStatus?: DeliveryStatus;
   unread: number;
+  /** Marked unread by hand: a dot, not a count. */
+  markedUnread?: boolean;
   pinned?: boolean;
   muted?: boolean;
   isGroup?: boolean;

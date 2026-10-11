@@ -30,6 +30,7 @@ interface RawChat {
   lastFromMe: boolean;
   lastStatus: DeliveryStatus | null;
   unread: number;
+  markedUnread: boolean;
   pinned: boolean;
   muted: boolean;
   isGroup: boolean;
@@ -92,6 +93,7 @@ function toChat(raw: RawChat, account: AccountId): Chat {
     lastFromMe: raw.lastFromMe,
     lastStatus: raw.lastStatus ?? undefined,
     unread: raw.unread,
+    markedUnread: raw.markedUnread || undefined,
     pinned: raw.pinned,
     muted: raw.muted,
     isGroup: raw.isGroup,

@@ -374,10 +374,10 @@ function Shell() {
     void selectedBackend.markRead(selectedId);
     setChatsBy((prev) => {
       const list = prev.get(selectedBackend);
-      if (!list?.some((c) => c.id === selectedId && c.unread > 0)) return prev;
+      if (!list?.some((c) => c.id === selectedId && (c.unread > 0 || c.markedUnread))) return prev;
       return new Map(prev).set(
         selectedBackend,
-        list.map((c) => (c.id === selectedId ? { ...c, unread: 0 } : c)),
+        list.map((c) => (c.id === selectedId ? { ...c, unread: 0, markedUnread: false } : c)),
       );
     });
     return () => {
@@ -746,7 +746,7 @@ function Shell() {
       }
     : undefined;
   const unreadOf = (backend: ChatBackend | null) =>
-    (backend ? (chatsBy.get(backend) ?? []) : []).reduce((sum, c) => sum + (c.muted ? 0 : c.unread), 0);
+    (backend ? (chatsBy.get(backend) ?? []) : []).reduce((sum, c) => sum + (c.muted ? 0 : Math.max(c.unread, c.markedUnread ? 1 : 0)), 0);
   const rail: RailAccount[] = ACCOUNT_IDS.map((id) => {
     const { status } = accounts[id];
     const backend = backendFor(id);
