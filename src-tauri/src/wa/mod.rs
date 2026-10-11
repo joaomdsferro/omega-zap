@@ -50,8 +50,11 @@ const ON_DEMAND: i32 = 6;
 const BACKFILL_START: Duration = Duration::from_secs(30);
 /// …asks for this many messages at a time…
 const BACKFILL_PAGE: i32 = 50;
-/// …and lets this much time pass between requests, to stay light.
-const BACKFILL_PACE: Duration = Duration::from_secs(4);
+/// …about this many chats at once, so the phone handles them in one go
+/// (each time it is woken it shows a "syncing" notification)…
+const BACKFILL_BURST: usize = 6;
+/// …and lets this much time pass between bursts, to stay light.
+const BACKFILL_PACE: Duration = Duration::from_secs(3);
 /// How long the phone has to answer a request.
 const BACKFILL_TIMEOUT: Duration = Duration::from_secs(40);
 /// Unanswered requests after which a chat counts as complete.
@@ -60,13 +63,16 @@ const BACKFILL_STRIKES: u32 = 2;
 const BACKFILL_SILENT: u32 = 3;
 /// How long to wait for a phone that is away before trying again.
 const BACKFILL_RETRY: Duration = Duration::from_secs(5 * 60);
+/// How often a fetch with nothing left to do looks again.
+const BACKFILL_IDLE: Duration = Duration::from_secs(30 * 60);
 /// Pause between profile picture lookups, to stay clear of the rate limit.
 const AVATAR_PACE: Duration = Duration::from_millis(150);
 /// How many chats the phone is asked about when old ticks are refreshed, how
-/// many messages of each, and the pause between the requests.
+/// many messages of each, and the pause between the requests: short, so the
+/// phone deals with them in one go.
 const TICK_CHATS: usize = 40;
 const TICK_MESSAGES: usize = 50;
-const TICK_PACE: Duration = Duration::from_secs(1);
+const TICK_PACE: Duration = Duration::from_millis(250);
 
 /// Why a CDN fetch failed. `Rejected` means the reference itself is no longer
 /// served, which a re-upload can fix.
@@ -132,6 +138,8 @@ pub struct WaManager {
     backfill_for: AtomicU64,
     /// A chat opened while it had no messages here: fetched next.
     backfill_next: Mutex<Option<String>>,
+    /// Rung when a chat is opened, for a fetch that had nothing left to do.
+    backfill_wake: tokio::sync::Notify,
     /// The window is open and in front: we show as online, as WhatsApp Web
     /// does while it is looked at.
     active: AtomicBool,
@@ -207,6 +215,7 @@ impl WaManager {
             on_demand_answered: tokio::sync::Notify::new(),
             backfill_for: AtomicU64::new(u64::MAX),
             backfill_next: Mutex::new(None),
+            backfill_wake: tokio::sync::Notify::new(),
             active: AtomicBool::new(false),
             announced: std::sync::atomic::AtomicU8::new(0),
         }))
@@ -1691,6 +1700,12 @@ impl WaManager {
                         stale.push(chat);
                     }
                 }
+                // Each request wakes the phone, so a start asks about a few
+                // dozen chats at most, each once a day.
+                stale.truncate(TICK_CHATS);
+                for (chat, ..) in &stale {
+                    store.mark_refreshed(chat);
+                }
                 stale
             };
             mgr.save_dirty.store(true, Ordering::Release);
@@ -2255,9 +2270,12 @@ impl WaManager {
         Ok(())
     }
 
-    /// Asks the phone for every chat's older messages, a page at a time and
-    /// slowly, newest chats first, until it has nothing older. Chats found
-    /// complete stay so across restarts. Shows where it is in the status.
+    /// Asks the phone for every chat's older messages, a page at a time,
+    /// a few chats per request burst, newest chats first, until it has
+    /// nothing older. Chats with no message here are left until they are
+    /// opened: there is nothing to count back from, and the phone is woken
+    /// for each one. Chats found complete stay so across restarts. Shows
+    /// where it is in the status.
     fn fetch_all_history(self: &Arc<Self>, generation: u64, client: Arc<Client>) {
         if self.backfill_for.swap(generation, Ordering::SeqCst) == generation {
             return;
@@ -2271,6 +2289,8 @@ impl WaManager {
             let mut silent = 0u32;
             // Chats the phone did not answer for, this run.
             let mut strikes: HashMap<String, u32> = HashMap::new();
+            // Chats with no message here, left until opened.
+            let mut empty: std::collections::HashSet<String> = std::collections::HashSet::new();
             loop {
                 if !current() {
                     return;
@@ -2281,90 +2301,111 @@ impl WaManager {
                 }
                 // What came in is written first, so the oldest message is known.
                 mgr.save_now();
-                let (queue, (done, total)) = {
-                    let store = lock(&mgr.store);
-                    (store.history_queue(), store.history_counts())
-                };
-                let first = lock(&mgr.backfill_next).take();
-                let mut queue: Vec<(String, String)> =
-                    queue.into_iter().filter(|(chat, _)| strikes.get(chat).is_none_or(|n| *n < BACKFILL_STRIKES)).collect();
-                if let Some(at) = first.and_then(|first| queue.iter().position(|(chat, _)| *chat == first)) {
-                    let opened = queue.remove(at);
-                    queue.insert(0, opened);
+                let queue = lock(&mgr.store).history_queue();
+                let opened = lock(&mgr.backfill_next).take();
+                let mut queue: Vec<(String, String)> = queue
+                    .into_iter()
+                    .filter(|(chat, _)| strikes.get(chat).is_none_or(|n| *n < BACKFILL_STRIKES))
+                    .filter(|(chat, _)| !empty.contains(chat) || opened.as_ref() == Some(chat))
+                    .collect();
+                if let Some(at) = opened.as_ref().and_then(|first| queue.iter().position(|(chat, _)| chat == first)) {
+                    let chat = queue.remove(at);
+                    queue.insert(0, chat);
                 }
-                let Some((chat, name)) = queue.into_iter().next() else {
-                    mgr.set_backfill(BackfillState::Done, None, fetched);
-                    return;
-                };
-                let in_memory = lock(&mgr.store).oldest_message(&chat).cloned();
-                let oldest = match (in_memory, mgr.history.oldest(&chat)) {
-                    (Some(a), Some(b)) => Some(if b.ts_ms < a.ts_ms { b } else { a }),
-                    (a, b) => a.or(b),
-                };
-                let Ok(jid) = chat.parse::<Jid>() else {
-                    lock(&mgr.store).mark_history_complete(&chat);
-                    continue;
-                };
-                // A chat with no message here yet is asked for what came
-                // before the last time it was active, with nothing to count from.
-                let anchor = match &oldest {
-                    Some(m) => (m.id.clone(), m.from_me, m.ts_ms),
-                    None => {
-                        let last = lock(&mgr.store).chat_last_ts(&chat);
-                        (String::new(), false, if last > 0 { last + 1 } else { now_ms() })
+                // The burst: each chat with where to count back from.
+                let mut burst: Vec<(String, String, Jid, (String, bool, i64))> = Vec::new();
+                for (chat, name) in queue {
+                    if burst.len() >= BACKFILL_BURST {
+                        break;
                     }
-                };
-                let oldest_ts = anchor.2;
-                mgr.set_status(|s| {
-                    s.backfill = Some(Backfill { state: BackfillState::Fetching, chat: Some(name.clone()), done, total, messages: fetched });
-                });
-                lock(&mgr.on_demand).remove(&chat);
-                let asked = client
-                    .fetch_message_history(&jid, &anchor.0, anchor.1, anchor.2, BACKFILL_PAGE)
-                    .await;
-                if let Err(e) = asked {
-                    log::warn!("whatsapp: could not ask for older messages of {chat}: {e}");
-                    mgr.set_backfill(BackfillState::WaitingForPhone, Some(name), fetched);
-                    tokio::time::sleep(BACKFILL_RETRY).await;
-                    continue;
-                }
-                let got = mgr.wait_for_answer(&chat).await;
-                match got {
-                    // The phone answered with nothing older: this chat is all here.
-                    Some(0) => {
+                    let Ok(jid) = chat.parse::<Jid>() else {
                         lock(&mgr.store).mark_history_complete(&chat);
-                        silent = 0;
-                    }
-                    Some(count) => {
-                        fetched += count;
-                        silent = 0;
-                        mgr.save_now();
-                        let _ = mgr.app.emit("wa://history", &chat);
-                        // Anything already known means the phone has no more before it.
-                        let older = mgr.history.oldest(&chat).is_some_and(|now| now.ts_ms < oldest_ts)
-                            || lock(&mgr.store).oldest_message(&chat).is_some_and(|now| now.ts_ms < oldest_ts);
-                        if !older {
-                            lock(&mgr.store).mark_history_complete(&chat);
+                        continue;
+                    };
+                    let in_memory = lock(&mgr.store).oldest_message(&chat).cloned();
+                    let oldest = match (in_memory, mgr.history.oldest(&chat)) {
+                        (Some(a), Some(b)) => Some(if b.ts_ms < a.ts_ms { b } else { a }),
+                        (a, b) => a.or(b),
+                    };
+                    let anchor = match &oldest {
+                        Some(m) => (m.id.clone(), m.from_me, m.ts_ms),
+                        // Opened with no message here: asked for what came before
+                        // the last time it was active, with nothing to count from.
+                        None if opened.as_ref() == Some(&chat) => {
+                            let last = lock(&mgr.store).chat_last_ts(&chat);
+                            (String::new(), false, if last > 0 { last + 1 } else { now_ms() })
                         }
-                        mgr.mark_dirty();
-                    }
-                    None => {
-                        let strike = strikes.entry(chat.clone()).or_default();
-                        *strike += 1;
-                        // A phone that answers nothing for a chat it was asked
-                        // about twice has nothing older for it.
-                        if *strike >= BACKFILL_STRIKES {
-                            lock(&mgr.store).mark_history_complete(&chat);
+                        None => {
+                            empty.insert(chat);
+                            continue;
                         }
-                        silent += 1;
-                        if silent >= BACKFILL_SILENT {
-                            // Several chats in a row without an answer: the phone is away.
-                            mgr.set_backfill(BackfillState::WaitingForPhone, None, fetched);
-                            tokio::time::sleep(BACKFILL_RETRY).await;
+                    };
+                    burst.push((chat, name, jid, anchor));
+                }
+                if burst.is_empty() {
+                    mgr.set_backfill_counts(BackfillState::Done, None, fetched, empty.len() as u32);
+                    // Opening a chat brings it back to work; now and then, so
+                    // does a look at which empty chats have messages by now.
+                    tokio::select! {
+                        _ = mgr.backfill_wake.notified() => {}
+                        _ = tokio::time::sleep(BACKFILL_IDLE) => empty.clear(),
+                    }
+                    continue;
+                }
+                mgr.set_backfill_counts(BackfillState::Fetching, Some(burst[0].1.clone()), fetched, empty.len() as u32);
+                let mut sent = Vec::new();
+                let mut failed = false;
+                for (chat, name, jid, anchor) in burst {
+                    lock(&mgr.on_demand).remove(&chat);
+                    match client.fetch_message_history(&jid, &anchor.0, anchor.1, anchor.2, BACKFILL_PAGE).await {
+                        Ok(_) => sent.push((chat, name, anchor.2)),
+                        Err(e) => {
+                            log::warn!("whatsapp: could not ask for older messages of {chat}: {e}");
+                            failed = true;
+                            break;
+                        }
+                    }
+                }
+                let deadline = Instant::now() + BACKFILL_TIMEOUT;
+                for (chat, _, oldest_ts) in sent {
+                    match mgr.wait_for_answer(&chat, deadline).await {
+                        // The phone answered with nothing older: this chat is all here.
+                        Some(0) => {
+                            lock(&mgr.store).mark_history_complete(&chat);
                             silent = 0;
-                            strikes.clear();
+                        }
+                        Some(count) => {
+                            fetched += count;
+                            silent = 0;
+                            mgr.save_now();
+                            let _ = mgr.app.emit("wa://history", &chat);
+                            // Anything already known means the phone has no more before it.
+                            let older = mgr.history.oldest(&chat).is_some_and(|now| now.ts_ms < oldest_ts)
+                                || lock(&mgr.store).oldest_message(&chat).is_some_and(|now| now.ts_ms < oldest_ts);
+                            if !older {
+                                lock(&mgr.store).mark_history_complete(&chat);
+                            }
+                            mgr.mark_dirty();
+                        }
+                        None => {
+                            let strike = strikes.entry(chat.clone()).or_default();
+                            *strike += 1;
+                            // A phone that answers nothing for a chat it was asked
+                            // about twice has nothing older for it.
+                            if *strike >= BACKFILL_STRIKES {
+                                lock(&mgr.store).mark_history_complete(&chat);
+                            }
+                            silent += 1;
                         }
                     }
+                }
+                if failed || silent >= BACKFILL_SILENT {
+                    // Several chats in a row without an answer: the phone is away.
+                    mgr.set_backfill_counts(BackfillState::WaitingForPhone, None, fetched, empty.len() as u32);
+                    tokio::time::sleep(BACKFILL_RETRY).await;
+                    silent = 0;
+                    strikes.clear();
+                    continue;
                 }
                 tokio::time::sleep(BACKFILL_PACE).await;
             }
@@ -2375,12 +2416,12 @@ impl WaManager {
     pub fn fetch_history_first(&self, chat_id: &str) {
         let chat = lock(&self.store).chat_key(chat_id);
         *lock(&self.backfill_next) = Some(chat);
+        self.backfill_wake.notify_one();
     }
 
     /// Messages the phone sent for `chat` after being asked, or `None` if it
     /// didn't answer in time.
-    async fn wait_for_answer(&self, chat: &str) -> Option<u32> {
-        let deadline = Instant::now() + BACKFILL_TIMEOUT;
+    async fn wait_for_answer(&self, chat: &str, deadline: Instant) -> Option<u32> {
         loop {
             if let Some(count) = lock(&self.on_demand).remove(chat) {
                 return Some(count);
@@ -2390,8 +2431,11 @@ impl WaManager {
         }
     }
 
-    fn set_backfill(&self, state: BackfillState, chat: Option<String>, messages: u32) {
+    /// Shows where fetching all history is; chats left until opened count
+    /// as done, since nothing more happens to them in the background.
+    fn set_backfill_counts(&self, state: BackfillState, chat: Option<String>, messages: u32, waiting: u32) {
         let (done, total) = lock(&self.store).history_counts();
+        let done = (done + waiting).min(total);
         self.set_status(|s| s.backfill = Some(Backfill { state, chat, done, total, messages }));
     }
 }

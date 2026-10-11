@@ -386,6 +386,9 @@ struct StoredChat {
     /// Messages pinned for everyone, and unpins kept a while so an older
     /// pin replayed by history does not bring them back.
     pins: Vec<StoredPin>,
+    /// When the phone was last asked to send this chat's latest messages
+    /// again, to bring their ticks and files up to date.
+    refreshed_ms: i64,
     /// Who pinned what and when, for the "You pinned a message" lines in
     /// the conversation. Kept after an unpin, as WhatsApp keeps them.
     pin_notes: Vec<StoredPin>,
@@ -425,6 +428,10 @@ pub struct PinsDto {
     /// Oldest first.
     pub notes: Vec<PinNoteDto>,
 }
+
+/// How long a chat's ticks and files are left alone after the phone was
+/// asked for them: in a group, our messages stay short of "read" for good.
+const REFRESH_COOLDOWN_MS: i64 = 24 * 3600 * 1000;
 
 /// How many "pinned a message" lines a chat keeps.
 const MAX_PIN_NOTES: usize = 50;
@@ -2001,7 +2008,7 @@ impl ChatStore {
         let mut stale: Vec<_> = self
             .chats
             .iter()
-            .filter(|(id, _)| !is_hidden_chat(id))
+            .filter(|(id, chat)| !is_hidden_chat(id) && now_ms() - chat.refreshed_ms > REFRESH_COOLDOWN_MS)
             .filter_map(|(id, chat)| {
                 let (last, before) = chat.messages.split_last()?;
                 let recent = before.iter().rev().take(window);
@@ -2025,7 +2032,7 @@ impl ChatStore {
         let mut stale: Vec<_> = self
             .chats
             .iter()
-            .filter(|(id, _)| !is_hidden_chat(id))
+            .filter(|(id, chat)| !is_hidden_chat(id) && now_ms() - chat.refreshed_ms > REFRESH_COOLDOWN_MS)
             .filter_map(|(id, chat)| {
                 let (last, before) = chat.messages.split_last()?;
                 let recent = before.iter().rev().take(window);
@@ -2038,6 +2045,13 @@ impl ChatStore {
         stale.sort_by_key(|(_, _, _, ts)| std::cmp::Reverse(*ts));
         stale.truncate(limit);
         stale
+    }
+
+    /// Notes that the phone was asked for a chat's latest messages again.
+    pub fn mark_refreshed(&mut self, chat: &str) {
+        if let Some(stored) = self.chats.get_mut(&self.canonical(chat)) {
+            stored.refreshed_ms = now_ms();
+        }
     }
 
     /// Whether a group's size should be looked up now. Saying yes counts as
