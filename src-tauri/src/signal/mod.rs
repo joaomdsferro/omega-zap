@@ -27,6 +27,8 @@ use crate::store::{
 const BRIDGE: &str = "omega-zap-signal";
 const SESSION_FILE: &str = "signal.db";
 const LINKED_MARKER: &str = "linked";
+/// The most chats Signal lets you pin.
+const MAX_PINNED: usize = 4;
 const CACHE_FILE: &str = "chats.json";
 const SAVE_INTERVAL: Duration = Duration::from_secs(3);
 pub const MEDIA_DIR: &str = "media";
@@ -593,6 +595,30 @@ impl SignalManager {
     pub fn set_muted(&self, chat_id: &str, muted: bool) {
         lock(&self.store).set_muted(chat_id, muted.then_some(i64::MAX));
         self.mark_dirty();
+    }
+
+    /// Archives a chat or brings it back, on this computer: Signal doesn't
+    /// tell linked devices. Archiving unpins it.
+    pub fn set_archived(&self, chat_id: &str, archived: bool) {
+        let mut store = lock(&self.store);
+        store.set_archived(chat_id, archived);
+        if archived {
+            store.set_pinned(chat_id, None);
+        }
+        drop(store);
+        self.mark_dirty();
+    }
+
+    /// Pins a chat to the top of the list or unpins it, on this computer.
+    pub fn set_pinned(&self, chat_id: &str, pinned: bool) -> Result<(), String> {
+        let mut store = lock(&self.store);
+        if pinned && store.pinned_count() >= MAX_PINNED {
+            return Err(format!("You can only pin up to {MAX_PINNED} chats."));
+        }
+        store.set_pinned(chat_id, pinned.then(crate::store::now_ms));
+        drop(store);
+        self.mark_dirty();
+        Ok(())
     }
 
     /// Marks a chat unread, or read. Signal keeps no such mark for linked
@@ -1165,6 +1191,9 @@ impl SignalManager {
                 if let Some(dto) = store.ingest(incoming, !history)
                     && !history
                 {
+                    // As on the phone, a new message brings an archived chat
+                    // back, unless it is muted.
+                    store.unarchive_unless_muted(&dto.chat_id);
                     let notice = store.message_notice(&dto.chat_id, &dto.id);
                     drop(store);
                     let _ = self.app.emit("signal://message", dto);

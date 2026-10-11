@@ -63,6 +63,16 @@ pub fn signal_set_muted(mgr: Mgr<'_>, chat_id: String, muted: bool) {
 }
 
 #[tauri::command]
+pub fn signal_set_archived(mgr: Mgr<'_>, chat_id: String, archived: bool) {
+    mgr.set_archived(&chat_id, archived);
+}
+
+#[tauri::command]
+pub fn signal_set_pinned(mgr: Mgr<'_>, chat_id: String, pinned: bool) -> Result<(), String> {
+    mgr.set_pinned(&chat_id, pinned)
+}
+
+#[tauri::command]
 pub fn signal_set_unread(mgr: Mgr<'_>, chat_id: String, unread: bool) {
     mgr.set_unread(&chat_id, unread);
 }

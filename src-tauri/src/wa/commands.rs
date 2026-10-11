@@ -61,6 +61,16 @@ pub async fn wa_set_muted(mgr: Mgr<'_>, chat_id: String, muted: bool) -> Result<
 }
 
 #[tauri::command]
+pub async fn wa_set_archived(mgr: Mgr<'_>, chat_id: String, archived: bool) -> Result<(), String> {
+    mgr.set_archived(&chat_id, archived).await
+}
+
+#[tauri::command]
+pub async fn wa_set_pinned(mgr: Mgr<'_>, chat_id: String, pinned: bool) -> Result<(), String> {
+    mgr.set_pinned(&chat_id, pinned).await
+}
+
+#[tauri::command]
 pub async fn wa_set_unread(mgr: Mgr<'_>, chat_id: String, unread: bool) -> Result<(), String> {
     mgr.set_unread(&chat_id, unread).await
 }

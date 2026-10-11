@@ -192,6 +192,20 @@ export const PinIcon = (p: IconProps) => (
   </Svg>
 );
 
+export const ArchiveIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="4" width="18" height="4" rx="1" />
+    <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8M12 11v5M9.5 13.5 12 16l2.5-2.5" />
+  </Svg>
+);
+
+export const UnarchiveIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="4" width="18" height="4" rx="1" />
+    <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8M12 16v-5M9.5 13.5 12 11l2.5 2.5" />
+  </Svg>
+);
+
 export const ReplyIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M9 7 4 12l5 5" />

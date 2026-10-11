@@ -333,6 +333,8 @@ pub fn run() {
             wa::commands::wa_set_unread,
             wa::commands::wa_person_details,
             wa::commands::wa_set_muted,
+            wa::commands::wa_set_archived,
+            wa::commands::wa_set_pinned,
             wa::commands::wa_lookup_number,
             notify::show_notification,
             notify::dismiss_notification,
@@ -370,6 +372,8 @@ pub fn run() {
             signal::commands::signal_set_unread,
             signal::commands::signal_person_details,
             signal::commands::signal_set_muted,
+            signal::commands::signal_set_archived,
+            signal::commands::signal_set_pinned,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

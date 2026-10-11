@@ -654,6 +654,40 @@ function Shell() {
     done?.catch((e) => setError(String(e)));
   }
 
+  /** Changes a chat in the list at once; the list that comes back after says the same. */
+  function patchChat(backend: ChatBackend, chatId: string, patch: Partial<Chat>) {
+    setChatsBy((prev) => {
+      const list = prev.get(backend);
+      if (!list) return prev;
+      return new Map(prev).set(backend, list.map((c) => (c.id === chatId ? { ...c, ...patch } : c)));
+    });
+  }
+
+  /** Runs a chat change, putting the list back as it was when it fails. */
+  function changeChat(chat: Chat, patch: Partial<Chat>, run: (backend: ChatBackend) => Promise<void> | undefined) {
+    const backend = backendFor(chat.account);
+    const done = backend && run(backend);
+    if (!backend || !done) return;
+    patchChat(backend, chat.id, patch);
+    done.catch((e) => {
+      setError(String(e instanceof Error ? e.message : e));
+      backend.listChats().then((list) => setChatsBy((prev) => new Map(prev).set(backend, list)), console.error);
+    });
+  }
+
+  function toggleArchived(chat: Chat) {
+    const archived = !chat.archived;
+    changeChat(chat, archived ? { archived, pinned: false } : { archived }, (b) => b.setArchived?.(chat.id, archived));
+  }
+
+  function togglePinned(chat: Chat) {
+    changeChat(chat, { pinned: !chat.pinned }, (b) => b.setPinned?.(chat.id, !chat.pinned));
+  }
+
+  function toggleMuted(chat: Chat) {
+    changeChat(chat, { muted: !chat.muted }, (b) => b.setMuted?.(chat.id, !chat.muted));
+  }
+
   function toggleFavorite(chat: Chat) {
     backendFor(chat.account)
       ?.setFavorite(chat.id, !chat.favorite)
@@ -772,7 +806,7 @@ function Shell() {
       }
     : undefined;
   const unreadOf = (backend: ChatBackend | null) =>
-    (backend ? (chatsBy.get(backend) ?? []) : []).reduce((sum, c) => sum + (c.muted ? 0 : Math.max(c.unread, c.markedUnread ? 1 : 0)), 0);
+    (backend ? (chatsBy.get(backend) ?? []) : []).reduce((sum, c) => sum + (c.muted || c.archived ? 0 : Math.max(c.unread, c.markedUnread ? 1 : 0)), 0);
   const rail: RailAccount[] = ACCOUNT_IDS.map((id) => {
     const { status } = accounts[id];
     const backend = backendFor(id);
@@ -1010,6 +1044,9 @@ function Shell() {
             onToggleFavorite={toggleFavorite}
             onToggleUnread={toggleUnread}
             onToggleList={toggleList}
+            onToggleArchived={toggleArchived}
+            onTogglePinned={togglePinned}
+            onToggleMuted={toggleMuted}
             onNewList={(chat) => editList(undefined, chat)}
             onEditList={(name) => editList(name)}
             searchMessages={searchMessages}

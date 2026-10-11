@@ -114,6 +114,8 @@ export interface Chat {
   markedUnread?: boolean;
   pinned?: boolean;
   muted?: boolean;
+  /** Kept out of the chat list, under Archived. */
+  archived?: boolean;
   isGroup?: boolean;
   online?: boolean;
   favorite?: boolean;
@@ -262,6 +264,10 @@ export interface ChatBackend {
   personDetails?(id: string): Promise<PersonDetails>;
   /** Mutes a chat for good, or unmutes it. */
   setMuted?(chatId: string, muted: boolean): Promise<void>;
+  /** Moves a chat to Archived, which unpins it, or back to the list. */
+  setArchived?(chatId: string, archived: boolean): Promise<void>;
+  /** Pins a chat to the top of the list, or unpins it. */
+  setPinned?(chatId: string, pinned: boolean): Promise<void>;
   /** The chat id for a phone number, or `null` when the number isn't on the network. */
   lookupNumber?(phone: string): Promise<string | null>;
   subscribe(listener: (event: BackendEvent) => void): () => void;

@@ -112,6 +112,28 @@ export class MockBackend implements ChatBackend {
     this.emit({ type: "chats-changed" });
   }
 
+  async setMuted(chatId: string, muted: boolean): Promise<void> {
+    this.update(chatId, { muted });
+  }
+
+  async setArchived(chatId: string, archived: boolean): Promise<void> {
+    this.update(chatId, archived ? { archived, pinned: false } : { archived });
+  }
+
+  async setPinned(chatId: string, pinned: boolean): Promise<void> {
+    if (pinned && this.chats.filter((c) => c.pinned && !c.archived).length >= 3) {
+      throw new Error("You can only pin up to 3 chats.");
+    }
+    this.update(chatId, { pinned });
+  }
+
+  private update(chatId: string, patch: Partial<Chat>) {
+    const chat = this.chats.find((c) => c.id === chatId);
+    if (!chat) return;
+    Object.assign(chat, patch);
+    this.emit({ type: "chats-changed" });
+  }
+
   async saveList(id: string | null, name: string, add: string[], remove: string[]): Promise<string> {
     let list = id ? this.lists.find((l) => l.id === id) : undefined;
     if (!list) {

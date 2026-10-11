@@ -37,6 +37,7 @@ interface RawChat {
   markedUnread: boolean;
   pinned: boolean;
   muted: boolean;
+  archived: boolean;
   isGroup: boolean;
   avatar: string | null;
   favorite: boolean;
@@ -119,6 +120,7 @@ function toChat(raw: RawChat, account: AccountId): Chat {
     markedUnread: raw.markedUnread || undefined,
     pinned: raw.pinned,
     muted: raw.muted,
+    archived: raw.archived || undefined,
     isGroup: raw.isGroup,
     favorite: raw.favorite,
     lists: raw.lists,
@@ -331,6 +333,14 @@ export class TauriBackend implements ChatBackend {
 
   async setMuted(chatId: string, muted: boolean): Promise<void> {
     await invoke(`${this.prefix}_set_muted`, { chatId, muted });
+  }
+
+  async setArchived(chatId: string, archived: boolean): Promise<void> {
+    await invoke(`${this.prefix}_set_archived`, { chatId, archived });
+  }
+
+  async setPinned(chatId: string, pinned: boolean): Promise<void> {
+    await invoke(`${this.prefix}_set_pinned`, { chatId, pinned });
   }
 
   async listContacts(): Promise<Contact[]> {

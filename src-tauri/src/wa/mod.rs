@@ -22,7 +22,7 @@ use whatsapp_rust::waproto::whatsapp::sync_action_value::label_edit_action::List
 use whatsapp_rust::waproto::whatsapp::sync_action_value::{FavoritesAction, LabelEditAction, favorites_action};
 use whatsapp_rust::{
     AppStateResyncMode, ErrorChainExt, MediaRetryResult, MediaReuploadRequest, ProfilePictureLookup, RevokeType, UploadOptions,
-    WAPatchName, schemas,
+    WAPatchName, message_key, message_range, schemas,
 };
 
 use crate::account::{
@@ -1051,6 +1051,52 @@ impl WaManager {
         if muted { actions.mute_chat(&jid).await } else { actions.unmute_chat(&jid).await }
             .map_err(|e| format!("The chat was not {}: {e}", if muted { "muted" } else { "unmuted" }))?;
         lock(&self.store).set_muted(chat_id, muted.then_some(i64::MAX));
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// Archives a chat or brings it back, here and on the phone. Archiving
+    /// unpins it, as the phone does.
+    pub async fn set_archived(&self, chat_id: &str, archived: bool) -> Result<(), String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
+        let (last, pinned) = {
+            let store = lock(&self.store);
+            (store.last_message_key(chat_id), store.is_pinned(chat_id))
+        };
+        // The phone weighs the change against the newest message it knows of.
+        let range = last.and_then(|last| {
+            let chat: Jid = last.chat.parse().ok()?;
+            let sender = last.sender.and_then(|s| s.parse::<Jid>().ok());
+            let key = message_key(last.id, &chat, last.from_me, sender.as_ref());
+            Some(message_range(last.ts_s, None, vec![(key, last.ts_s)]))
+        });
+        let actions = client.chat_actions();
+        if archived { actions.archive_chat(&jid, range).await } else { actions.unarchive_chat(&jid, range).await }
+            .map_err(|e| format!("The chat was not {}: {e}", if archived { "archived" } else { "unarchived" }))?;
+        if archived && pinned {
+            match actions.unpin_chat(&jid).await {
+                Ok(()) => lock(&self.store).set_pinned(chat_id, None),
+                Err(e) => log::warn!("whatsapp: unpin on archive failed: {e}"),
+            }
+        }
+        lock(&self.store).set_archived(chat_id, archived);
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// Pins a chat to the top of the list or unpins it, here and on the
+    /// phone, which holds three at most.
+    pub async fn set_pinned(&self, chat_id: &str, pinned: bool) -> Result<(), String> {
+        if pinned && lock(&self.store).pinned_count() >= store::MAX_PINNED {
+            return Err(format!("You can only pin up to {} chats.", store::MAX_PINNED));
+        }
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
+        let actions = client.chat_actions();
+        if pinned { actions.pin_chat(&jid).await } else { actions.unpin_chat(&jid).await }
+            .map_err(|e| format!("The chat was not {}: {e}", if pinned { "pinned" } else { "unpinned" }))?;
+        lock(&self.store).set_pinned(chat_id, pinned.then(now_ms));
         self.mark_dirty();
         Ok(())
     }

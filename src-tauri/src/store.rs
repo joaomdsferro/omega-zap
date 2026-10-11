@@ -17,6 +17,8 @@ pub const OWN_AVATAR: &str = "me";
 pub const SEARCH_LIMIT: usize = 200;
 /// Messages read from the history database per scroll back.
 pub const OLDER_PAGE: usize = 100;
+/// The most chats WhatsApp lets you pin.
+pub const MAX_PINNED: usize = 3;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -281,6 +283,16 @@ pub struct WireIds {
     pub sender: Option<String>,
 }
 
+/// The newest message of a chat, as WhatsApp keys it.
+pub struct LastMessageKey {
+    pub id: String,
+    pub chat: String,
+    pub from_me: bool,
+    /// Who sent it, in a group.
+    pub sender: Option<String>,
+    pub ts_s: i64,
+}
+
 /// An incoming message that was just read, as a read receipt names it.
 pub struct ReadTarget {
     pub id: String,
@@ -407,6 +419,8 @@ pub struct ChatSummary {
     pub marked_unread: bool,
     pub pinned: bool,
     pub muted: bool,
+    /// Kept out of the chat list, under Archived.
+    pub archived: bool,
     pub is_group: bool,
     /// File name of the profile picture inside the avatars directory.
     pub avatar: Option<String>,
@@ -1581,6 +1595,39 @@ impl ChatStore {
         }
     }
 
+    pub fn unarchive_unless_muted(&mut self, jid: &str) {
+        let now = now_ms();
+        if let Some(chat) = self.chats.get_mut(&self.canonical(jid))
+            && !chat.muted_until_ms.is_some_and(|until| until > now)
+        {
+            chat.archived = false;
+        }
+    }
+
+    /// How many chats in the list are pinned, archived ones left out.
+    pub fn pinned_count(&self) -> usize {
+        self.chats
+            .iter()
+            .filter(|(id, chat)| chat.pinned_at.is_some() && !chat.archived && !is_hidden_chat(id))
+            .count()
+    }
+
+    pub fn is_pinned(&self, jid: &str) -> bool {
+        self.chats.get(&self.canonical(jid)).is_some_and(|c| c.pinned_at.is_some())
+    }
+
+    /// The newest message of a chat, for the range an archive is sent with.
+    pub fn last_message_key(&self, jid: &str) -> Option<LastMessageKey> {
+        let chat_id = self.canonical(jid);
+        let chat = self.chats.get(&chat_id)?;
+        let m = chat.messages.iter().rev().find(|m| m.deleted != Some(Deletion::ForMe))?;
+        let (chat, sender) = match &m.wire {
+            Some(wire) => (wire.chat.clone(), wire.sender.clone()),
+            None => (chat_id, m.author_jid.clone()),
+        };
+        Some(LastMessageKey { id: m.id.clone(), chat, from_me: m.from_me, sender, ts_s: m.ts_ms / 1000 })
+    }
+
     /// Read or marked unread on another device. A mutation older than the
     /// chat's newest message is stale: messages came in after it.
     pub fn set_read_elsewhere(&mut self, jid: &str, read: bool, at_ms: i64) {
@@ -2042,7 +2089,8 @@ impl ChatStore {
             .iter()
             // Chats the first sync named without sending any of their messages
             // are listed too: their history is fetched in the background.
-            .filter(|(id, chat)| !chat.archived && !is_hidden_chat(id))
+            // Archived ones come along, marked, for the Archived view.
+            .filter(|(id, _)| !is_hidden_chat(id))
             .map(|(id, chat)| {
                 let last = chat.messages.iter().rev().find(|m| m.deleted != Some(Deletion::ForMe));
                 let preview = last.map(|m| self.with_mentions(&deleted_or_preview(m)).0).unwrap_or_default();
@@ -2064,6 +2112,7 @@ impl ChatStore {
                     marked_unread: chat.marked_unread && chat.unread == 0,
                     pinned: chat.pinned_at.is_some(),
                     muted: chat.muted_until_ms.is_some_and(|until| until > now),
+                    archived: chat.archived,
                     is_group: chat.is_group,
                     avatar: chat.avatar_id.as_deref().map(|pic| avatar_file(id, pic)),
                     favorite: favorites.contains(id),
@@ -2493,10 +2542,29 @@ mod tests {
         store.ingest(incoming("3@s.whatsapp.net", "b", 9, false), false);
 
         let chats = store.list_chats();
-        assert_eq!(chats.len(), 2);
+        assert_eq!(chats.len(), 3);
         assert_eq!(chats[0].id, "1@s.whatsapp.net");
         assert!(chats[0].pinned);
         assert!(!chats[1].pinned);
+        assert!(chats.iter().find(|c| c.id == "2@s.whatsapp.net").is_some_and(|c| c.archived));
+        assert!(chats.iter().filter(|c| c.id != "2@s.whatsapp.net").all(|c| !c.archived));
+    }
+
+    #[test]
+    fn pins_count_and_archive_comes_back_unless_muted() {
+        let mut store = ChatStore::default();
+        for id in ["1@s.whatsapp.net", "2@s.whatsapp.net"] {
+            store.ingest(incoming(id, "a", 1, false), false);
+            store.set_archived(id, true);
+        }
+        store.set_pinned("1@s.whatsapp.net", Some(1));
+        assert_eq!(store.pinned_count(), 0, "archived pins don't count");
+        store.set_muted("2@s.whatsapp.net", Some(i64::MAX));
+        store.unarchive_unless_muted("1@s.whatsapp.net");
+        store.unarchive_unless_muted("2@s.whatsapp.net");
+        assert_eq!(store.pinned_count(), 1);
+        let chats = store.list_chats();
+        assert!(chats.iter().find(|c| c.id == "2@s.whatsapp.net").is_some_and(|c| c.archived));
     }
 
     #[test]
