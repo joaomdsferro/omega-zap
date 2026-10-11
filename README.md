@@ -59,6 +59,7 @@ Windows and macOS builds are not available yet.
 | Replies, reactions, forwarding, starred messages | ✅ | ✅ |
 | Photos, videos, GIFs, voice messages, stickers, documents | ✅ | ✅ |
 | Sending files (drop, paste or pick) | ✅ | ✅ |
+| Sending stickers (favorites in sync, packs) and GIFs | ✅ | ❌ |
 | Link cards, sent and received | ✅ | ✅ |
 | Read receipts and delivery ticks | ✅ | ✅ |
 | Desktop notifications, tray with unread badge | ✅ | ✅ |
@@ -99,6 +100,8 @@ in a separate bridge process, since its library is AGPL and links a different SQ
   The key lives in your desktop keyring (KWallet, GNOME Keyring).
 - To make a card for a link that came without one, the app opens the page itself, from public
   addresses only. **Settings → Links** turns that off.
+- GIF searches go to [KLIPY](https://klipy.com) with an anonymous id for this install. WhatsApp's
+  sticker store is read from WhatsApp's own servers.
 
 ## Build from source
 

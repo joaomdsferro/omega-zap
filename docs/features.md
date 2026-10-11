@@ -108,6 +108,13 @@ WhatsApp only, for now.
   server is asked for again from the phone that sent it.
 - **Albums**: four or more photos in a row from the same person show as one grid, as on WhatsApp.
 - **Sending files**: press **+**, drop files on the conversation, or paste a picture. Up to 100 MB.
+- **Stickers** (WhatsApp): the emoji panel's **Stickers** tab has Recent (what you sent, here or on
+  the phone), Favorites (in sync with the phone both ways) and your packs. **+** turns a picture or
+  GIF into a sticker, makes a pack of your own, or adds packs from WhatsApp's sticker store. Packs
+  installed on the phone are not shared with linked devices, so they can't show here. Right-click a
+  sticker, or open a sticker message's menu, to star it or add it to a pack.
+- **GIFs** (WhatsApp): the **GIFs** tab searches KLIPY and shows what is trending and the GIFs you
+  sent.
 - **Link cards** for links that come with one, and for links that don't (fetched from the page's own
   tags; **Settings → Links** turns that off). Your own links go out with a card.
 - **Short videos play in the chat**: TikTok, Instagram, YouTube Shorts and X. Nothing loads from those
@@ -131,6 +138,7 @@ WhatsApp only, for now.
 
 - Windows and macOS builds
 - Recording voice messages
+- Signal stickers and GIFs (receiving works)
 - Editing captions from this computer; Signal pinned messages
 - An app lock (a password for the stored data)
 - More than one account per network, WhatsApp Business, Telegram
