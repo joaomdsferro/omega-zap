@@ -194,6 +194,7 @@ impl HistoryDb {
         }
         store.migrate_attachments();
         store.repair_unread();
+        store.repair_misfiled();
         Ok(Some(store))
     }
 

@@ -1802,6 +1802,25 @@ impl ChatStore {
         }
     }
 
+    /// Hides the copies of our messages that a replay filed in the chat with
+    /// ourselves while they belong to another chat, where they also are.
+    pub fn repair_misfiled(&mut self) {
+        let elsewhere: HashSet<String> = self
+            .chats
+            .iter()
+            .filter(|(id, _)| !self.own_ids.contains(id))
+            .flat_map(|(_, chat)| chat.messages.iter().filter(|m| m.from_me).map(|m| m.id.clone()))
+            .collect();
+        for id in self.own_ids.clone() {
+            let Some(chat) = self.chats.get_mut(&id) else { continue };
+            for message in chat.messages.iter_mut().filter(|m| m.from_me && m.deleted.is_none()) {
+                if elsewhere.contains(&message.id) {
+                    message.deleted = Some(Deletion::ForMe);
+                }
+            }
+        }
+    }
+
     /// Clears the unread count. Returns the messages it stood for, newest
     /// first, so their senders can be told.
     pub fn has_unread(&self, chat: &str) -> bool {
@@ -2174,6 +2193,19 @@ mod tests {
             conversation_ts_s: None,
         });
         assert_eq!(store.list_chats()[0].unread, 0);
+    }
+
+    #[test]
+    fn copies_of_our_messages_in_the_chat_with_ourselves_are_hidden() {
+        let mut store = ChatStore::default();
+        store.set_own_ids(["me".to_string()]);
+        store.ingest(incoming("sergio", "100", 1, true), false);
+        store.ingest(incoming("me", "100", 1, true), false);
+        store.ingest(incoming("me", "200", 2, true), false);
+        store.repair_misfiled();
+        let ids: Vec<_> = store.messages("me").into_iter().map(|m| m.id).collect();
+        assert_eq!(ids, ["200"]);
+        assert_eq!(store.messages("sergio").len(), 1);
     }
 
     #[test]

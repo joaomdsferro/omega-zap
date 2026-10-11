@@ -782,11 +782,19 @@ impl Receiver {
         }
     }
 
-    async fn content(&mut self, content: &Content) {
+    /// `stored_in` is the chat presage filed a stored message under.
+    async fn content(&mut self, content: &Content, stored_in: Option<&Thread>) {
         if let ContentBody::SynchronizeMessage(sync) = &content.body {
             self.synced(sync);
         }
-        let Some(thread) = thread_of(content) else { return };
+        // A message we sent from here is stored as our own data message, which
+        // names no recipient: only the chat it was filed under says who.
+        let ours = matches!(content.body, ContentBody::DataMessage(_)) && content.metadata.sender.raw_uuid() == self.me;
+        let thread = match stored_in {
+            Some(thread) if ours => Some(thread.clone()),
+            _ => thread_of(content),
+        };
+        let Some(thread) = thread else { return };
         let ts = content.timestamp();
         match &content.body {
             // Only stored messages we sent from here come as our own data messages.
@@ -835,13 +843,13 @@ impl Receiver {
         let mut stored = Vec::new();
         for thread in &threads {
             if let Ok(messages) = self.manager.store().messages(thread, since..).await {
-                stored.extend(messages.flatten());
+                stored.extend(messages.flatten().map(|content| (thread.clone(), content)));
             }
         }
-        stored.sort_by_key(|content| content.timestamp());
+        stored.sort_by_key(|(_, content)| content.timestamp());
         self.history = true;
-        for content in &stored {
-            self.content(content).await;
+        for (thread, content) in &stored {
+            self.content(content, Some(thread)).await;
         }
         self.history = false;
     }
@@ -881,7 +889,7 @@ impl Receiver {
                     }
                 }
                 Received::Contacts => self.announce_contacts().await,
-                Received::Content(content) => self.content(&content).await,
+                Received::Content(content) => self.content(&content, None).await,
                 Received::DecryptionError(_) => {}
             }
         }
