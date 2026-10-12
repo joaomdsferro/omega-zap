@@ -75,7 +75,10 @@ export const TRAY_BADGES: TrayBadgeOption[] = [
 ];
 
 export const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
-export const SIDEBAR_DEFAULT = 400;
+/** Wide enough for every filter chip, with unread counts, and the "+" after them. */
+export const SIDEBAR_DEFAULT = 520;
+/** The default before 0.0.4: a list still at it never chose a width, so it moves to the new one. */
+const SIDEBAR_OLD_DEFAULT = 400;
 export const SIDEBAR_MIN = 300;
 export const SIDEBAR_MAX = 640;
 /** The conversation pane never gets narrower than this while resizing. */
@@ -139,7 +142,9 @@ function readStored(): Stored {
 }
 
 function loadSidebarWidth(parsed: Stored): number {
-  return clamp(Number(parsed.sidebarWidth) || SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_MAX);
+  const saved = Number(parsed.sidebarWidth);
+  if (!saved || saved === SIDEBAR_OLD_DEFAULT) return SIDEBAR_DEFAULT;
+  return clamp(saved, SIDEBAR_MIN, SIDEBAR_MAX);
 }
 
 function load(parsed: Stored): Settings {
