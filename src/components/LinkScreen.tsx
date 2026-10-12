@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AccountInfo } from "../accounts/accounts";
 import type { AccountStatus } from "../accounts/useAccount";
@@ -43,6 +43,7 @@ function useCountdown(seconds: number | null, code: string | null) {
 
 /** This device's name on the phone, editable until the link is made. */
 function DeviceName({ onRename }: { onRename: (name: string) => Promise<void> }) {
+  const id = useId();
   const [saved, setSaved] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const refresh = () => {
@@ -56,33 +57,43 @@ function DeviceName({ onRename }: { onRename: (name: string) => Promise<void> })
   };
   useEffect(refresh, []);
   if (saved === null) return null;
+  const changed = draft.trim().replace(/\s+/g, " ") !== saved;
   const commit = () => {
-    if (draft.trim() === saved) return;
+    if (!changed) return;
     // An empty name falls back to the suggested one.
     void onRename(draft).finally(refresh);
   };
   return (
-    // Text size and colour on the label: tokens.css resets an input's own.
-    <label className="mt-8 flex flex-col gap-1.5 text-[15px] text-(--text-primary)">
-      <span className="text-[13px] text-(--text-secondary)">Device name, shown on your phone under Linked devices</span>
-      <input
-        value={draft}
-        maxLength={50}
-        spellCheck={false}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") event.currentTarget.blur();
-          if (event.key === "Escape") {
-            // Closes only the edit, not the screen.
-            event.preventDefault();
-            event.stopPropagation();
-            setDraft(saved);
-          }
-        }}
-        className="h-10 max-w-90 rounded-md border border-(--divider) bg-transparent px-3 outline-none focus:border-(--accent)"
-      />
-    </label>
+    // Text size and colour on the wrapper: tokens.css resets an input's and a button's own.
+    <div className="mt-8 flex flex-col gap-1.5 text-[15px] text-(--text-primary)">
+      <label htmlFor={id} className="text-[13px] text-(--text-secondary)">
+        Device name, shown on your phone under Linked devices
+      </label>
+      <div className="flex max-w-110 items-center gap-2">
+        <input
+          id={id}
+          value={draft}
+          maxLength={50}
+          spellCheck={false}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") commit();
+            if (event.key === "Escape" && changed) {
+              // Undoes the edit only, not the screen.
+              event.preventDefault();
+              setDraft(saved);
+            }
+          }}
+          className="h-10 min-w-0 flex-1 rounded-md border border-(--divider) bg-transparent px-3 outline-none focus:border-(--accent)"
+        />
+        {changed ? (
+          <button type="button" onClick={commit} className="h-10 shrink-0 rounded-full bg-(--accent) px-4 hover:brightness-110">
+            <span className="text-[14px] font-medium text-(--on-accent)">Use this name</span>
+          </button>
+        ) : null}
+      </div>
+      {changed ? <span className="text-[13px] text-(--text-secondary)">A new QR code is made with the new name.</span> : null}
+    </div>
   );
 }
 
