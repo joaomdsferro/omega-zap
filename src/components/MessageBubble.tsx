@@ -537,7 +537,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
             aria-haspopup="menu"
             aria-expanded={menu !== null}
             className={[
-              "absolute top-0.5 right-0.5 z-[1] flex h-6 w-9 items-start justify-end rounded-tr-[7.5px] pt-0.5 pr-1 text-(--bubble-meta) transition-opacity group-hover/message:opacity-100 focus-visible:opacity-100",
+              "absolute top-0.5 right-0.5 z-1 flex h-6 w-9 items-start justify-end rounded-tr-[7.5px] pt-0.5 pr-1 text-(--bubble-meta) transition-opacity group-hover/message:opacity-100 focus-visible:opacity-100",
               menu ? "opacity-100" : "opacity-0",
             ].join(" ")}
             style={{
