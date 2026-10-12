@@ -119,10 +119,32 @@ pub fn move_old_data(dir: &Path) {
     }
 }
 
-/// What the phone lists this link as under Linked devices, with the
-/// computer's name so several installs can be told apart. Sent only when
-/// linking: an existing link keeps the name it was made with.
+/// What the phone lists this link as under Linked devices: by default the
+/// computer's name, so several installs can be told apart; the link screen
+/// can change it. Sent only when linking: an existing link keeps its name.
+#[tauri::command]
 pub fn device_name() -> String {
+    lock(chosen_name()).clone().unwrap_or_else(suggested_device_name)
+}
+
+/// Sets the name the next link is made with; empty means the suggested one.
+/// Says whether it changed.
+pub fn set_device_name(name: &str) -> bool {
+    const MAX: usize = 50;
+    let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    let name = (!name.is_empty()).then(|| name.chars().take(MAX).collect::<String>());
+    let before = device_name();
+    *lock(chosen_name()) = name;
+    device_name() != before
+}
+
+fn chosen_name() -> &'static Mutex<Option<String>> {
+    static CHOSEN: Mutex<Option<String>> = Mutex::new(None);
+    &CHOSEN
+}
+
+/// "Omega Zap · <computer name>".
+fn suggested_device_name() -> String {
     const MAX: usize = 30;
     static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     NAME.get_or_init(|| match computer_name() {

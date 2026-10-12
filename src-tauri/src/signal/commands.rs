@@ -14,8 +14,8 @@ pub fn signal_status(mgr: Mgr<'_>) -> AccountStatus {
 }
 
 #[tauri::command]
-pub async fn signal_start_linking(mgr: Mgr<'_>) -> Result<(), String> {
-    mgr.inner().clone().start_linking().await
+pub async fn signal_start_linking(mgr: Mgr<'_>, name: Option<String>) -> Result<(), String> {
+    mgr.inner().clone().start_linking(name).await
 }
 
 #[tauri::command]

@@ -466,9 +466,17 @@ impl SignalManager {
         }
     }
 
-    pub async fn start_linking(self: &Arc<Self>) -> Result<(), String> {
+    /// Starts linking, with `name` as this device's name on the phone when
+    /// given; a new name starts over with a new code.
+    pub async fn start_linking(self: &Arc<Self>, name: Option<String>) -> Result<(), String> {
         if self.is_linked() {
             return Err("This computer is already linked.".into());
+        }
+        if name.is_some_and(|name| crate::account::set_device_name(&name)) {
+            self.generation.fetch_add(1, Ordering::SeqCst);
+            self.stop_bridge().await;
+            // The code on screen was made with the old name.
+            self.set_status(|s| *s = AccountStatus { seq: s.seq, ..AccountStatus::idle(false) });
         }
         if self.bridge.lock().await.is_some() {
             return Ok(());
@@ -494,7 +502,7 @@ impl SignalManager {
         if self.is_linked() {
             self.start_bridge(false).await.inspect_err(|e| self.fail(e.clone()))
         } else {
-            self.start_linking().await
+            self.start_linking(None).await
         }
     }
 

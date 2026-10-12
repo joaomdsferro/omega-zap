@@ -317,6 +317,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             dropped::read_dropped_file,
             wa::commands::wa_status,
+            account::device_name,
             wa::commands::wa_start_linking,
             wa::commands::wa_cancel_linking,
             wa::commands::wa_reconnect,

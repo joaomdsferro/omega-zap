@@ -14,8 +14,8 @@ pub fn wa_status(mgr: Mgr<'_>) -> WaStatus {
 }
 
 #[tauri::command]
-pub async fn wa_start_linking(mgr: Mgr<'_>) -> Result<(), String> {
-    mgr.inner().clone().start_linking().await
+pub async fn wa_start_linking(mgr: Mgr<'_>, name: Option<String>) -> Result<(), String> {
+    mgr.inner().clone().start_linking(name).await
 }
 
 #[tauri::command]

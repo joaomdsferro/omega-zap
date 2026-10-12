@@ -1269,6 +1269,7 @@ function Shell() {
         account={ACCOUNTS[linking]}
         status={accounts[linking].status}
         onRetry={() => reconnect(linking)}
+        onRename={(name) => accounts[linking].startLinking(name).catch((e) => setError(String(e)))}
         onClose={closeLinking}
       />
     );

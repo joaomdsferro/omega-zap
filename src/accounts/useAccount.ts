@@ -62,7 +62,8 @@ const UNSUPPORTED: AccountStatus = {
 export interface Account {
   id: AccountId;
   status: AccountStatus;
-  startLinking(): Promise<void>;
+  /** `name` is this device's name on the phone; a new one restarts linking. */
+  startLinking(name?: string): Promise<void>;
   cancelLinking(): Promise<void>;
   reconnect(): Promise<void>;
   logout(): Promise<void>;
@@ -86,9 +87,9 @@ export function useAccount(id: AccountId): Account {
   }, [prefix]);
 
   const call = useCallback(
-    async (command: string) => {
+    async (command: string, args?: Record<string, unknown>) => {
       if (!isTauri) return;
-      await invoke(`${prefix}_${command}`);
+      await invoke(`${prefix}_${command}`, args);
     },
     [prefix],
   );
@@ -97,7 +98,7 @@ export function useAccount(id: AccountId): Account {
     () => ({
       id,
       status,
-      startLinking: () => call("start_linking"),
+      startLinking: (name?: string) => call("start_linking", { name }),
       cancelLinking: () => call("cancel_linking"),
       reconnect: () => call("reconnect"),
       logout: () => call("logout"),

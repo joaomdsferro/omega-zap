@@ -1,13 +1,17 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { AccountInfo } from "../accounts/accounts";
 import type { AccountStatus } from "../accounts/useAccount";
 import { formatVoiceDuration } from "../lib/format";
+import { isTauri } from "../lib/platform";
 import { CloseIcon } from "./Icons";
 
 interface LinkScreenProps {
   account: AccountInfo;
   status: AccountStatus;
   onRetry: () => void;
+  /** Links again under another device name. */
+  onRename: (name: string) => Promise<void>;
   onClose: () => void;
 }
 
@@ -37,7 +41,52 @@ function useCountdown(seconds: number | null, code: string | null) {
   return left;
 }
 
-export function LinkScreen({ account, status, onRetry, onClose }: LinkScreenProps) {
+/** This device's name on the phone, editable until the link is made. */
+function DeviceName({ onRename }: { onRename: (name: string) => Promise<void> }) {
+  const [saved, setSaved] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const refresh = () => {
+    if (!isTauri) return;
+    invoke<string>("device_name")
+      .then((name) => {
+        setSaved(name);
+        setDraft(name);
+      })
+      .catch(console.error);
+  };
+  useEffect(refresh, []);
+  if (saved === null) return null;
+  const commit = () => {
+    if (draft.trim() === saved) return;
+    // An empty name falls back to the suggested one.
+    void onRename(draft).finally(refresh);
+  };
+  return (
+    // Text size and colour on the label: tokens.css resets an input's own.
+    <label className="mt-8 flex flex-col gap-1.5 text-[15px] text-(--text-primary)">
+      <span className="text-[13px] text-(--text-secondary)">Device name, shown on your phone under Linked devices</span>
+      <input
+        value={draft}
+        maxLength={50}
+        spellCheck={false}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+          if (event.key === "Escape") {
+            // Closes only the edit, not the screen.
+            event.preventDefault();
+            event.stopPropagation();
+            setDraft(saved);
+          }
+        }}
+        className="h-10 max-w-90 rounded-md border border-(--divider) bg-transparent px-3 outline-none focus:border-(--accent)"
+      />
+    </label>
+  );
+}
+
+export function LinkScreen({ account, status, onRetry, onRename, onClose }: LinkScreenProps) {
   const { state } = status;
   const showingQr = state === "qr" && status.qrSvg !== null;
   const secondsLeft = useCountdown(showingQr ? status.qrTimeoutSecs : null, status.qrSvg);
@@ -112,6 +161,7 @@ export function LinkScreen({ account, status, onRetry, onClose }: LinkScreenProp
               </li>
             ))}
           </ol>
+          <DeviceName onRename={onRename} />
           <p className="mt-8 text-[13px] leading-5 text-(--text-secondary)">
             {account.linkNote}
           </p>
