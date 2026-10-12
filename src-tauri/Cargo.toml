@@ -52,6 +52,12 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 [target.'cfg(target_os = "macos")'.dependencies]
 # Keeps the storage key in the login Keychain.
 security-framework = "3"
+# Notifications through the system's notification center: clicks come back,
+# and each chat's notification replaces its previous one. Tauri's versions.
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-user-notifications = "0.3"
+block2 = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Ends the page's process when the window closes; WebKitGTK keeps it alive

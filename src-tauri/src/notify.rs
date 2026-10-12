@@ -113,7 +113,11 @@ pub fn dismiss_notification(shown: State<'_, Shown>, account: String, chat_id: S
         // Off the main thread: the session bus can be slow to answer.
         std::thread::spawn(move || freedesktop::close(id));
     }
-    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    #[cfg(target_os = "macos")]
+    if let Some(id) = id {
+        macos::close(&key, id);
+    }
+    #[cfg(not(unix))]
     let _ = id;
 }
 
@@ -212,7 +216,17 @@ fn present(app: &AppHandle, shown: &Shown, note: Note, sound: bool) -> Result<()
         lock(&shown.ids).insert(key, id);
     }
 
-    // Elsewhere clicks are not reported back.
+    #[cfg(target_os = "macos")]
+    if macos::available() {
+        if let Some(id) = lock(&shown.ids).remove(&key) {
+            macos::close(&key, id);
+        }
+        let id = macos::notify(&key, &title, &body, icon.as_deref(), sound)?;
+        lock(&shown.ids).insert(key, id);
+        return Ok(());
+    }
+
+    // Elsewhere (and on macOS outside an app bundle) clicks are not reported back.
     #[cfg(not(all(unix, not(target_os = "macos"))))]
     {
         let _ = (shown, key, account, chat_id, sound);
@@ -491,5 +505,174 @@ mod freedesktop {
                 _ => {}
             }
         }
+    }
+}
+
+/// Starts listening for clicks on our notifications.
+pub fn setup(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    macos::setup(app);
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+}
+
+/// The system's notification center (UserNotifications). It only serves an
+/// app bundle: `tauri dev` runs a bare binary, which falls back to
+/// notify-rust, without clicks.
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::path::Path;
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use block2::{DynBlock, RcBlock};
+    use objc2::rc::Retained;
+    use objc2::runtime::{Bool, NSObject, NSObjectProtocol, ProtocolObject};
+    use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send};
+    use objc2_foundation::{NSArray, NSError, NSString, NSURL};
+    use objc2_user_notifications::{
+        UNAuthorizationOptions, UNMutableNotificationContent, UNNotification, UNNotificationAttachment,
+        UNNotificationDefaultActionIdentifier, UNNotificationPresentationOptions, UNNotificationRequest,
+        UNNotificationResponse, UNNotificationSound, UNUserNotificationCenter, UNUserNotificationCenterDelegate,
+    };
+    use tauri::AppHandle;
+
+    use crate::tray;
+
+    /// Each notification gets a new identifier, so a chat's next one pops up
+    /// instead of quietly replacing the one still listed.
+    static NEXT: AtomicU32 = AtomicU32::new(1);
+
+    pub fn available() -> bool {
+        static BUNDLED: OnceLock<bool> = OnceLock::new();
+        *BUNDLED.get_or_init(|| {
+            std::env::current_exe().is_ok_and(|exe| exe.to_string_lossy().contains(".app/Contents/MacOS/"))
+        })
+    }
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[name = "OmegaZapNotificationDelegate"]
+        #[ivars = AppHandle]
+        struct Delegate;
+
+        unsafe impl NSObjectProtocol for Delegate {}
+
+        unsafe impl UNUserNotificationCenterDelegate for Delegate {
+            /// Shown even while the app is in front: the UI only asks for one
+            /// when the chat is not on screen.
+            #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
+            fn will_present(
+                &self,
+                _center: &UNUserNotificationCenter,
+                _notification: &UNNotification,
+                handler: &DynBlock<dyn Fn(UNNotificationPresentationOptions)>,
+            ) {
+                handler.call((UNNotificationPresentationOptions::Banner
+                    | UNNotificationPresentationOptions::List
+                    | UNNotificationPresentationOptions::Sound,));
+            }
+
+            #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
+            fn did_receive(
+                &self,
+                _center: &UNUserNotificationCenter,
+                response: &UNNotificationResponse,
+                handler: &DynBlock<dyn Fn()>,
+            ) {
+                if &*response.actionIdentifier() == unsafe { UNNotificationDefaultActionIdentifier } {
+                    let identifier = response.notification().request().identifier().to_string();
+                    clicked(self.ivars(), &identifier);
+                }
+                handler.call(());
+            }
+        }
+    );
+
+    fn clicked(app: &AppHandle, identifier: &str) {
+        // "<account>:<chat>#<n>"; the summary of a rush has no account.
+        let key = identifier.rsplit_once('#').map_or(identifier, |(key, _)| key);
+        match key.split_once(':') {
+            Some((account, chat_id)) if !account.is_empty() => tray::open_chat(
+                app,
+                tray::OpenChat { account: account.into(), chat_id: chat_id.into() },
+                None,
+            ),
+            _ => tray::bring_up(app),
+        }
+    }
+
+    pub fn setup(app: &AppHandle) {
+        if !available() {
+            return;
+        }
+        let center = UNUserNotificationCenter::currentNotificationCenter();
+        let delegate: Retained<Delegate> = {
+            let this = Delegate::alloc().set_ivars(app.clone());
+            unsafe { msg_send![super(this), init] }
+        };
+        center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        // The center keeps it weakly; it lives as long as the app.
+        std::mem::forget(delegate);
+        // The system asks the user once; later calls answer at once.
+        let done = RcBlock::new(|granted: Bool, error: *mut NSError| {
+            if !granted.as_bool() {
+                let reason = unsafe { error.as_ref() }.map(|e| e.localizedDescription().to_string());
+                log::info!("notifications are not allowed ({})", reason.as_deref().unwrap_or("turned off in System Settings"));
+            }
+        });
+        center.requestAuthorizationWithOptions_completionHandler(
+            UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
+            &done,
+        );
+    }
+
+    fn identifier(key: &str, id: u32) -> Retained<NSString> {
+        NSString::from_str(&format!("{key}#{id}"))
+    }
+
+    pub fn notify(key: &str, title: &str, body: &str, icon: Option<&Path>, sound: bool) -> Result<u32, String> {
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let content = UNMutableNotificationContent::new();
+        content.setTitle(&NSString::from_str(title));
+        content.setBody(&NSString::from_str(body));
+        // Grouped per chat in Notification Center.
+        content.setThreadIdentifier(&NSString::from_str(key));
+        if sound {
+            content.setSound(Some(&UNNotificationSound::defaultSound()));
+        }
+        if let Some(attachment) = icon.and_then(picture) {
+            content.setAttachments(&NSArray::from_retained_slice(&[attachment]));
+        }
+        let request = UNNotificationRequest::requestWithIdentifier_content_trigger(&identifier(key, id), &content, None);
+        let done = RcBlock::new(|error: *mut NSError| {
+            if let Some(error) = unsafe { error.as_ref() } {
+                log::warn!("could not show a notification: {}", error.localizedDescription());
+            }
+        });
+        UNUserNotificationCenter::currentNotificationCenter().addNotificationRequest_withCompletionHandler(&request, Some(&done));
+        Ok(id)
+    }
+
+    /// The chat's picture, shown beside the text. The system takes the file
+    /// (a plain copy in the runtime directory) into its own store.
+    fn picture(path: &Path) -> Option<Retained<UNNotificationAttachment>> {
+        // The type is read from the name.
+        let named = path.with_file_name(format!("{}.jpg", path.file_name()?.to_string_lossy()));
+        std::fs::rename(path, &named).ok()?;
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&named.to_string_lossy()));
+        match unsafe { UNNotificationAttachment::attachmentWithIdentifier_URL_options_error(&NSString::from_str("picture"), &url, None) } {
+            Ok(attachment) => Some(attachment),
+            Err(e) => {
+                log::warn!("notification picture refused: {}", e.localizedDescription());
+                let _ = std::fs::remove_file(&named);
+                None
+            }
+        }
+    }
+
+    pub fn close(key: &str, id: u32) {
+        let identifiers = NSArray::from_retained_slice(&[identifier(key, id)]);
+        UNUserNotificationCenter::currentNotificationCenter().removeDeliveredNotificationsWithIdentifiers(&identifiers);
     }
 }
