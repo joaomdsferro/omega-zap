@@ -13,5 +13,21 @@ fn main() {
         unsafe { std::env::set_var("DBUS_SYSTEM_BUS_ADDRESS", "unix:path=/nonexistent") };
     }
 
+    // WebKitGTK 2.54 picks GStreamer's VA-API decoders when present, and on
+    // AMD (radeonsi) H.264 then fails with a decode error after a few frames:
+    // the video freezes on its first frame. Chat videos are small enough for
+    // software decoding, so rank the hardware decoders out unless the user
+    // set their own ranks.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("GST_PLUGIN_FEATURE_RANK").is_none() {
+        let ranks = ["vah264dec", "vah265dec", "vavp8dec", "vavp9dec", "vaav1dec", "vampeg2dec"]
+            .iter()
+            .chain(&["vaapih264dec", "vaapih265dec", "vaapivp8dec", "vaapivp9dec", "vaapiav1dec", "vaapimpeg2dec"])
+            .map(|decoder| format!("{decoder}:NONE"))
+            .collect::<Vec<_>>()
+            .join(",");
+        unsafe { std::env::set_var("GST_PLUGIN_FEATURE_RANK", ranks) };
+    }
+
     omega_zap_lib::run()
 }
