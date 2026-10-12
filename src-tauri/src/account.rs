@@ -89,6 +89,36 @@ pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+/// The app's identifier (tauri.conf.json), which also names the data folder
+/// and the storage key.
+pub const IDENTIFIER: &str = "app.wisething.omegazap";
+/// The identifier of builds up to 0.0.3.
+pub const OLD_IDENTIFIER: &str = "rocks.omegazap.desktop";
+
+/// Moves the data of builds up to 0.0.3, kept under the old identifier, to
+/// the folder of `dir`, once. A rename: nothing is copied.
+pub fn move_old_data(dir: &Path) {
+    let renamed = |old: &Path, new: &Path| {
+        // An empty folder made in the meantime does not stop the move.
+        if !old.is_dir() || (new.exists() && fs::remove_dir(new).is_err()) {
+            return;
+        }
+        match fs::rename(old, new) {
+            Ok(()) => log::info!("moved {} to {}", old.display(), new.display()),
+            Err(e) => log::warn!("could not move {} to {}: {e}", old.display(), new.display()),
+        }
+    };
+    if let Some(parent) = dir.parent() {
+        renamed(&parent.join(OLD_IDENTIFIER), dir);
+    }
+    // The webview's own data (the UI's settings) is kept apart on macOS.
+    #[cfg(target_os = "macos")]
+    if let Some(home) = std::env::var_os("HOME") {
+        let webkit = Path::new(&home).join("Library").join("WebKit");
+        renamed(&webkit.join(OLD_IDENTIFIER), &webkit.join(IDENTIFIER));
+    }
+}
+
 pub fn secure_dir(dir: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;
     #[cfg(unix)]

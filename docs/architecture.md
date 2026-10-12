@@ -33,7 +33,7 @@ bridge next to the main executable.
 
 ## Where data lives
 
-Linux: `~/.local/share/rocks.omegazap.desktop/` (the directory is `0700`). Everything below is
+Linux: `~/.local/share/app.wisething.omegazap/` (the directory is `0700`). Everything below is
 encrypted with a key kept in the desktop keyring.
 
 | Path | Contents |

@@ -253,7 +253,9 @@ pub fn run() {
             serve(dir.as_deref(), Scheme::Media, request.uri().path(), request.headers().get("range"))
         })
         .setup(|app| {
+            debug_assert_eq!(app.config().identifier, account::IDENTIFIER);
             let dir = app.path().app_data_dir()?;
+            account::move_old_data(&dir);
             if let Err(e) = vault::open(&dir) {
                 log::error!("{e}");
                 let _ = notify_rust::Notification::new()

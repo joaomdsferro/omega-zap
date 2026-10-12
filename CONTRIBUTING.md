@@ -9,7 +9,7 @@ to report a problem, suggest something, or send code.
 what you did, what you expected, what happened, the Omega Zap version and your distribution.
 
 **Never share message contents, phone numbers, QR codes, or anything from
-`~/.local/share/rocks.omegazap.desktop/`.** Describe the problem instead, or redact screenshots.
+`~/.local/share/app.wisething.omegazap/`.** Describe the problem instead, or redact screenshots.
 
 Security problems go privately, as [SECURITY.md](SECURITY.md) explains.
 

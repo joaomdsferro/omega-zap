@@ -145,7 +145,7 @@ linked. Fetching older WhatsApp history in the background needs the phone to ans
 <summary><strong>How do I remove it?</strong></summary>
 
 Log out of each account in **Settings → Accounts**, then uninstall the package. Your data lives in
-`~/.local/share/rocks.omegazap.desktop/`; delete that folder to remove everything. On Signal, also
+`~/.local/share/app.wisething.omegazap/`; delete that folder to remove everything. On Signal, also
 remove "Omega Zap" from the phone's linked devices.
 </details>
 

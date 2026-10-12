@@ -597,14 +597,16 @@ mod keyring {
 
     use secret_service::{EncryptionType, SecretService};
 
-    const ATTRS: [(&str, &str); 2] = [("application", "rocks.omegazap.desktop"), ("purpose", "storage-key")];
+    const ATTRS: [(&str, &str); 2] = [("application", crate::account::IDENTIFIER), ("purpose", "storage-key")];
+    /// Where builds before the identifier changed kept it.
+    const OLD_ATTRS: [(&str, &str); 2] = [("application", crate::account::OLD_IDENTIFIER), ("purpose", "storage-key")];
 
     /// A key in a file means the keyring was not there at the first start;
     /// asking again at every start could block on a desktop without one.
     pub const TAKES_OVER_FILE: bool = false;
 
-    fn attrs() -> HashMap<&'static str, &'static str> {
-        ATTRS.into_iter().collect()
+    fn attrs(pairs: [(&'static str, &'static str); 2]) -> HashMap<&'static str, &'static str> {
+        pairs.into_iter().collect()
     }
 
     pub fn load() -> Result<[u8; 32], String> {
@@ -614,18 +616,42 @@ mod keyring {
             if attempt > 0 {
                 std::thread::sleep(std::time::Duration::from_secs(2));
             }
-            match tauri::async_runtime::block_on(get()) {
+            match tauri::async_runtime::block_on(get(ATTRS)) {
                 Ok(Some(key)) => return Ok(key),
-                Ok(None) => return Err("The storage key is missing from the keyring.".into()),
+                Ok(None) => return take_old(),
                 Err(e) => last = e,
             }
         }
         Err(format!("Could not read the storage key from the keyring: {last}"))
     }
 
-    async fn get() -> Result<Option<[u8; 32]>, String> {
+    /// Moves the key kept under the old identifier to the new one, removing
+    /// the old item only once the new one reads back.
+    fn take_old() -> Result<[u8; 32], String> {
+        let Some(key) = tauri::async_runtime::block_on(get(OLD_ATTRS))? else {
+            return Err("The storage key is missing from the keyring.".into());
+        };
+        if let Err(e) = save(&key) {
+            log::warn!("the storage key stays under the old name: {e}");
+            return Ok(key);
+        }
+        let removed = tauri::async_runtime::block_on(async {
+            let service = SecretService::connect(EncryptionType::Dh).await.map_err(|e| e.to_string())?;
+            let found = service.search_items(attrs(OLD_ATTRS)).await.map_err(|e| e.to_string())?;
+            for item in found.unlocked.iter().chain(&found.locked) {
+                item.delete().await.map_err(|e| e.to_string())?;
+            }
+            Ok::<(), String>(())
+        });
+        if let Err(e) = removed {
+            log::warn!("could not remove the storage key under the old name: {e}");
+        }
+        Ok(key)
+    }
+
+    async fn get(pairs: [(&'static str, &'static str); 2]) -> Result<Option<[u8; 32]>, String> {
         let service = SecretService::connect(EncryptionType::Dh).await.map_err(|e| e.to_string())?;
-        let found = service.search_items(attrs()).await.map_err(|e| e.to_string())?;
+        let found = service.search_items(attrs(pairs)).await.map_err(|e| e.to_string())?;
         let item = match (found.unlocked.into_iter().next(), found.locked.into_iter().next()) {
             (Some(item), _) => item,
             (None, Some(item)) => {
@@ -646,13 +672,13 @@ mod keyring {
                 collection.unlock().await.map_err(|e| e.to_string())?;
             }
             collection
-                .create_item("Omega Zap storage key", attrs(), key, true, "application/octet-stream")
+                .create_item("Omega Zap storage key", attrs(ATTRS), key, true, "application/octet-stream")
                 .await
                 .map_err(|e| e.to_string())?;
             Ok::<(), String>(())
         })?;
         // Read back, so a keyring that silently drops it is not trusted.
-        match tauri::async_runtime::block_on(get()) {
+        match tauri::async_runtime::block_on(get(ATTRS)) {
             Ok(Some(stored)) if &stored == key => Ok(()),
             _ => Err("the keyring did not keep the key".into()),
         }
@@ -665,9 +691,10 @@ mod keyring {
     //! made it; a build signed differently (every unsigned build) is let in by
     //! the user once, through the system's prompt.
 
-    use security_framework::passwords::{get_generic_password, set_generic_password};
+    use security_framework::passwords::{delete_generic_password, get_generic_password, set_generic_password};
 
-    const SERVICE: &str = "rocks.omegazap.desktop";
+    use crate::account::{IDENTIFIER as SERVICE, OLD_IDENTIFIER as OLD_SERVICE};
+
     const ACCOUNT: &str = "storage-key";
     /// errSecItemNotFound
     const NOT_FOUND: i32 = -25300;
@@ -676,18 +703,41 @@ mod keyring {
     pub const TAKES_OVER_FILE: bool = true;
 
     pub fn load() -> Result<[u8; 32], String> {
-        match get_generic_password(SERVICE, ACCOUNT) {
-            Ok(secret) => secret.try_into().map_err(|_| "the storage key in the Keychain is damaged".into()),
-            Err(e) if e.code() == NOT_FOUND => Err("The storage key is missing from the Keychain.".into()),
+        match read(SERVICE)? {
+            Some(key) => Ok(key),
+            None => take_old(),
+        }
+    }
+
+    fn read(service: &str) -> Result<Option<[u8; 32]>, String> {
+        match get_generic_password(service, ACCOUNT) {
+            Ok(secret) => Ok(Some(secret.try_into().map_err(|_| "the storage key in the Keychain is damaged")?)),
+            Err(e) if e.code() == NOT_FOUND => Ok(None),
             Err(e) => Err(format!("Could not read the storage key from the Keychain: {e}")),
         }
+    }
+
+    /// Moves the key kept under the old identifier to the new one, removing
+    /// the old item only once the new one reads back.
+    fn take_old() -> Result<[u8; 32], String> {
+        let Some(key) = read(OLD_SERVICE)? else {
+            return Err("The storage key is missing from the Keychain.".into());
+        };
+        if let Err(e) = save(&key) {
+            log::warn!("the storage key stays under the old name: {e}");
+            return Ok(key);
+        }
+        if let Err(e) = delete_generic_password(OLD_SERVICE, ACCOUNT) {
+            log::warn!("could not remove the storage key under the old name: {e}");
+        }
+        Ok(key)
     }
 
     pub fn save(key: &[u8; 32]) -> Result<(), String> {
         set_generic_password(SERVICE, ACCOUNT, key).map_err(|e| format!("the Keychain refused the key: {e}"))?;
         // Read back, so a Keychain that silently drops it is not trusted.
-        match load() {
-            Ok(stored) if &stored == key => Ok(()),
+        match read(SERVICE) {
+            Ok(Some(stored)) if &stored == key => Ok(()),
             _ => Err("the Keychain did not keep the key".into()),
         }
     }
