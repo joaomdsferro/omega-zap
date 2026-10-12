@@ -1,18 +1,41 @@
-# Builds the Linux installers (.deb, .rpm, AppImage) and attaches them to a
-# draft pre-release. Push a tag such as v0.0.2, or run it by hand; the release
-# stays a draft until it is published on GitHub.
+# Releases a new version when a push to main bumps the version in
+# package.json: builds the Linux installers (.deb, .rpm, AppImage) into a draft,
+# then publishes it, tagged v<version>. A version that already has a tag is
+# skipped, so other changes to package.json release nothing. It can also be
+# run by hand.
 name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths: [package.json]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      new: ${{ steps.check.outputs.new }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          tag="v$(jq -r .version package.json)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "$tag is already released."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
   linux:
+    needs: version
+    if: needs.version.outputs.new == 'true'
     # The oldest supported Ubuntu, so the AppImage runs on older glibc too.
     runs-on: ubuntu-22.04
     steps:
@@ -50,19 +73,25 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # A draft first, so a release never shows up without its installers.
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Built into the app for GIF search; without it the app has no search.
           KLIPY_API_KEY: ${{ secrets.KLIPY_API_KEY }}
         with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
-          releaseName: Omega Zap v__VERSION__
+          tagName: ${{ needs.version.outputs.tag }}
+          releaseName: Omega Zap ${{ needs.version.outputs.tag }}
+          releaseCommitish: ${{ github.sha }}
           releaseDraft: true
-          prerelease: true
+          prerelease: false
+          generateReleaseNotes: true
           releaseBody: |
-            A test version. Expect bugs, missing features and changes that may need you to link your accounts again.
-            Omega Zap is an unofficial client, not affiliated with WhatsApp/Meta or Signal; using unofficial clients may put your accounts at risk.
+            Linux only for now: `.deb` (Debian, Ubuntu), `.rpm` (Fedora, openSUSE) or the `.AppImage` (any distribution). See the README for how to install and how to report a problem.
 
-            Linux only for now: `.deb` (Debian, Ubuntu), `.rpm` (Fedora, openSUSE) or the `.AppImage` (any distribution).
-            See the README for how to install and how to report a problem.
+            Omega Zap is in an early stage: expect bugs, and changes that may need you to link your accounts again. It is an unofficial client, not affiliated with WhatsApp/Meta or Signal; using unofficial clients may put your accounts at risk.
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ needs.version.outputs.tag }}" --draft=false --latest

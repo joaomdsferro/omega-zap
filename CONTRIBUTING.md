@@ -60,6 +60,12 @@ cargo check --manifest-path signal-sidecar/Cargo.toml
 npm packages are installed with pnpm, which only accepts versions published at least two days ago
 (`pnpm-workspace.yaml`). Rust crates from git are pinned to a revision.
 
+## Releases
+
+A release goes out when a merge to `main` bumps the version. Bump it in `package.json`,
+`src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `signal-sidecar/Cargo.toml` (and their
+`Cargo.lock`), and the release workflow builds the installers and publishes them as `v<version>`.
+
 ## License
 
 Contributions are under the [MIT license](LICENSE), except in `signal-sidecar/`, which is AGPL-3.0-only.
