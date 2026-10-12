@@ -471,7 +471,7 @@ impl WaManager {
             .with_backend(backend)
             .with_device_props(
                 DevicePropsOverride::new()
-                    .with_os("Omega Zap")
+                    .with_os(crate::account::device_name())
                     .with_platform_type(wa::device_props::PlatformType::CHROME),
             )
             .with_event_delivery(EventDelivery::Ordered { capacity: 8192 })

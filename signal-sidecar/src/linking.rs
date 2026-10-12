@@ -23,7 +23,7 @@ use presage_store_sqlite::SqliteStore;
 use rand::distr::{Alphanumeric, SampleString};
 
 use crate::history::HistoryAccess;
-use crate::{DEVICE_NAME, Event, QR_TTL_SECS, Signal, USER_AGENT, emit};
+use crate::{Event, QR_TTL_SECS, Signal, USER_AGENT, emit};
 
 /// Tells the phone this device can import a history archive, which makes it
 /// offer the transfer. These are the values Signal Desktop sends.
@@ -58,7 +58,7 @@ pub async fn link_once(mut store: SqliteStore) -> Result<Linked, LinkError> {
     let mut pni_store = store.pni_protocol_store();
 
     let (linked, registration) = future::join(
-        link_device(&mut aci_store, &mut pni_store, &mut rng, push_service, &password, DEVICE_NAME, tx),
+        link_device(&mut aci_store, &mut pni_store, &mut rng, push_service, &password, crate::device_name(), tx),
         async {
             let Some(SecondaryDeviceProvisioning::Url(mut url)) = rx.next().await else {
                 return None;
@@ -102,7 +102,7 @@ pub async fn link_once(mut store: SqliteStore) -> Result<Linked, LinkError> {
     // hence the round trip through a string.
     let registration = serde_json::json!({
         "signal_servers": SignalServers::Production,
-        "device_name": DEVICE_NAME,
+        "device_name": crate::device_name(),
         "phone_number": phonenumber_from_signal(&data.phone_number),
         "uuid": data.service_ids.aci,
         "pni": data.service_ids.pni,

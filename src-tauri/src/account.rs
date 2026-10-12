@@ -119,6 +119,44 @@ pub fn move_old_data(dir: &Path) {
     }
 }
 
+/// What the phone lists this link as under Linked devices, with the
+/// computer's name so several installs can be told apart. Sent only when
+/// linking: an existing link keeps the name it was made with.
+pub fn device_name() -> String {
+    const MAX: usize = 30;
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| match computer_name() {
+        Some(name) if name.chars().count() > MAX => format!("Omega Zap · {}…", name.chars().take(MAX - 1).collect::<String>()),
+        Some(name) => format!("Omega Zap · {name}"),
+        None => "Omega Zap".into(),
+    })
+    .clone()
+}
+
+/// The name the user gave the computer ("MacBook Pro do João"), or its host name.
+fn computer_name() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    let name = std::process::Command::new("/usr/sbin/scutil")
+        .args(["--get", "ComputerName"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| String::from_utf8(out.stdout).ok());
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let name = fs::read_to_string("/etc/machine-info")
+        .ok()
+        .and_then(|info| {
+            info.lines()
+                .find_map(|line| line.strip_prefix("PRETTY_HOSTNAME="))
+                .map(|value| value.trim().trim_matches('"').to_owned())
+        })
+        .filter(|name| !name.is_empty())
+        .or_else(|| fs::read_to_string("/proc/sys/kernel/hostname").ok());
+    #[cfg(not(unix))]
+    let name = std::env::var("COMPUTERNAME").ok();
+    name.map(|name| name.trim().to_owned()).filter(|name| !name.is_empty())
+}
+
 pub fn secure_dir(dir: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;
     #[cfg(unix)]

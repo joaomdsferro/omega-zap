@@ -40,7 +40,11 @@ use tokio::sync::mpsc;
 
 type Signal = Manager<SqliteStore, Registered>;
 
-const DEVICE_NAME: &str = "Omega Zap";
+/// What the phone lists this link as; the app adds the computer's name.
+fn device_name() -> &'static str {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| std::env::var("OMEGA_ZAP_DEVICE_NAME").unwrap_or_else(|_| "Omega Zap".into()))
+}
 const USER_AGENT: &str = concat!("omega-zap-signal/", env!("CARGO_PKG_VERSION"));
 const GROUP_PREFIX: &str = "g.";
 const SEND_TIMEOUT: Duration = Duration::from_secs(45);

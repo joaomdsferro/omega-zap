@@ -406,6 +406,7 @@ impl SignalManager {
             .arg(&session)
             // Read once by the bridge to open its encrypted store.
             .env("OMEGA_ZAP_DB_KEY", key)
+            .env("OMEGA_ZAP_DEVICE_NAME", crate::account::device_name())
             .env("OMEGA_ZAP_RUNTIME_DIR", crate::vault::runtime_dir().map_err(|e| e.to_string())?)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
