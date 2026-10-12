@@ -43,7 +43,7 @@ webp-animation = { version = "0.10.0", default-features = false, features = ["st
 libwebp-sys2 = { version = "0.2.0", features = ["static"] }
 # Voice messages: the microphone (ALSA on Linux, Core Audio on macOS) and
 # Opus, built in (static, with cmake), so nothing is needed on the system.
-cpal = "0.18"
+cpal = { version = "0.18", features = ["pulseaudio"] }
 opus = "0.4"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]

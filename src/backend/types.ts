@@ -451,12 +451,27 @@ export interface VoiceLevel {
   level: number;
 }
 
-/** Records voice messages from the microphone, one at a time; sent with `sendMedia({ kind: "voice" })`. */
+/** A microphone that can be picked to record with. */
+export interface Microphone {
+  id: string;
+  name: string;
+}
+
+/**
+ * Records voice messages from the microphone, one at a time; sent with
+ * `sendMedia({ kind: "voice" })`. A recording whose send failed is kept, to
+ * listen to and send again, until the next start or a cancel.
+ */
 export interface VoiceRecorder {
-  start(): Promise<void>;
+  /** Records from `microphone` (an id from `microphones`), or the system's when absent or gone. */
+  start(microphone?: string | null): Promise<void>;
   pause(paused: boolean): Promise<void>;
   /** Throws the recording away. */
   cancel(): Promise<void>;
+  /** The recording so far, as an Ogg Opus file, to listen to. */
+  preview(): Promise<Blob>;
+  /** The microphones that can be picked; empty where only the system's can be used. */
+  microphones(): Promise<Microphone[]>;
   /** Tells how the recording goes, about every 100 ms; returns the way to stop listening. */
   onLevel(listener: (level: VoiceLevel) => void): () => void;
   /** Tells when the microphone failed mid-recording, which ends it. */

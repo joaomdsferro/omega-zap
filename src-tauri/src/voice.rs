@@ -35,6 +35,7 @@ const STOP: u8 = 2;
 const CANCEL: u8 = 3;
 
 /// A finished recording.
+#[derive(Clone)]
 pub struct Recording {
     pub ogg: Vec<u8>,
     pub seconds: u32,
@@ -51,35 +52,63 @@ struct Level {
     level: f32,
 }
 
+/// A microphone that can be picked.
+#[derive(Serialize)]
+pub struct Microphone {
+    pub id: String,
+    pub name: String,
+}
+
+/// Asked of the recording thread while it runs.
+enum Ask {
+    /// The file so far, to listen to before sending.
+    Snapshot(mpsc::Sender<Vec<u8>>),
+}
+
 struct Session {
     state: Arc<AtomicU8>,
+    asks: mpsc::Sender<Ask>,
     worker: JoinHandle<Result<Recording, String>>,
 }
 
-/// The recording going on, if any. Kept by the app.
+#[derive(Default)]
+struct Slot {
+    session: Option<Session>,
+    /// A finished recording that wasn't sent, kept to try again.
+    kept: Option<Recording>,
+}
+
+/// The recording going on, or the one kept after a send failed. Kept by the app.
 #[derive(Default, Clone)]
-pub struct Recorder(Arc<Mutex<Option<Session>>>);
+pub struct Recorder(Arc<Mutex<Slot>>);
 
 impl Recorder {
-    /// Starts recording from the default microphone; one already going is thrown away.
-    pub fn start(&self, app: AppHandle) -> Result<(), String> {
+    fn slot(&self) -> std::sync::MutexGuard<'_, Slot> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Starts recording from `microphone` (an id from `microphones`), or the
+    /// system's when absent or gone. One already going, or kept, is thrown away.
+    pub fn start(&self, app: AppHandle, microphone: Option<String>) -> Result<(), String> {
         // Held throughout, so two starts at once can't leave one running unseen.
-        let mut slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(session) = slot.take() {
+        let mut slot = self.slot();
+        slot.kept = None;
+        if let Some(session) = slot.session.take() {
             let _ = session.end(CANCEL);
         }
         let state = Arc::new(AtomicU8::new(RECORDING));
+        let (asks, asked) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel();
         let worker = {
             let state = state.clone();
             std::thread::Builder::new()
                 .name("voice".into())
-                .spawn(move || record(app, state, ready_tx))
+                .spawn(move || record(app, microphone, state, asked, ready_tx))
                 .map_err(|e| format!("Could not start recording: {e}"))?
         };
         match ready_rx.recv() {
             Ok(Ok(())) => {
-                *slot = Some(Session { state, worker });
+                slot.session = Some(Session { state, asks, worker });
                 Ok(())
             }
             Ok(Err(e)) => Err(e),
@@ -88,27 +117,44 @@ impl Recorder {
     }
 
     pub fn set_paused(&self, paused: bool) {
-        if let Some(session) = self.0.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if let Some(session) = self.slot().session.as_ref() {
             let (from, to) = if paused { (RECORDING, PAUSED) } else { (PAUSED, RECORDING) };
             let _ = session.state.compare_exchange(from, to, Ordering::Relaxed, Ordering::Relaxed);
         }
     }
 
     pub fn cancel(&self) {
-        if let Some(session) = self.0.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        let mut slot = self.slot();
+        slot.kept = None;
+        if let Some(session) = slot.session.take() {
             let _ = session.end(CANCEL);
         }
     }
 
-    /// Stops recording and hands over what was recorded. Blocks while the last of it is encoded.
+    /// Stops recording and hands over what was recorded, or the recording
+    /// kept from a failed send. Blocks while the last of it is encoded.
     pub fn finish(&self) -> Result<Recording, String> {
-        let session = self
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-            .ok_or("Nothing is being recorded.")?;
-        session.end(STOP)
+        let mut slot = self.slot();
+        if let Some(session) = slot.session.take() {
+            return session.end(STOP);
+        }
+        slot.kept.take().ok_or_else(|| "Nothing is being recorded.".into())
+    }
+
+    /// Keeps a recording that wasn't sent, so it can be sent again.
+    pub fn keep(&self, recording: Recording) {
+        self.slot().kept = Some(recording);
+    }
+
+    /// The recording so far as an Ogg file, to listen to.
+    pub fn snapshot(&self) -> Result<Vec<u8>, String> {
+        let slot = self.slot();
+        if let Some(session) = slot.session.as_ref() {
+            let (tx, rx) = mpsc::channel();
+            session.asks.send(Ask::Snapshot(tx)).map_err(|_| "The recording has stopped.")?;
+            return rx.recv_timeout(Duration::from_secs(2)).map_err(|_| "The recording didn't answer.".into());
+        }
+        slot.kept.as_ref().map(|r| r.ogg.clone()).ok_or_else(|| "Nothing is being recorded.".into())
     }
 }
 
@@ -122,10 +168,10 @@ impl Session {
 
 /// Starts recording a voice message. Its length and loudness come as `voice://level` events.
 #[tauri::command]
-pub async fn voice_start(app: AppHandle, recorder: tauri::State<'_, Recorder>) -> Result<(), String> {
+pub async fn voice_start(app: AppHandle, recorder: tauri::State<'_, Recorder>, microphone: Option<String>) -> Result<(), String> {
     // Opening the microphone can take a moment; not on the main thread.
     let recorder = recorder.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || recorder.start(app))
+    tauri::async_runtime::spawn_blocking(move || recorder.start(app, microphone))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -143,6 +189,22 @@ pub async fn voice_cancel(recorder: tauri::State<'_, Recorder>) -> Result<(), St
         .map_err(|e| e.to_string())
 }
 
+/// The recording so far, as an Ogg Opus file.
+#[tauri::command]
+pub async fn voice_preview(recorder: tauri::State<'_, Recorder>) -> Result<tauri::ipc::Response, String> {
+    let recorder = recorder.inner().clone();
+    let ogg = tauri::async_runtime::spawn_blocking(move || recorder.snapshot())
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(ogg))
+}
+
+/// The microphones that can be picked. Empty where only the system's can be used.
+#[tauri::command]
+pub async fn voice_microphones() -> Result<Vec<Microphone>, String> {
+    tauri::async_runtime::spawn_blocking(microphones).await.map_err(|e| e.to_string())
+}
+
 /// Stops recording and returns the voice message, ready to send.
 pub async fn finish(recorder: &Recorder) -> Result<Recording, String> {
     let recorder = recorder.clone();
@@ -151,11 +213,50 @@ pub async fn finish(recorder: &Recorder) -> Result<Recording, String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Where microphones come from. On Linux the sound server, which knows them
+/// by name (PipeWire answers as PulseAudio); ALSA's own list is mostly
+/// plugins, so without a server only its default is used.
+fn host() -> cpal::Host {
+    #[cfg(target_os = "linux")]
+    if let Ok(host) = cpal::host_from_id(cpal::HostId::PulseAudio) {
+        return host;
+    }
+    cpal::default_host()
+}
+
+fn microphones() -> Vec<Microphone> {
+    let host = host();
+    #[cfg(target_os = "linux")]
+    if host.id() != cpal::HostId::PulseAudio {
+        return Vec::new();
+    }
+    let Ok(devices) = host.input_devices() else {
+        return Vec::new();
+    };
+    devices
+        .filter_map(|device| {
+            let id = device.id().ok()?.to_string();
+            // What a speaker plays, offered by the sound server as an input.
+            if id.ends_with(".monitor") {
+                return None;
+            }
+            let name = device.description().map(|d| d.name().to_string()).unwrap_or_else(|_| id.clone());
+            Some(Microphone { id, name })
+        })
+        .collect()
+}
+
 /// The recording thread: the microphone's stream can't leave the thread that opened it.
-fn record(app: AppHandle, state: Arc<AtomicU8>, ready: mpsc::Sender<Result<(), String>>) -> Result<Recording, String> {
+fn record(
+    app: AppHandle,
+    microphone: Option<String>,
+    state: Arc<AtomicU8>,
+    asked: mpsc::Receiver<Ask>,
+    ready: mpsc::Sender<Result<(), String>>,
+) -> Result<Recording, String> {
     let (tx, rx) = mpsc::channel::<Vec<f32>>();
     let failed = Arc::new(Mutex::new(None::<String>));
-    let opened = open(tx, failed.clone());
+    let opened = open(microphone.as_deref(), tx, failed.clone());
     let (stream, rate) = match opened {
         Ok(opened) => opened,
         Err(e) => {
@@ -178,6 +279,13 @@ fn record(app: AppHandle, state: Arc<AtomicU8>, ready: mpsc::Sender<Result<(), S
             Ok(chunk) if state.load(Ordering::Relaxed) == RECORDING => encoder.push(&chunk),
             Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        while let Ok(ask) = asked.try_recv() {
+            match ask {
+                Ask::Snapshot(reply) => {
+                    let _ = reply.send(encoder.snapshot());
+                }
+            }
         }
         if let Some(e) = failed.lock().unwrap_or_else(|e| e.into_inner()).take() {
             let _ = app.emit("voice://error", &e);
@@ -204,17 +312,36 @@ fn record(app: AppHandle, state: Arc<AtomicU8>, ready: mpsc::Sender<Result<(), S
     encoder.finish()
 }
 
-/// Opens the default microphone. Its sound arrives on `tx` as mono samples at the returned rate.
-fn open(tx: mpsc::Sender<Vec<f32>>, failed: Arc<Mutex<Option<String>>>) -> Result<(cpal::Stream, u32), String> {
-    let host = cpal::default_host();
-    let device = host.default_input_device().ok_or("No microphone was found.")?;
+/// Opens `microphone`, or the system's. Its sound arrives on `tx` as mono samples at the returned rate.
+fn open(
+    microphone: Option<&str>,
+    tx: mpsc::Sender<Vec<f32>>,
+    failed: Arc<Mutex<Option<String>>>,
+) -> Result<(cpal::Stream, u32), String> {
+    let host = host();
+    // A microphone picked before and since unplugged gives way to the system's.
+    let picked = microphone.and_then(|id| {
+        let found = id.parse().ok().and_then(|id| host.device_by_id(&id));
+        if found.is_none() {
+            log::info!("voice: microphone {id} not found, using the default");
+        }
+        found
+    });
+    let device = picked.or_else(|| host.default_input_device()).ok_or("No microphone was found.")?;
     let config = device
         .default_input_config()
         .map_err(|e| format!("The microphone can't be used: {e}"))?;
     let rate = config.sample_rate();
     let channels = usize::from(config.channels()).max(1);
     let format = config.sample_format();
-    let config: cpal::StreamConfig = config.into();
+    // 20 ms at a time. Left to itself, PulseAudio hands sound over in 2 s
+    // pieces, so recording took 2 s to start and the waveform stuttered.
+    let wanted = rate / 50;
+    let fits = matches!(config.buffer_size(), cpal::SupportedBufferSize::Range { min, max } if (*min..=*max).contains(&wanted));
+    let mut config: cpal::StreamConfig = config.into();
+    if fits {
+        config.buffer_size = cpal::BufferSize::Fixed(wanted);
+    }
     let stream = match format {
         SampleFormat::F32 => build::<f32>(&device, config, channels, tx, failed),
         SampleFormat::I16 => build::<i16>(&device, config, channels, tx, failed),
@@ -351,6 +478,11 @@ impl Encoder {
         }
     }
 
+    /// The file so far, closed as if it ended here; recording goes on.
+    fn snapshot(&self) -> Vec<u8> {
+        self.ogg.closed()
+    }
+
     fn finish(mut self) -> Result<Recording, String> {
         // Opus holds back its lookahead: silence pushes the end of the sound out.
         let mut tail = std::mem::take(&mut self.pending);
@@ -419,6 +551,7 @@ const BOS: u8 = 0x02;
 const EOS: u8 = 0x04;
 
 /// Writes Ogg pages (RFC 3533), packets gathered a second to a page.
+#[derive(Clone)]
 struct Ogg {
     out: Vec<u8>,
     serial: u32,
@@ -426,11 +559,13 @@ struct Ogg {
     packets: Vec<Vec<u8>>,
     /// Where the last packet gathered ends.
     granule_before: u64,
+    /// Where the last page written starts.
+    last_page: usize,
 }
 
 impl Ogg {
     fn new(serial: u32) -> Self {
-        Self { out: Vec::new(), serial, sequence: 0, packets: Vec::new(), granule_before: 0 }
+        Self { out: Vec::new(), serial, sequence: 0, packets: Vec::new(), granule_before: 0, last_page: 0 }
     }
 
     /// Adds a packet that ends at `granule`; `last` closes the stream.
@@ -447,6 +582,22 @@ impl Ogg {
         }
     }
 
+    /// A copy of the stream so far, ended there.
+    fn closed(&self) -> Vec<u8> {
+        let mut ogg = self.clone();
+        if !ogg.packets.is_empty() {
+            ogg.flush(ogg.granule_before, EOS);
+            return ogg.out;
+        }
+        // Everything is on pages already: the last one ends the stream.
+        let start = ogg.last_page;
+        ogg.out[start + 5] |= EOS;
+        ogg.out[start + 22..start + 26].fill(0);
+        let crc = crc32(&ogg.out[start..]);
+        ogg.out[start + 22..start + 26].copy_from_slice(&crc.to_le_bytes());
+        ogg.out
+    }
+
     fn flush(&mut self, granule: u64, flags: u8) {
         let packets = std::mem::take(&mut self.packets);
         let refs: Vec<&[u8]> = packets.iter().map(Vec::as_slice).collect();
@@ -456,6 +607,7 @@ impl Ogg {
     /// Writes one page holding whole `packets`.
     fn page(&mut self, packets: &[&[u8]], granule: u64, flags: u8) {
         let start = self.out.len();
+        self.last_page = start;
         self.out.extend_from_slice(b"OggS");
         self.out.push(0);
         self.out.push(flags);
@@ -524,10 +676,13 @@ mod tests {
         assert_eq!(recording.seconds, 2);
         assert_eq!(recording.waveform.len(), WAVEFORM_LEN);
         assert!(recording.waveform.iter().all(|&v| v > 50));
-        let ogg = &recording.ogg;
+        assert_eq!(&recording.ogg[28..36], b"OpusHead");
+        assert_valid(&recording.ogg);
+    }
+
+    /// Every page's checksum is right, and the last one ends the stream.
+    fn assert_valid(ogg: &[u8]) {
         assert_eq!(&ogg[..4], b"OggS");
-        assert_eq!(&ogg[28..36], b"OpusHead");
-        // Every page's checksum is right, and the last one ends the stream.
         let mut at = 0;
         let mut last_flags = 0;
         while at < ogg.len() {
@@ -543,6 +698,19 @@ mod tests {
             at += len;
         }
         assert_eq!(last_flags & EOS, EOS);
+    }
+
+    #[test]
+    fn a_snapshot_is_a_whole_file_and_recording_goes_on() {
+        let mut encoder = Encoder::new(48_000).unwrap();
+        encoder.push(&[0.1; 48_000 + 480]);
+        let snapshot = encoder.snapshot();
+        assert_valid(&snapshot);
+        encoder.push(&[0.1; 48_000]);
+        let recording = encoder.finish().unwrap();
+        assert_eq!(recording.seconds, 2);
+        assert!(recording.ogg.len() > snapshot.len());
+        assert_valid(&recording.ogg);
     }
 
     #[test]

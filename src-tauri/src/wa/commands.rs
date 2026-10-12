@@ -394,7 +394,7 @@ pub fn wa_remove_from_pack(mgr: Mgr<'_>, pack_id: String, id: String) -> Result<
     mgr.remove_from_pack(&pack_id, &id)
 }
 
-/// Sends the voice message being recorded.
+/// Sends the voice message being recorded, or the one kept after a failed send.
 #[tauri::command]
 pub async fn wa_send_voice(
     mgr: Mgr<'_>,
@@ -403,6 +403,7 @@ pub async fn wa_send_voice(
     reply_to: Option<String>,
 ) -> Result<MessageDto, String> {
     let recording = crate::voice::finish(&recorder).await?;
+    let ogg = recording.ogg.clone();
     let file = crate::account::OutgoingFile {
         chat_id,
         name: "voice.ogg".into(),
@@ -415,9 +416,14 @@ pub async fn wa_send_voice(
         thumbnail: None,
         forwarded: 0,
         voice: true,
-        waveform: recording.waveform,
+        waveform: recording.waveform.clone(),
     };
-    mgr.send_file(file, recording.ogg).await
+    let sent = mgr.send_file(file, ogg).await;
+    // Kept, so it can be sent again rather than recorded again.
+    if sent.is_err() {
+        recorder.keep(recording);
+    }
+    sent
 }
 
 #[tauri::command]

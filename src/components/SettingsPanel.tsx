@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ACCOUNTS, PLANNED_ACCOUNTS, type AccountId } from "../accounts/accounts";
 import type { Account } from "../accounts/useAccount";
-import type { Privacy, PrivacyCategory } from "../backend";
+import type { Microphone, Privacy, PrivacyCategory } from "../backend";
 import { modKey } from "../lib/platform";
 import {
   SIDEBAR_DEFAULT,
@@ -24,6 +24,8 @@ interface SettingsPanelProps {
     load: () => Promise<Privacy>;
     save: (category: PrivacyCategory, value: string) => Promise<void>;
   };
+  /** Lists the microphones voice messages can be recorded with; absent where none can be. */
+  microphones?: () => Promise<Microphone[]>;
 }
 
 const LAST_SEEN_OPTIONS = [
@@ -43,6 +45,7 @@ function Choice({
   options,
   value,
   disabled,
+  stacked,
   onChange,
 }: {
   label: string;
@@ -50,12 +53,14 @@ function Choice({
   options: { value: string; label: string }[];
   value?: string;
   disabled?: boolean;
+  /** One option per line, for long labels. */
+  stacked?: boolean;
   onChange: (value: string) => void;
 }) {
   return (
     <fieldset className="px-3 py-2.5" disabled={disabled}>
       <legend className="text-[15px] text-(--text-primary)">{label}</legend>
-      <div className="mt-1.5 flex flex-wrap gap-x-5 gap-y-1">
+      <div className={`mt-1.5 flex gap-x-5 gap-y-1 ${stacked ? "flex-col" : "flex-wrap"}`}>
         {options.map((option) => (
           <label key={option.value} className="flex items-center gap-2 py-1 text-[14px] text-(--text-primary)">
             <input
@@ -319,7 +324,37 @@ function Switch({ checked, onChange, label, description }: SwitchProps) {
   );
 }
 
-export function SettingsPanel({ accounts, onBack, onLink, privacy }: SettingsPanelProps) {
+/** Which microphone records voice messages. */
+function MicrophoneChoice({ list }: { list: () => Promise<Microphone[]> }) {
+  const { settings, setMicrophone } = useSettings();
+  const [microphones, setMicrophones] = useState<Microphone[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    list().then(
+      (found) => alive && setMicrophones(found),
+      () => alive && setMicrophones([]),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [list]);
+  if (!microphones) return <p className="px-3 py-2.5 text-[14px] text-(--text-secondary)">Looking for microphones…</p>;
+  if (!microphones.length) {
+    return <p className="px-3 py-2.5 text-[14px] text-(--text-secondary)">Voice messages are recorded with the system's microphone.</p>;
+  }
+  const chosen = settings.microphone;
+  const options = [
+    { value: "", label: "System default" },
+    ...microphones.map((m) => ({ value: m.id, label: m.name })),
+    // One picked before and unplugged since: recording falls back to the system's meanwhile.
+    ...(chosen && !microphones.some((m) => m.id === chosen) ? [{ value: chosen, label: "The one picked before (not connected)" }] : []),
+  ];
+  return (
+    <Choice label="Microphone" name="microphone" stacked options={options} value={chosen ?? ""} onChange={(id) => setMicrophone(id || null)} />
+  );
+}
+
+export function SettingsPanel({ accounts, onBack, onLink, privacy, microphones }: SettingsPanelProps) {
   const {
     settings,
     setTheme,
@@ -462,6 +497,12 @@ export function SettingsPanel({ accounts, onBack, onLink, privacy }: SettingsPan
             description="When a link arrives with no card, read its title and picture from the site, once, and keep them on this computer. The site sees your IP address, as it would if you opened the link."
           />
         </Section>
+
+        {microphones ? (
+          <Section title="Voice messages">
+            <MicrophoneChoice list={microphones} />
+          </Section>
+        ) : null}
 
         <Section title="Theme">
           <div className="flex flex-col gap-1" role="radiogroup" aria-label="Theme">

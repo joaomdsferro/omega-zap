@@ -107,6 +107,8 @@ export interface Settings {
   notificationOpensChat: boolean;
   /** Let the other side see "typing…" while we write. */
   sendTyping: boolean;
+  /** The microphone voice messages are recorded with; `null` follows the system's. */
+  microphone: string | null;
 }
 
 const DEFAULTS: Settings = {
@@ -122,6 +124,7 @@ const DEFAULTS: Settings = {
   trayBadge: "red",
   notificationOpensChat: false,
   sendTyping: true,
+  microphone: null,
 };
 
 const STORAGE_KEY = "omega-zap-settings";
@@ -162,6 +165,7 @@ function load(parsed: Stored): Settings {
     notificationPreview: parsed.notificationPreview !== false,
     notificationOpensChat: parsed.notificationOpensChat === true,
     sendTyping: parsed.sendTyping !== false,
+    microphone: typeof parsed.microphone === "string" && parsed.microphone ? parsed.microphone : null,
     trayBadge: TRAY_BADGES.some((b) => b.id === parsed.trayBadge) ? (parsed.trayBadge as TrayBadge) : DEFAULTS.trayBadge,
   };
 }
@@ -183,6 +187,7 @@ interface SettingsContextValue {
   setNotificationPreview: (on: boolean) => void;
   setTrayBadge: (badge: TrayBadge) => void;
   setSendTyping: (on: boolean) => void;
+  setMicrophone: (id: string | null) => void;
   setNotificationOpensChat: (on: boolean) => void;
 }
 
@@ -259,6 +264,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       setTrayBadge: (trayBadge) => setSettings((s) => ({ ...s, trayBadge })),
       setNotificationOpensChat: (notificationOpensChat) => setSettings((s) => ({ ...s, notificationOpensChat })),
       setSendTyping: (sendTyping) => setSettings((s) => ({ ...s, sendTyping })),
+      setMicrophone: (microphone) => setSettings((s) => ({ ...s, microphone })),
     }),
     [settings, resolvedTheme, setZoom, stepZoom],
   );

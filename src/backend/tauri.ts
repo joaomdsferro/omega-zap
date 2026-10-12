@@ -319,9 +319,11 @@ export class TauriBackend implements ChatBackend {
         return () => void pending.then((unlisten) => unlisten());
       };
       this.voice = {
-        start: () => invoke("voice_start"),
+        start: (microphone) => invoke("voice_start", { microphone: microphone ?? null }),
         pause: (paused) => invoke("voice_pause", { paused }),
         cancel: () => invoke("voice_cancel"),
+        preview: async () => new Blob([await invoke<ArrayBuffer>("voice_preview")], { type: "audio/ogg" }),
+        microphones: () => invoke("voice_microphones"),
         onLevel: (listener) => subscribe("voice://level", listener),
         onError: (listener) => subscribe("voice://error", listener),
       };

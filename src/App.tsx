@@ -664,6 +664,8 @@ function Shell() {
     }
   }
 
+  const microphones = useMemo(() => real.whatsapp.voice?.microphones.bind(real.whatsapp.voice), [real]);
+
   const sendMedia = useMemo(() => {
     const backend = selectedBackend;
     const chatId = selectedId;
@@ -1476,6 +1478,7 @@ function Shell() {
             accounts={ACCOUNT_IDS.map((id) => accounts[id])}
             onBack={() => setView("chats")}
             onLink={openLinking}
+            microphones={microphones}
             privacy={
               accounts.whatsapp.status.state === "connected" && real.whatsapp.privacy && real.whatsapp.setPrivacy
                 ? whatsappPrivacy

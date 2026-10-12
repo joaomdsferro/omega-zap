@@ -382,6 +382,8 @@ pub fn run() {
             voice::voice_start,
             voice::voice_pause,
             voice::voice_cancel,
+            voice::voice_preview,
+            voice::voice_microphones,
             wa::commands::wa_send_recent_gif,
             wa::commands::wa_send_klipy_sticker,
             wa::commands::wa_add_klipy_sticker,

@@ -34,6 +34,7 @@ export type {
   StickerPack,
   StickerLibrary,
   StickerShelf,
+  Microphone,
   VoiceLevel,
   VoiceRecorder,
   StickerTarget,

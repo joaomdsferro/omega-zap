@@ -9,7 +9,7 @@ import { URL_PATTERN, fetchLinkPreview } from "../lib/links";
 import { FormattedLine } from "../lib/markup";
 import { outgoingLink } from "../lib/outgoing";
 import { useSettings } from "../settings/settings";
-import { CloseIcon, FileIcon, MicIcon, PauseIcon, PlusIcon, SendIcon, SmileIcon, TrashIcon } from "./Icons";
+import { CloseIcon, FileIcon, MicIcon, PauseIcon, PlayIcon, PlusIcon, SendIcon, SmileIcon, TrashIcon } from "./Icons";
 import { MediaPanel } from "./MediaPanel";
 import { MessageInput, type MessageInputHandle } from "./MessageInput";
 
@@ -140,10 +140,23 @@ function PendingFile({ file, state, onRemove }: { file: File; state?: "sending" 
 
 /** Bars kept of a recording's live waveform: enough for a wide window. */
 const LIVE_BARS = 120;
+/** Bars of the whole recording, shown while paused. */
+const PREVIEW_BARS = 48;
+
+/** The whole recording's loudness in `PREVIEW_BARS` bars, the loudest of each part. */
+function previewBars(levels: number[]) {
+  if (!levels.length) return [];
+  return Array.from({ length: PREVIEW_BARS }, (_, bar) => {
+    const from = Math.floor((bar * levels.length) / PREVIEW_BARS);
+    const to = Math.max(from + 1, Math.floor(((bar + 1) * levels.length) / PREVIEW_BARS));
+    return Math.max(...levels.slice(from, Math.min(to, levels.length)));
+  });
+}
 
 /**
  * Recording a voice message, in place of the text box: throw it away, the
- * time and loudness so far, pause or go on, send.
+ * time and loudness so far, pause to listen back or go on, send. A send that
+ * fails leaves it here, kept, to send again.
  */
 function VoiceBar({
   chatId,
@@ -156,13 +169,14 @@ function VoiceBar({
   chatId: string;
   voice: VoiceRecorder;
   onSend: () => Promise<void>;
-  /** The recording ended: sent, thrown away or failed. */
+  /** The recording ended: sent or thrown away. */
   onDone: () => void;
   onTyping?: (chatId: string, state: TypingState) => void;
   onError?: (message: string) => void;
 }) {
-  const [started, setStarted] = useState(false);
-  const [paused, setPaused] = useState(false);
+  const { settings } = useSettings();
+  // "kept": recording ended, but the send failed; it waits to be sent again.
+  const [phase, setPhase] = useState<"starting" | "recording" | "paused" | "kept">("starting");
   const [sending, setSending] = useState(false);
   const [ms, setMs] = useState(0);
   const [levels, setLevels] = useState<number[]>([]);
@@ -172,20 +186,37 @@ function VoiceBar({
   done.current = onDone;
   const fail = useRef(onError);
   fail.current = onError;
+  // The microphone is read once, when recording starts.
+  const microphone = useRef(settings.microphone);
+
+  // Listening back: the file as it was at `ms`, fetched again once there is more.
+  const [playing, setPlaying] = useState(false);
+  const [position, setPosition] = useState(0);
+  const player = useRef<{ audio: HTMLAudioElement; url: string; ms: number } | null>(null);
+
+  const stopPlayer = useCallback(() => {
+    const was = player.current;
+    if (!was) return;
+    was.audio.pause();
+    URL.revokeObjectURL(was.url);
+    player.current = null;
+    setPlaying(false);
+    setPosition(0);
+  }, []);
 
   useEffect(() => {
     live.current = true;
     const stopLevels = voice.onLevel((update) => {
       setMs(update.ms);
-      setLevels((prev) => [...prev.slice(1 - LIVE_BARS), update.level]);
+      setLevels((prev) => [...prev, update.level]);
     });
     const stopErrors = voice.onError((message) => {
       live.current = false;
       fail.current?.(message);
       done.current();
     });
-    voice.start().then(
-      () => setStarted(true),
+    voice.start(microphone.current).then(
+      () => setPhase((now) => (now === "starting" ? "recording" : now)),
       (e) => {
         live.current = false;
         fail.current?.(String(e));
@@ -200,39 +231,84 @@ function VoiceBar({
     };
   }, [voice]);
 
-  // The chat sees "recording audio…" while it goes on.
+  useEffect(() => stopPlayer, [stopPlayer]);
+
+  // The waveform follows the sound while it plays.
   useEffect(() => {
-    if (!onTyping || !started || paused || sending) return;
+    if (!playing) return;
+    let frame = 0;
+    const tick = () => {
+      if (player.current) setPosition(player.current.audio.currentTime);
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [playing]);
+
+  // The chat sees "recording audio…" while it goes on.
+  const recording = phase === "recording" && !sending;
+  useEffect(() => {
+    if (!onTyping || !recording) return;
     onTyping(chatId, "recording");
     const timer = window.setInterval(() => onTyping(chatId, "recording"), TYPING_REPEAT_MS);
     return () => {
       window.clearInterval(timer);
       onTyping(chatId, "paused");
     };
-  }, [chatId, onTyping, started, paused, sending]);
+  }, [chatId, onTyping, recording]);
 
   function discard() {
     live.current = false;
+    stopPlayer();
     void voice.cancel();
     onDone();
   }
 
   async function send() {
-    if (!started || sending) return;
+    if (phase === "starting" || sending || tooShort) return;
+    stopPlayer();
     setSending(true);
-    live.current = false;
     try {
       await onSend();
+      live.current = false;
+      onDone();
     } catch (e) {
+      // The recording is kept: it can be listened to and sent again.
+      setSending(false);
+      setPhase("kept");
       onError?.(String(e));
     }
-    onDone();
   }
 
   function togglePause() {
-    const next = !paused;
-    setPaused(next);
-    void voice.pause(next);
+    const pausing = phase === "recording";
+    if (!pausing) stopPlayer();
+    setPhase(pausing ? "paused" : "recording");
+    void voice.pause(pausing);
+  }
+
+  async function togglePlay() {
+    if (playing) {
+      player.current?.audio.pause();
+      return;
+    }
+    try {
+      if (!player.current || player.current.ms !== ms) {
+        const url = URL.createObjectURL(await voice.preview());
+        stopPlayer();
+        const audio = new Audio(url);
+        audio.onplay = () => setPlaying(true);
+        audio.onpause = () => setPlaying(false);
+        audio.onended = () => {
+          setPlaying(false);
+          setPosition(0);
+        };
+        player.current = { audio, url, ms };
+      }
+      await player.current.audio.play();
+    } catch (e) {
+      onError?.(`The recording can't be played: ${e}`);
+    }
   }
 
   // Escape throws it away, Enter sends it.
@@ -251,6 +327,13 @@ function VoiceBar({
     return () => window.removeEventListener("keydown", onKeyDown);
   });
 
+  // Shorter than this isn't sent (the recorder refuses it too).
+  const tooShort = ms < 500;
+  const listening = phase === "paused" || phase === "kept";
+  const seconds = ms / 1000;
+  const bars = listening ? previewBars(levels) : levels.slice(-LIVE_BARS);
+  // Bars before this one have been played.
+  const played = listening && seconds ? Math.round((position / seconds) * bars.length) : 0;
   const round = "flex h-10 w-10 shrink-0 items-center justify-center rounded-full";
   return (
     <div className="flex min-h-15.5 items-center gap-2 px-4 py-2.5" role="group" aria-label="Recording a voice message">
@@ -267,38 +350,59 @@ function VoiceBar({
           <TrashIcon size={22} />
         </span>
       </button>
-      <span className="flex shrink-0 items-center gap-2 text-[15px] text-(--text-primary) tabular-nums" aria-live="off">
+      {listening ? (
+        <button
+          type="button"
+          onClick={() => void togglePlay()}
+          disabled={sending}
+          aria-label={playing ? "Pause" : "Listen"}
+          title={playing ? "Pause" : "Listen"}
+          className={`${round} hover:bg-(--hover-bg) disabled:opacity-50`}
+        >
+          <span className="text-(--icon)">{playing ? <PauseIcon size={20} /> : <PlayIcon size={20} />}</span>
+        </button>
+      ) : (
         <span
           aria-hidden
-          className={["h-2.5 w-2.5 rounded-full bg-(--danger)", started && !paused ? "animate-pulse" : "opacity-60"].join(" ")}
+          className={["mx-1 h-2.5 w-2.5 shrink-0 rounded-full bg-(--danger)", recording ? "animate-pulse" : "opacity-60"].join(" ")}
         />
-        {formatVoiceDuration(ms / 1000)}
+      )}
+      <span className="shrink-0 text-[15px] text-(--text-primary) tabular-nums" aria-live="off">
+        {formatVoiceDuration(playing || position ? position : seconds)}
       </span>
-      <div className="flex h-8 max-w-[480px] min-w-0 flex-1 items-center justify-end gap-0.75 overflow-hidden" aria-hidden>
-        {levels.map((level, i) => (
+      <div
+        className={[
+          "flex h-8 min-w-0 flex-1 items-center gap-0.75 overflow-hidden",
+          listening ? "max-w-[300px] justify-between" : "max-w-[480px] justify-end",
+        ].join(" ")}
+        aria-hidden
+      >
+        {bars.map((level, i) => (
           <span
-            key={levels.length - i}
-            className={`w-0.75 shrink-0 rounded-full ${paused ? "bg-(--text-secondary)" : "bg-(--accent)"}`}
+            key={listening ? i : levels.length - bars.length + i}
+            className={`w-0.75 shrink-0 rounded-full ${!listening || i < played ? "bg-(--accent)" : "bg-(--text-secondary) opacity-60"}`}
             style={{ height: Math.round(3 + level * 25) }}
           />
         ))}
       </div>
-      <button
-        type="button"
-        onClick={togglePause}
-        disabled={!started || sending}
-        aria-label={paused ? "Resume recording" : "Pause recording"}
-        title={paused ? "Resume" : "Pause"}
-        className={`${round} hover:bg-(--hover-bg) disabled:opacity-50`}
-      >
-        <span className="text-(--danger)">{paused ? <MicIcon size={22} /> : <PauseIcon size={20} />}</span>
-      </button>
+      {phase === "kept" ? null : (
+        <button
+          type="button"
+          onClick={togglePause}
+          disabled={phase === "starting" || sending}
+          aria-label={phase === "paused" ? "Resume recording" : "Pause recording"}
+          title={phase === "paused" ? "Resume" : "Pause"}
+          className={`${round} hover:bg-(--hover-bg) disabled:opacity-50`}
+        >
+          <span className="text-(--danger)">{phase === "paused" ? <MicIcon size={22} /> : <PauseIcon size={20} />}</span>
+        </button>
+      )}
       <button
         type="button"
         onClick={() => void send()}
-        disabled={!started || sending}
-        aria-label={sending ? "Sending" : "Send voice message"}
-        title="Send (Enter)"
+        disabled={phase === "starting" || sending || tooShort}
+        aria-label={sending ? "Sending" : phase === "kept" ? "Send again" : "Send voice message"}
+        title={phase === "kept" ? "Send again (Enter)" : "Send (Enter)"}
         className={`${round} bg-(--accent) hover:brightness-95 disabled:opacity-50`}
       >
         <span className="text-white">{sending ? <Spinner size={20} /> : <SendIcon size={22} />}</span>

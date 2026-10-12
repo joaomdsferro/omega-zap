@@ -108,10 +108,11 @@ WhatsApp only, for now.
   server is asked for again from the phone that sent it.
 - **Albums**: four or more photos in a row from the same person show as one grid, as on WhatsApp.
 - **Sending files**: press **+**, drop files on the conversation, or paste a picture. Up to 100 MB.
-- **Voice messages** (WhatsApp): the microphone button records from your default microphone, with the
-  time and a live waveform. Pause and go on, **Escape** or the bin throws it away, **Enter** or the
-  send button sends it. The chat sees "recording audio…" meanwhile. Leaving the chat throws the
-  recording away.
+- **Voice messages** (WhatsApp): the microphone button records, with the time and a live waveform.
+  Pause to listen back, then go on or send; **Escape** or the bin throws it away, **Enter** or the
+  send button sends it. A send that fails keeps the recording, to send again. The chat sees
+  "recording audio…" meanwhile. Leaving the chat throws the recording away. **Settings → Voice
+  messages** picks the microphone (the system's by default; an unplugged one falls back to it).
 - **Stickers** (WhatsApp): the emoji panel's **Stickers** tab has Recent (what you sent, here or on
   the phone), Favorites (in sync with the phone both ways) and your packs. **+** (or **Ctrl+V** with the tab open) turns a picture or
   GIF into a sticker, makes a pack of your own, or adds packs from WhatsApp's sticker store. Packs
