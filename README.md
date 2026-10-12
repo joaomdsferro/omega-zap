@@ -72,7 +72,7 @@ Windows and macOS builds are not available yet.
 | Polls (voting), locations and contact cards | ✅ | ❌ |
 | Clear and delete chats | ✅ | on this computer |
 | Block, exit groups, edit groups and manage members | ✅ | ❌ |
-| Recording voice messages | ❌ | ❌ |
+| Recording voice messages | ✅ | ❌ |
 
 Both accounts can be used side by side or merged into one chat list. The interface looks like
 WhatsApp Web by default and also comes in Omega Zap's own themes. See [all features](docs/features.md).

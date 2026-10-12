@@ -868,9 +868,11 @@ impl WaManager {
                     file_length: Some(upload.file_length),
                     media_key_timestamp: Some(upload.media_key_timestamp),
                     streaming_sidecar: upload.streaming_sidecar.clone(),
-                    mimetype: Some(mime.clone()),
+                    // A voice message keeps its codec, as the phone sends it.
+                    mimetype: Some(if file.voice { file.mime.clone() } else { mime.clone() }),
                     seconds: file.seconds,
-                    ptt: Some(false),
+                    ptt: Some(file.voice),
+                    waveform: (file.voice && !file.waveform.is_empty()).then(|| file.waveform.clone()),
                     context_info,
                     ..Default::default()
                 })

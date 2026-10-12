@@ -17,6 +17,7 @@ mod sticker_image;
 mod store;
 mod tray;
 mod vault;
+mod voice;
 mod wa;
 
 use std::sync::Arc;
@@ -236,6 +237,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(notify::Shown::default())
         .manage(dropped::Dropped::default())
+        .manage(voice::Recorder::default())
         .on_window_event(|window, event| {
             dropped::on_window_event(window, event);
             tray::on_window_event(window, event);
@@ -376,6 +378,10 @@ pub fn run() {
             wa::commands::wa_add_to_pack,
             wa::commands::wa_remove_from_pack,
             wa::commands::wa_send_gif,
+            wa::commands::wa_send_voice,
+            voice::voice_start,
+            voice::voice_pause,
+            voice::voice_cancel,
             wa::commands::wa_send_recent_gif,
             wa::commands::wa_send_klipy_sticker,
             wa::commands::wa_add_klipy_sticker,

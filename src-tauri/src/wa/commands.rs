@@ -394,6 +394,32 @@ pub fn wa_remove_from_pack(mgr: Mgr<'_>, pack_id: String, id: String) -> Result<
     mgr.remove_from_pack(&pack_id, &id)
 }
 
+/// Sends the voice message being recorded.
+#[tauri::command]
+pub async fn wa_send_voice(
+    mgr: Mgr<'_>,
+    recorder: State<'_, crate::voice::Recorder>,
+    chat_id: String,
+    reply_to: Option<String>,
+) -> Result<MessageDto, String> {
+    let recording = crate::voice::finish(&recorder).await?;
+    let file = crate::account::OutgoingFile {
+        chat_id,
+        name: "voice.ogg".into(),
+        mime: "audio/ogg; codecs=opus".into(),
+        caption: None,
+        reply_to,
+        width: None,
+        height: None,
+        seconds: Some(recording.seconds),
+        thumbnail: None,
+        forwarded: 0,
+        voice: true,
+        waveform: recording.waveform,
+    };
+    mgr.send_file(file, recording.ogg).await
+}
+
 #[tauri::command]
 pub async fn wa_send_gif(
     mgr: Mgr<'_>,

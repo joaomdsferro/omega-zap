@@ -1310,6 +1310,7 @@ function Shell() {
         canAttach={Boolean(selectedBackend?.sendFile)}
         onSendMedia={sendMedia}
         stickers={selectedBackend?.stickers}
+        voice={selectedBackend?.voice}
         onError={setError}
         loadMedia={loadMedia}
         openMedia={openMedia}

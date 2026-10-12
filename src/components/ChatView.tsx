@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Chat, Contact, GroupInfo as Group, GroupMember, MemberChange, Message, OutgoingLink, OutgoingMedia, Person, PersonDetails, PinNote, Pins, StarredMessage, StickerLibrary, StickerShelf, TypingState } from "../backend";
+import type { Chat, Contact, GroupInfo as Group, GroupMember, MemberChange, Message, OutgoingLink, OutgoingMedia, Person, PersonDetails, PinNote, Pins, StarredMessage, StickerLibrary, StickerShelf, TypingState, VoiceRecorder } from "../backend";
 import { ContactInfo } from "./ContactInfo";
 import { GroupInfo } from "./GroupInfo";
 import { listenForFileDrops } from "../lib/dropped";
@@ -45,6 +45,8 @@ interface ChatViewProps {
   onSendMedia?: (item: OutgoingMedia, replyTo?: string) => Promise<void>;
   /** The account's stickers, for the panel and for stickers' own actions in messages. */
   stickers?: StickerShelf;
+  /** Records voice messages, sent through `onSendMedia`. */
+  voice?: VoiceRecorder;
   /** Reports something that went wrong, such as a dropped file that can't be read. */
   onError?: (message: string) => void;
   /** Where to load a message's attachment from, when the account can fetch it. */
@@ -114,7 +116,7 @@ interface ChatViewProps {
   pinsTick?: number;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onSendMedia, stickers, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, onVote, onMessageNumber, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onBlock, onClearChat, onDeleteChat, onExitGroup, onEditGroup, onChangeMembers, loadContacts, groupTick, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onSendMedia, stickers, voice, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, onVote, onMessageNumber, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onBlock, onClearChat, onDeleteChat, onExitGroup, onEditGroup, onChangeMembers, loadContacts, groupTick, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
   const [personId, setPersonId] = useState<string | null>(null);
   const closePerson = useCallback(() => setPersonId(null), []);
   const loadShownPerson = useCallback(() => loadPerson!(personId!), [loadPerson, personId]);
@@ -997,6 +999,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
         onSend={send}
         onSendMedia={onSendMedia ? sendMedia : undefined}
         stickers={stickers}
+        voice={onSendMedia ? voice : undefined}
         onError={onError}
         onTyping={onTyping}
       />

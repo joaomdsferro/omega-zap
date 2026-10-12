@@ -441,7 +441,27 @@ export type OutgoingMedia =
   /** A sticker found on KLIPY. */
   | { kind: "found-sticker"; pick: StickerPick }
   | { kind: "gif"; pick: GifPick }
-  | { kind: "recent-gif"; id: string };
+  | { kind: "recent-gif"; id: string }
+  /** The voice message being recorded with `Backend.voice`. */
+  | { kind: "voice" };
+
+/** How a voice recording is going: its length so far, and how loud the last moment was (0–1). */
+export interface VoiceLevel {
+  ms: number;
+  level: number;
+}
+
+/** Records voice messages from the microphone, one at a time; sent with `sendMedia({ kind: "voice" })`. */
+export interface VoiceRecorder {
+  start(): Promise<void>;
+  pause(paused: boolean): Promise<void>;
+  /** Throws the recording away. */
+  cancel(): Promise<void>;
+  /** Tells how the recording goes, about every 100 ms; returns the way to stop listening. */
+  onLevel(listener: (level: VoiceLevel) => void): () => void;
+  /** Tells when the microphone failed mid-recording, which ends it. */
+  onError(listener: (message: string) => void): () => void;
+}
 
 /** A sticker in the library, or the one in a message. */
 export type StickerTarget = { id: string } | { chatId: string; messageId: string };
@@ -493,6 +513,8 @@ export interface ChatBackend {
   sendMedia?(chatId: string, item: OutgoingMedia, replyTo?: string): Promise<Message>;
   /** Stickers kept to send; absent where stickers can't be sent. */
   readonly stickers?: StickerShelf;
+  /** Records voice messages; absent where they can't be sent. */
+  readonly voice?: VoiceRecorder;
   /** Uploads a file and sends it, with `caption` under it. */
   sendFile?(chatId: string, file: File, caption?: string, replyTo?: string, forwarded?: number): Promise<Message>;
   /**

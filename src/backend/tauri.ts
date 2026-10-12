@@ -33,6 +33,7 @@ import type {
   ReactionCount,
   StarredMessage,
   StickerShelf,
+  VoiceRecorder,
   OutgoingMedia,
   TypingState,
 } from "./types";
@@ -276,6 +277,7 @@ export class TauriBackend implements ChatBackend {
   changeMembers?: (id: string, change: MemberChange, members: string[]) => Promise<GroupInfo>;
   sendMedia?: (chatId: string, item: OutgoingMedia, replyTo?: string) => Promise<Message>;
   stickers?: StickerShelf;
+  voice?: VoiceRecorder;
 
   constructor(readonly account: AccountId) {
     this.prefix = COMMAND_PREFIX[account];
@@ -308,7 +310,20 @@ export class TauriBackend implements ChatBackend {
             return toMessage(await invoke<RawMessage>("wa_send_gif", { chatId, pick: item.pick, replyTo: reply }));
           case "recent-gif":
             return toMessage(await invoke<RawMessage>("wa_send_recent_gif", { chatId, id: item.id, replyTo: reply }));
+          case "voice":
+            return toMessage(await invoke<RawMessage>("wa_send_voice", { chatId, replyTo: reply }));
         }
+      };
+      const subscribe = <T,>(event: string, listener: (payload: T) => void) => {
+        const pending = listen<T>(event, (e) => listener(e.payload));
+        return () => void pending.then((unlisten) => unlisten());
+      };
+      this.voice = {
+        start: () => invoke("voice_start"),
+        pause: (paused) => invoke("voice_pause", { paused }),
+        cancel: () => invoke("voice_cancel"),
+        onLevel: (listener) => subscribe("voice://level", listener),
+        onError: (listener) => subscribe("voice://error", listener),
       };
       const target = (t: { id: string } | { chatId: string; messageId: string }) =>
         "id" in t ? { id: t.id, chatId: null, messageId: null } : { id: null, chatId: t.chatId, messageId: t.messageId };

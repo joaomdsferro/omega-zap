@@ -34,6 +34,8 @@ export type {
   StickerPack,
   StickerLibrary,
   StickerShelf,
+  VoiceLevel,
+  VoiceRecorder,
   StickerTarget,
   StorePack,
   GifPick,

@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { AccountId } from "../accounts/accounts";
-import type { LinkPreview, OutgoingLink, OutgoingMedia, ReplyQuote, StickerShelf, TypingState } from "../backend";
+import type { LinkPreview, OutgoingLink, OutgoingMedia, ReplyQuote, StickerShelf, TypingState, VoiceRecorder } from "../backend";
 import { Emoji } from "../lib/emoji";
 import { emojiForShortcode, searchEmoji } from "../lib/emojiSearch";
 import { SHORTCUTS, matches } from "../lib/shortcuts";
-import { formatFileSize } from "../lib/format";
+import { formatFileSize, formatVoiceDuration } from "../lib/format";
 import { URL_PATTERN, fetchLinkPreview } from "../lib/links";
 import { FormattedLine } from "../lib/markup";
 import { outgoingLink } from "../lib/outgoing";
 import { useSettings } from "../settings/settings";
-import { CloseIcon, FileIcon, MicIcon, PlusIcon, SendIcon, SmileIcon } from "./Icons";
+import { CloseIcon, FileIcon, MicIcon, PauseIcon, PlusIcon, SendIcon, SmileIcon, TrashIcon } from "./Icons";
 import { MediaPanel } from "./MediaPanel";
 import { MessageInput, type MessageInputHandle } from "./MessageInput";
 
@@ -36,6 +36,8 @@ interface ComposerProps {
   /** Sends a sticker or GIF, answering `replyTo`; absent where they can't be sent. */
   onSendMedia?: (item: OutgoingMedia) => Promise<void>;
   stickers?: StickerShelf;
+  /** Records voice messages, sent through `onSendMedia`; absent where they can't be. */
+  voice?: VoiceRecorder;
   onError?: (message: string) => void;
 }
 
@@ -136,6 +138,175 @@ function PendingFile({ file, state, onRemove }: { file: File; state?: "sending" 
   );
 }
 
+/** Bars kept of a recording's live waveform: enough for a wide window. */
+const LIVE_BARS = 120;
+
+/**
+ * Recording a voice message, in place of the text box: throw it away, the
+ * time and loudness so far, pause or go on, send.
+ */
+function VoiceBar({
+  chatId,
+  voice,
+  onSend,
+  onDone,
+  onTyping,
+  onError,
+}: {
+  chatId: string;
+  voice: VoiceRecorder;
+  onSend: () => Promise<void>;
+  /** The recording ended: sent, thrown away or failed. */
+  onDone: () => void;
+  onTyping?: (chatId: string, state: TypingState) => void;
+  onError?: (message: string) => void;
+}) {
+  const [started, setStarted] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [ms, setMs] = useState(0);
+  const [levels, setLevels] = useState<number[]>([]);
+  // Whether the recording still has to be thrown away when this goes.
+  const live = useRef(true);
+  const done = useRef(onDone);
+  done.current = onDone;
+  const fail = useRef(onError);
+  fail.current = onError;
+
+  useEffect(() => {
+    live.current = true;
+    const stopLevels = voice.onLevel((update) => {
+      setMs(update.ms);
+      setLevels((prev) => [...prev.slice(1 - LIVE_BARS), update.level]);
+    });
+    const stopErrors = voice.onError((message) => {
+      live.current = false;
+      fail.current?.(message);
+      done.current();
+    });
+    voice.start().then(
+      () => setStarted(true),
+      (e) => {
+        live.current = false;
+        fail.current?.(String(e));
+        done.current();
+      },
+    );
+    return () => {
+      stopLevels();
+      stopErrors();
+      // Leaving the chat throws the recording away.
+      if (live.current) void voice.cancel();
+    };
+  }, [voice]);
+
+  // The chat sees "recording audio…" while it goes on.
+  useEffect(() => {
+    if (!onTyping || !started || paused || sending) return;
+    onTyping(chatId, "recording");
+    const timer = window.setInterval(() => onTyping(chatId, "recording"), TYPING_REPEAT_MS);
+    return () => {
+      window.clearInterval(timer);
+      onTyping(chatId, "paused");
+    };
+  }, [chatId, onTyping, started, paused, sending]);
+
+  function discard() {
+    live.current = false;
+    void voice.cancel();
+    onDone();
+  }
+
+  async function send() {
+    if (!started || sending) return;
+    setSending(true);
+    live.current = false;
+    try {
+      await onSend();
+    } catch (e) {
+      onError?.(String(e));
+    }
+    onDone();
+  }
+
+  function togglePause() {
+    const next = !paused;
+    setPaused(next);
+    void voice.pause(next);
+  }
+
+  // Escape throws it away, Enter sends it.
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || document.querySelector('[aria-modal="true"], [role="menu"]')) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        discard();
+      } else if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        void send();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
+
+  const round = "flex h-10 w-10 shrink-0 items-center justify-center rounded-full";
+  return (
+    <div className="flex min-h-15.5 items-center gap-2 px-4 py-2.5" role="group" aria-label="Recording a voice message">
+      <button
+        type="button"
+        onClick={discard}
+        disabled={sending}
+        aria-label="Discard"
+        title="Discard (Esc)"
+        className={`${round} ml-auto hover:bg-(--hover-bg) disabled:opacity-50`}
+      >
+        {/* Colours go on the icon: buttons inherit theirs (see tokens.css). */}
+        <span className="text-(--icon)">
+          <TrashIcon size={22} />
+        </span>
+      </button>
+      <span className="flex shrink-0 items-center gap-2 text-[15px] text-(--text-primary) tabular-nums" aria-live="off">
+        <span
+          aria-hidden
+          className={["h-2.5 w-2.5 rounded-full bg-(--danger)", started && !paused ? "animate-pulse" : "opacity-60"].join(" ")}
+        />
+        {formatVoiceDuration(ms / 1000)}
+      </span>
+      <div className="flex h-8 max-w-[480px] min-w-0 flex-1 items-center justify-end gap-0.75 overflow-hidden" aria-hidden>
+        {levels.map((level, i) => (
+          <span
+            key={levels.length - i}
+            className={`w-0.75 shrink-0 rounded-full ${paused ? "bg-(--text-secondary)" : "bg-(--accent)"}`}
+            style={{ height: Math.round(3 + level * 25) }}
+          />
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={togglePause}
+        disabled={!started || sending}
+        aria-label={paused ? "Resume recording" : "Pause recording"}
+        title={paused ? "Resume" : "Pause"}
+        className={`${round} hover:bg-(--hover-bg) disabled:opacity-50`}
+      >
+        <span className="text-(--danger)">{paused ? <MicIcon size={22} /> : <PauseIcon size={20} />}</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => void send()}
+        disabled={!started || sending}
+        aria-label={sending ? "Sending" : "Send voice message"}
+        title="Send (Enter)"
+        className={`${round} bg-(--accent) hover:brightness-95 disabled:opacity-50`}
+      >
+        <span className="text-white">{sending ? <Spinner size={20} /> : <SendIcon size={22} />}</span>
+      </button>
+    </div>
+  );
+}
+
 /** How long typing has to pause before a link in it is looked up. */
 const LINK_PAUSE_MS = 400;
 /** Suggestions shown for ":name". */
@@ -164,12 +335,14 @@ function useTypedLink(text: string, enabled: boolean) {
   return found?.url === url ? { url, preview: found.preview, loading: false } : { url, preview: null, loading: true };
 }
 
-export function Composer({ chatId, account, disabled, disabledReason, replyTo, onCancelReply, onSend, files = [], onAddFiles, onRemoveFile, onTyping, onEditLast, onSendMedia, stickers, onError }: ComposerProps) {
+export function Composer({ chatId, account, disabled, disabledReason, replyTo, onCancelReply, onSend, files = [], onAddFiles, onRemoveFile, onTyping, onEditLast, onSendMedia, stickers, voice, onError }: ComposerProps) {
   const { settings } = useSettings();
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
   const [sending, setSending] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  // Recording a voice message, which puts its bar in place of the text box.
+  const [recording, setRecording] = useState(false);
   const input = useRef<MessageInputHandle>(null);
   const picker = useRef<HTMLInputElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -181,6 +354,7 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
   useEffect(() => {
     input.current?.setText("");
     setEmojiOpen(false);
+    setRecording(false);
     input.current?.focus();
   }, [chatId]);
 
@@ -416,7 +590,21 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
           ))}
         </ul>
       ) : null}
-      <form onSubmit={onSubmit} className="flex min-h-15.5 items-end gap-1 px-4 py-2.5">
+      {recording && voice && onSendMedia ? (
+        <VoiceBar
+          key={chatId}
+          chatId={chatId}
+          voice={voice}
+          onSend={() => onSendMedia({ kind: "voice" })}
+          onDone={() => {
+            setRecording(false);
+            requestAnimationFrame(() => input.current?.focus());
+          }}
+          onTyping={onTyping}
+          onError={onError}
+        />
+      ) : null}
+      <form onSubmit={onSubmit} className={`min-h-15.5 items-end gap-1 px-4 py-2.5 ${recording ? "hidden" : "flex"}`}>
         <button
           ref={emojiButton}
           type="button"
@@ -483,10 +671,15 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
         ) : (
           <button
             type="button"
-            disabled
-            className="mb-0.75 ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-(--icon) disabled:opacity-50"
+            onClick={() => {
+              typing.stop();
+              setEmojiOpen(false);
+              setRecording(true);
+            }}
+            disabled={disabled || !voice || !onSendMedia}
+            className="mb-0.75 ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-(--icon) transition-colors hover:text-(--accent) disabled:opacity-50"
             aria-label="Record voice message"
-            title="Voice messages are not available yet"
+            title={voice && onSendMedia ? "Record voice message" : "Voice messages can't be sent here yet"}
           >
             <MicIcon size={24} />
           </button>

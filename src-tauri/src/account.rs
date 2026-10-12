@@ -143,6 +143,12 @@ pub struct OutgoingFile {
     /// Sent on from another chat: the forwarding score it goes out with.
     #[serde(default)]
     pub forwarded: u32,
+    /// A voice message recorded here, rather than an audio file.
+    #[serde(default)]
+    pub voice: bool,
+    /// A voice message's loudness over its length, 0–100.
+    #[serde(default)]
+    pub waveform: Vec<u8>,
 }
 
 /// The card sent with a text that has a link in it, as the UI made it.
