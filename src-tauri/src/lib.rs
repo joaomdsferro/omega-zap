@@ -258,11 +258,7 @@ pub fn run() {
             account::move_old_data(&dir);
             if let Err(e) = vault::open(&dir) {
                 log::error!("{e}");
-                let _ = notify_rust::Notification::new()
-                    .appname("Omega Zap")
-                    .summary("Omega Zap could not open your messages")
-                    .body(&e)
-                    .show();
+                let _ = notify::plain("Omega Zap could not open your messages", &e, None);
                 std::process::exit(1);
             }
             // The chat stores first, before anything reads or saves them.

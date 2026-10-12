@@ -230,15 +230,32 @@ fn present(app: &AppHandle, shown: &Shown, note: Note, sound: bool) -> Result<()
     #[cfg(not(all(unix, not(target_os = "macos"))))]
     {
         let _ = (shown, key, account, chat_id, sound);
-        let mut notification = notify_rust::Notification::new();
-        notification.appname("Omega Zap").summary(&title).body(&body);
-        if let Some(path) = icon {
-            notification.icon(&path.to_string_lossy());
-        }
-        notification.show().map_err(|e| format!("Could not show a notification: {e}"))?;
+        plain(&title, &body, icon.as_deref())?;
     }
 
     Ok(())
+}
+
+/// A notification through notify-rust: nothing comes back from it.
+pub fn plain(title: &str, body: &str, icon: Option<&std::path::Path>) -> Result<(), String> {
+    // Without an app to show it as, notify-rust asks the user to pick one
+    // ("Where is use_default?"). Outside a bundle it shows as Terminal.
+    #[cfg(target_os = "macos")]
+    {
+        static APP: std::sync::Once = std::sync::Once::new();
+        APP.call_once(|| {
+            let app = if macos::available() { crate::account::IDENTIFIER } else { "com.apple.Terminal" };
+            if let Err(e) = notify_rust::set_application(app) {
+                log::warn!("notifications: {e}");
+            }
+        });
+    }
+    let mut notification = notify_rust::Notification::new();
+    notification.appname("Omega Zap").summary(title).body(body);
+    if let Some(path) = icon {
+        notification.icon(&path.to_string_lossy());
+    }
+    notification.show().map(drop).map_err(|e| format!("Could not show a notification: {e}"))
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
