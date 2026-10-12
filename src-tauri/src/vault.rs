@@ -1,8 +1,8 @@
 //! Encryption of what is kept on disk: the chat stores, downloaded files,
 //! profile pictures and the session databases.
 //!
-//! One random key, kept in the desktop's keyring (or, where there is none, in
-//! a file only we can read), and from it one key per file. A file is a header
+//! One random key, kept in the desktop's keyring or the macOS Keychain (or,
+//! where there is neither, in a file only we can read), and from it one key per file. A file is a header
 //! (magic and a random salt) and then 64 KiB chunks, each sealed with
 //! AES-256-GCM under its index, the last one marked as last: chunks cannot be
 //! reordered, dropped or cut short unnoticed, and a part of a video is read
@@ -82,6 +82,9 @@ pub fn open(dir: &Path) -> Result<&'static Vault, String> {
             if vault.open_bytes(&check).ok().as_deref() != Some(CHECK) {
                 return Err("The storage key does not open this data. Was the keyring reset?".into());
             }
+            if marker.store == KeyStore::File && keyring::TAKES_OVER_FILE {
+                move_to_keyring(dir, &marker_path, marker, &key);
+            }
             vault
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -105,6 +108,25 @@ pub fn open(dir: &Path) -> Result<&'static Vault, String> {
         Err(e) => return Err(format!("could not read {MARKER_FILE}: {e}")),
     };
     Ok(VAULT.get_or_init(|| vault))
+}
+
+/// Moves a key kept in a file into the keyring, where the file was only a
+/// fallback (macOS builds made before Keychain support). The file goes last,
+/// so a failure halfway leaves a key that still opens the data.
+fn move_to_keyring(dir: &Path, marker_path: &Path, marker: Marker, key: &[u8; 32]) {
+    if let Err(e) = keyring::save(key) {
+        log::warn!("the storage key stays in a file: {e}");
+        return;
+    }
+    let marker = Marker { store: KeyStore::Keyring, ..marker };
+    if let Err(e) = write_private(marker_path, &serde_json::to_vec(&marker).expect("the marker serializes")) {
+        log::warn!("could not save {MARKER_FILE}: {e}");
+        return;
+    }
+    match fs::remove_file(dir.join(KEY_FILE)) {
+        Ok(()) => log::info!("the storage key moved into the keyring"),
+        Err(e) => log::warn!("the storage key is in the keyring, but {KEY_FILE} stays: {e}"),
+    }
 }
 
 /// Seals, in the background, every file written before encryption under
@@ -577,6 +599,10 @@ mod keyring {
 
     const ATTRS: [(&str, &str); 2] = [("application", "rocks.omegazap.desktop"), ("purpose", "storage-key")];
 
+    /// A key in a file means the keyring was not there at the first start;
+    /// asking again at every start could block on a desktop without one.
+    pub const TAKES_OVER_FILE: bool = false;
+
     fn attrs() -> HashMap<&'static str, &'static str> {
         ATTRS.into_iter().collect()
     }
@@ -633,8 +659,44 @@ mod keyring {
     }
 }
 
-#[cfg(not(all(unix, not(target_os = "macos"))))]
+#[cfg(target_os = "macos")]
 mod keyring {
+    //! The login Keychain, as a generic password. The item trusts the app that
+    //! made it; a build signed differently (every unsigned build) is let in by
+    //! the user once, through the system's prompt.
+
+    use security_framework::passwords::{get_generic_password, set_generic_password};
+
+    const SERVICE: &str = "rocks.omegazap.desktop";
+    const ACCOUNT: &str = "storage-key";
+    /// errSecItemNotFound
+    const NOT_FOUND: i32 = -25300;
+
+    /// A key left in a file by an older build moves here.
+    pub const TAKES_OVER_FILE: bool = true;
+
+    pub fn load() -> Result<[u8; 32], String> {
+        match get_generic_password(SERVICE, ACCOUNT) {
+            Ok(secret) => secret.try_into().map_err(|_| "the storage key in the Keychain is damaged".into()),
+            Err(e) if e.code() == NOT_FOUND => Err("The storage key is missing from the Keychain.".into()),
+            Err(e) => Err(format!("Could not read the storage key from the Keychain: {e}")),
+        }
+    }
+
+    pub fn save(key: &[u8; 32]) -> Result<(), String> {
+        set_generic_password(SERVICE, ACCOUNT, key).map_err(|e| format!("the Keychain refused the key: {e}"))?;
+        // Read back, so a Keychain that silently drops it is not trusted.
+        match load() {
+            Ok(stored) if &stored == key => Ok(()),
+            _ => Err("the Keychain did not keep the key".into()),
+        }
+    }
+}
+
+#[cfg(not(unix))]
+mod keyring {
+    pub const TAKES_OVER_FILE: bool = false;
+
     pub fn load() -> Result<[u8; 32], String> {
         Err("There is no keyring support on this system.".into())
     }
