@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { CSSProperties, KeyboardEvent, PointerEvent, RefObject } from "react";
 import type { Attachment, Message } from "../backend";
-import { formatFileSize } from "../lib/format";
+import { formatFileSize, formatVoiceDuration } from "../lib/format";
 import { AudioPlayer } from "./AudioPlayer";
-import { FileIcon, PlayIcon } from "./Icons";
+import { ExpandIcon, FileIcon, MuteIcon, PauseIcon, PlayIcon, VolumeIcon } from "./Icons";
 
 export type LoadMedia = (message: Message, index?: number) => Promise<string>;
 
@@ -94,6 +94,162 @@ export function GifVideo({ src, className, wrapperClassName, style, onError }: {
         />
       ))}
     </span>
+  );
+}
+
+/** Arrow keys on a video's timeline move this many seconds. */
+const VIDEO_KEY_STEP = 5;
+
+/**
+ * A lone video playing in its bubble, with controls of its own: WebKitGTK's
+ * scatter to the corners and drop the timeline at this size.
+ */
+function InlineVideo({ src, onError, onOpen }: { src: string; onError: () => void; onOpen?: () => void }) {
+  const video = useRef<HTMLVideoElement>(null);
+  const track = useRef<HTMLDivElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [time, setTime] = useState(0);
+  const [seconds, setSeconds] = useState(0);
+  const [muted, setMuted] = useState(false);
+
+  function paint(at: number) {
+    const share = seconds ? Math.min(1, at / seconds) : 0;
+    track.current?.style.setProperty("--played", `${share * 100}%`);
+  }
+
+  useLayoutEffect(() => {
+    if (!playing) paint(time);
+  });
+
+  // While playing, the timeline fills every frame; the clock ticks with `timeupdate`.
+  useEffect(() => {
+    if (!playing) return;
+    let frame = requestAnimationFrame(function step() {
+      if (video.current) paint(video.current.currentTime);
+      frame = requestAnimationFrame(step);
+    });
+    return () => cancelAnimationFrame(frame);
+  });
+
+  function toggle() {
+    const el = video.current;
+    if (!el) return;
+    if (el.paused) void el.play().catch(() => {});
+    else el.pause();
+  }
+
+  function seekTo(at: number) {
+    const el = video.current;
+    if (!el || !seconds) return;
+    el.currentTime = Math.min(seconds, Math.max(0, at));
+    setTime(el.currentTime);
+    paint(el.currentTime);
+  }
+
+  function seekFromPointer(event: PointerEvent<HTMLDivElement>) {
+    const box = event.currentTarget.getBoundingClientRect();
+    seekTo(((event.clientX - box.left) / box.width) * seconds);
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const at = video.current?.currentTime ?? time;
+    const to =
+      event.key === "ArrowRight" ? at + VIDEO_KEY_STEP
+      : event.key === "ArrowLeft" ? at - VIDEO_KEY_STEP
+      : event.key === "Home" ? 0
+      : event.key === "End" ? seconds
+      : null;
+    if (to === null) return;
+    event.preventDefault();
+    seekTo(to);
+  }
+
+  const controlClass = "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white hover:bg-white/15";
+
+  return (
+    <div className="group relative h-full w-full bg-black">
+      <video
+        ref={video}
+        src={src}
+        onError={onError}
+        autoPlay
+        playsInline
+        onClick={toggle}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+        onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)}
+        onDurationChange={(event) => {
+          const length = event.currentTarget.duration;
+          setSeconds(Number.isFinite(length) ? length : 0);
+        }}
+        onVolumeChange={(event) => setMuted(event.currentTarget.muted)}
+        className="block h-full w-full cursor-pointer object-contain"
+      />
+      <div
+        className={[
+          "absolute inset-x-0 bottom-0 bg-linear-to-t from-black/70 to-transparent px-2 pt-6 pb-1 transition-opacity",
+          playing ? "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" : "",
+        ].join(" ")}
+      >
+        <div
+          ref={track}
+          role="slider"
+          tabIndex={0}
+          aria-label="Position"
+          aria-valuemin={0}
+          aria-valuemax={Math.round(seconds)}
+          aria-valuenow={Math.round(time)}
+          aria-valuetext={`${formatVoiceDuration(time)} of ${formatVoiceDuration(seconds)}`}
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            seekFromPointer(event);
+          }}
+          onPointerMove={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) seekFromPointer(event);
+          }}
+          onKeyDown={onKeyDown}
+          className="relative flex h-3 touch-none items-center rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-(--focus-ring)"
+        >
+          <span className="h-1 w-full rounded-full bg-white/35" aria-hidden />
+          <span className="absolute left-0 h-1 rounded-full bg-white" style={{ width: "var(--played, 0%)" }} aria-hidden />
+          <span
+            className="absolute h-3 w-3 -translate-x-1/2 rounded-full bg-white shadow-sm"
+            style={{ left: "var(--played, 0%)" }}
+            aria-hidden
+          />
+        </div>
+        <div className="flex items-center gap-1">
+          <button type="button" onClick={toggle} aria-label={playing ? "Pause" : "Play"} className={controlClass}>
+            {playing ? <PauseIcon size={18} /> : <PlayIcon size={18} />}
+          </button>
+          <span className="flex-1 text-[11px] tabular-nums text-white/90">
+            {formatVoiceDuration(time)} / {formatVoiceDuration(seconds)}
+          </span>
+          <button
+            type="button"
+            onClick={() => video.current && (video.current.muted = !video.current.muted)}
+            aria-label={muted ? "Unmute" : "Mute"}
+            className={controlClass}
+          >
+            {muted ? <MuteIcon size={18} /> : <VolumeIcon size={18} />}
+          </button>
+          {onOpen ? (
+            <button
+              type="button"
+              onClick={() => {
+                video.current?.pause();
+                onOpen();
+              }}
+              aria-label="Open in viewer"
+              className={controlClass}
+            >
+              <ExpandIcon size={16} />
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -195,16 +351,7 @@ function Tile({ message, index, attachment, loadMedia, onOpen, single, more }: T
 
   let body;
   if (ready && isVideo && playing && single) {
-    body = (
-      <video
-        src={url}
-        onError={() => setBroken(true)}
-        controls
-        autoPlay
-        playsInline
-        className="block h-full w-full bg-black object-contain"
-      />
-    );
+    body = <InlineVideo src={url} onError={() => setBroken(true)} onOpen={onOpen} />;
   } else if (ready && video && attachment.kind === "gif") {
     body = (
       <GifVideo

@@ -297,6 +297,19 @@ export const MuteIcon = (p: IconProps) => (
   </Svg>
 );
 
+export const VolumeIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M11 5 6 9H3v6h3l5 4zM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" />
+  </Svg>
+);
+
+/** Two corners pulling apart: show bigger. */
+export const ExpandIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7" />
+  </Svg>
+);
+
 export const FileIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
