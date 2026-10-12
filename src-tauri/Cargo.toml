@@ -1,6 +1,6 @@
 [package]
 name = "omega-zap"
-version = "0.0.2"
+version = "0.0.3"
 description = "WhatsApp and Signal, native, with a modern UI"
 authors = ["João Ferro <joaoferro.business@gmail.com>"]
 edition = "2024"
