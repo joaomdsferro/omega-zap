@@ -7,7 +7,8 @@ import { isTauri } from "../lib/platform";
 import { useSettings } from "../settings/settings";
 import { CloseIcon, PlayIcon } from "./Icons";
 
-function openExternal(url: string) {
+/** Opens a page in the system browser, or a new tab in a plain browser. */
+export function openExternal(url: string) {
   if (isTauri) void openUrl(url);
   else window.open(url, "_blank", "noopener");
 }

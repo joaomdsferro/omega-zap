@@ -1,6 +1,10 @@
 import { matches } from "../lib/search";
+import { hueFor, initialsFor } from "../lib/avatar";
 import { DEMO_CHATS, DEMO_MESSAGES } from "../data/demo-chats";
-import type { BackendEvent, Chat, ChatBackend, Contact, CustomList, Message, OutgoingLink, StarredMessage } from "./types";
+import type { BackendEvent, Chat, ChatBackend, Contact, CustomList, GroupInfo, MemberChange, Message, OutgoingLink, PinNote, Pins, StarredMessage } from "./types";
+
+/** A demo pin or unpin; pins that were undone are marked so. */
+type MockPin = PinNote & { unpinned?: boolean };
 
 function cloneChats(): Chat[] {
   return DEMO_CHATS.map((c) => ({ ...c, account: "whatsapp" }));
@@ -46,6 +50,122 @@ export class MockBackend implements ChatBackend {
 
   async getMessages(chatId: string): Promise<Message[]> {
     return [...(this.messages.get(chatId) ?? [])];
+  }
+
+  async votePoll(chatId: string, messageId: string, picked: number[]): Promise<Message> {
+    const list = this.messages.get(chatId) ?? [];
+    const at = list.findIndex((m) => m.id === messageId);
+    const poll = list[at]?.poll;
+    if (!poll) throw new Error("That poll is gone.");
+    const options = poll.options.map((option, index) => {
+      const people = option.people.filter((p) => p !== "You");
+      const mine = picked.includes(index);
+      return { ...option, mine, people: mine ? ["You", ...people] : people };
+    });
+    const voters = new Set(options.flatMap((o) => o.people)).size;
+    list[at] = { ...list[at], poll: { ...poll, options, voters } };
+    return list[at];
+  }
+
+  async editMessage(chatId: string, messageId: string, text: string): Promise<Message> {
+    const list = this.messages.get(chatId) ?? [];
+    const at = list.findIndex((m) => m.id === messageId);
+    if (at === -1) throw new Error("The message is no longer here.");
+    list[at] = { ...list[at], text, edited: true };
+    return list[at];
+  }
+
+  /** Demo groups as changed from here, by id. */
+  private groups = new Map<string, GroupInfo>();
+
+  /** Demo group info: whoever wrote in the group are its members. */
+  async groupInfo(id: string): Promise<GroupInfo> {
+    const changed = this.groups.get(id);
+    if (changed) return { ...changed, left: this.chats.find((c) => c.id === id)?.left };
+    const chat = this.chats.find((c) => c.id === id);
+    const name = chat?.name ?? "Group";
+    const authors = [...new Set((this.messages.get(id) ?? []).filter((m) => !m.fromMe).map((m) => m.author ?? "Someone"))];
+    const member = (who: string, isMe = false, admin = false) => ({
+      id: who,
+      name: who,
+      avatarHue: hueFor(who),
+      initials: initialsFor(who),
+      isMe,
+      admin,
+    });
+    return {
+      id,
+      account: "whatsapp",
+      name,
+      avatarHue: chat?.avatarHue ?? 0,
+      initials: chat?.initials ?? initialsFor(name),
+      members: authors.length + 1,
+      description: "Demo group.",
+      muted: Boolean(chat?.muted),
+      starred: 0,
+      mediaCount: 0,
+      recentMedia: [],
+      participants: [member("You", true, true), ...authors.map((who, i) => member(who, false, i === 0))],
+      isAdmin: true,
+      left: chat?.left,
+    };
+  }
+
+  async leaveGroup(id: string): Promise<void> {
+    this.update(id, { left: true });
+  }
+
+  async editGroup(id: string, { name, description }: { name?: string; description?: string }): Promise<GroupInfo> {
+    const group = await this.groupInfo(id);
+    const next = { ...group, name: name?.trim() || group.name, description: description === undefined ? group.description : description.trim() || undefined };
+    this.groups.set(id, next);
+    if (name) this.update(id, { name: next.name, initials: initialsFor(next.name) });
+    return next;
+  }
+
+  async changeMembers(id: string, change: MemberChange, members: string[]): Promise<GroupInfo> {
+    const group = await this.groupInfo(id);
+    let participants = group.participants;
+    if (change === "remove") participants = participants.filter((m) => !members.includes(m.id));
+    else if (change === "add") {
+      const known = new Set(participants.map((m) => m.id));
+      participants = [
+        ...participants,
+        ...members.filter((m) => !known.has(m)).map((m) => ({ id: m, name: m, avatarHue: hueFor(m), initials: initialsFor(m), isMe: false, admin: false })),
+      ];
+    } else participants = participants.map((m) => (members.includes(m.id) ? { ...m, admin: change === "promote" } : m));
+    const next = { ...group, participants, members: participants.length };
+    this.groups.set(id, next);
+    return next;
+  }
+
+  /** Pins by chat, the latest last; starts as the first two texts of each chat. */
+  private pins = new Map<string, MockPin[]>();
+
+  private pinsOf(chatId: string): MockPin[] {
+    let pins = this.pins.get(chatId);
+    if (!pins) {
+      const texts = (this.messages.get(chatId) ?? []).filter((m) => m.kind === "text" && !m.deleted).slice(0, 2);
+      pins = texts.map((m, i): MockPin => ({ messageId: m.id, at: m.sentAt, pinned: true, byMe: i === 0, by: i === 0 ? undefined : (m.author ?? "Them") }));
+      this.pins.set(chatId, pins);
+    }
+    return pins;
+  }
+
+  async pinnedMessages(chatId: string): Promise<Pins> {
+    const list = this.messages.get(chatId) ?? [];
+    const pins = this.pinsOf(chatId).filter((p) => p.pinned && !p.unpinned);
+    const messages = pins
+      .slice(-3)
+      .reverse()
+      .flatMap((p) => list.filter((m) => m.id === p.messageId));
+    return { messages, notes: this.pinsOf(chatId).map(({ unpinned: _, ...note }) => note) };
+  }
+
+  async pinMessage(chatId: string, messageId: string, secs: number | null): Promise<void> {
+    const pins = this.pinsOf(chatId);
+    for (const p of pins) if (p.messageId === messageId) p.unpinned = true;
+    pins.push({ messageId, at: new Date().toISOString(), pinned: secs !== null, byMe: true });
   }
 
   async markRead(chatId: string): Promise<void> {
@@ -109,6 +229,45 @@ export class MockBackend implements ChatBackend {
   async setFavorite(chatId: string, favorite: boolean): Promise<void> {
     if (favorite) this.favorites.add(chatId);
     else this.favorites.delete(chatId);
+    this.emit({ type: "chats-changed" });
+  }
+
+  async setMuted(chatId: string, muted: boolean): Promise<void> {
+    this.update(chatId, { muted });
+  }
+
+  async setArchived(chatId: string, archived: boolean): Promise<void> {
+    this.update(chatId, archived ? { archived, pinned: false } : { archived });
+  }
+
+  async setPinned(chatId: string, pinned: boolean): Promise<void> {
+    if (pinned && this.chats.filter((c) => c.pinned && !c.archived).length >= 3) {
+      throw new Error("You can only pin up to 3 chats.");
+    }
+    this.update(chatId, { pinned });
+  }
+
+  async setBlocked(id: string, blocked: boolean): Promise<void> {
+    this.update(id, { blocked });
+  }
+
+  async deleteChat(chatId: string): Promise<void> {
+    this.chats = this.chats.filter((c) => c.id !== chatId);
+    this.messages.delete(chatId);
+    this.emit({ type: "cleared", chatId });
+    this.emit({ type: "chats-changed" });
+  }
+
+  async clearChat(chatId: string, keepStarred: boolean): Promise<void> {
+    this.messages.set(chatId, (this.messages.get(chatId) ?? []).filter((m) => keepStarred && m.starred));
+    this.emit({ type: "cleared", chatId });
+    this.update(chatId, { lastMessage: "", unread: 0, markedUnread: false, cleared: true });
+  }
+
+  private update(chatId: string, patch: Partial<Chat>) {
+    const chat = this.chats.find((c) => c.id === chatId);
+    if (!chat) return;
+    Object.assign(chat, patch);
     this.emit({ type: "chats-changed" });
   }
 

@@ -46,6 +46,26 @@ pub fn wa_get_messages(mgr: Mgr<'_>, chat_id: String) -> Vec<MessageDto> {
 }
 
 #[tauri::command]
+pub fn wa_group_info(mgr: Mgr<'_>, id: String) -> crate::store::GroupInfoDto {
+    mgr.group_info(&id)
+}
+
+#[tauri::command]
+pub async fn wa_group_details(mgr: Mgr<'_>, id: String) -> Result<crate::store::GroupInfoDto, String> {
+    mgr.group_details(&id).await
+}
+
+#[tauri::command]
+pub fn wa_pinned_messages(mgr: Mgr<'_>, chat_id: String) -> crate::store::PinsDto {
+    mgr.pinned_messages(&chat_id)
+}
+
+#[tauri::command]
+pub async fn wa_pin_message(mgr: Mgr<'_>, chat_id: String, message_id: String, secs: Option<u32>) -> Result<(), String> {
+    mgr.pin_message(&chat_id, &message_id, secs).await
+}
+
+#[tauri::command]
 pub fn wa_mark_read(mgr: Mgr<'_>, chat_id: String) {
     mgr.mark_read(&chat_id);
 }
@@ -56,8 +76,78 @@ pub async fn wa_person_details(mgr: Mgr<'_>, id: String) -> Result<crate::store:
 }
 
 #[tauri::command]
-pub async fn wa_set_muted(mgr: Mgr<'_>, chat_id: String, muted: bool) -> Result<(), String> {
-    mgr.set_muted(&chat_id, muted).await
+pub async fn wa_set_muted(mgr: Mgr<'_>, chat_id: String, muted: bool, until_ms: Option<i64>) -> Result<(), String> {
+    mgr.set_muted(&chat_id, muted, until_ms).await
+}
+
+#[tauri::command]
+pub async fn wa_set_typing(mgr: Mgr<'_>, chat_id: String, state: String) -> Result<(), String> {
+    mgr.set_typing(&chat_id, &state).await
+}
+
+#[tauri::command]
+pub async fn wa_watch_presence(mgr: Mgr<'_>, chat_id: String) -> Result<(), String> {
+    mgr.watch_presence(&chat_id).await
+}
+
+#[tauri::command]
+pub async fn wa_privacy(mgr: Mgr<'_>) -> Result<super::PrivacyDto, String> {
+    mgr.privacy().await
+}
+
+#[tauri::command]
+pub async fn wa_set_privacy(mgr: Mgr<'_>, category: String, value: String) -> Result<(), String> {
+    mgr.set_privacy(&category, &value).await
+}
+
+#[tauri::command]
+pub async fn wa_set_archived(mgr: Mgr<'_>, chat_id: String, archived: bool) -> Result<(), String> {
+    mgr.set_archived(&chat_id, archived).await
+}
+
+#[tauri::command]
+pub async fn wa_leave_group(mgr: Mgr<'_>, id: String) -> Result<(), String> {
+    mgr.leave_group(&id).await
+}
+
+#[tauri::command]
+pub async fn wa_edit_group(
+    mgr: Mgr<'_>,
+    id: String,
+    name: Option<String>,
+    description: Option<String>,
+) -> Result<crate::store::GroupInfoDto, String> {
+    mgr.edit_group(&id, name, description).await
+}
+
+#[tauri::command]
+pub async fn wa_change_members(
+    mgr: Mgr<'_>,
+    id: String,
+    change: String,
+    members: Vec<String>,
+) -> Result<crate::store::GroupInfoDto, String> {
+    mgr.change_members(&id, &change, members).await
+}
+
+#[tauri::command]
+pub async fn wa_set_blocked(mgr: Mgr<'_>, id: String, blocked: bool) -> Result<(), String> {
+    mgr.set_blocked(&id, blocked).await
+}
+
+#[tauri::command]
+pub async fn wa_delete_chat(mgr: Mgr<'_>, chat_id: String) -> Result<(), String> {
+    mgr.delete_chat(&chat_id).await
+}
+
+#[tauri::command]
+pub async fn wa_clear_chat(mgr: Mgr<'_>, chat_id: String, keep_starred: bool) -> Result<(), String> {
+    mgr.clear_chat(&chat_id, keep_starred).await
+}
+
+#[tauri::command]
+pub async fn wa_set_pinned(mgr: Mgr<'_>, chat_id: String, pinned: bool) -> Result<(), String> {
+    mgr.set_pinned(&chat_id, pinned).await
 }
 
 #[tauri::command]
@@ -81,6 +171,16 @@ pub async fn wa_send_text(
 pub async fn wa_send_file(mgr: Mgr<'_>, request: tauri::ipc::Request<'_>) -> Result<MessageDto, String> {
     let (file, bytes) = crate::account::outgoing_file(&request)?;
     mgr.send_file(file, bytes).await
+}
+
+#[tauri::command]
+pub async fn wa_vote_poll(mgr: Mgr<'_>, chat_id: String, message_id: String, options: Vec<usize>) -> Result<MessageDto, String> {
+    mgr.vote_poll(&chat_id, &message_id, options).await
+}
+
+#[tauri::command]
+pub async fn wa_edit_message(mgr: Mgr<'_>, chat_id: String, message_id: String, text: String) -> Result<MessageDto, String> {
+    mgr.edit_message(&chat_id, &message_id, &text).await
 }
 
 #[tauri::command]
@@ -190,4 +290,136 @@ pub fn wa_person(mgr: Mgr<'_>, id: String) -> crate::store::PersonDto {
 #[tauri::command]
 pub async fn wa_lookup_number(mgr: Mgr<'_>, phone: String) -> Result<Option<String>, String> {
     mgr.lookup_number(&phone).await
+}
+
+#[tauri::command]
+pub fn wa_sticker_library(mgr: Mgr<'_>) -> super::stickers::LibraryDto {
+    mgr.sticker_library()
+}
+
+#[tauri::command]
+pub async fn wa_library_media(mgr: Mgr<'_>, id: String) -> Result<String, String> {
+    mgr.library_media(&id).await
+}
+
+#[tauri::command]
+pub async fn wa_send_sticker(mgr: Mgr<'_>, chat_id: String, id: String, reply_to: Option<String>) -> Result<MessageDto, String> {
+    mgr.send_library_sticker(&chat_id, &id, reply_to.as_deref()).await
+}
+
+/// A picture sent as the body, with `x-chat` (and `x-reply`) or `x-pack` headers.
+fn picture(request: &tauri::ipc::Request<'_>) -> Result<Vec<u8>, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("The picture is missing.".into());
+    };
+    if bytes.is_empty() || bytes.len() > 16 * 1024 * 1024 {
+        return Err("A sticker can be made from a picture of up to 16 MB.".into());
+    }
+    Ok(bytes.clone())
+}
+
+fn header(request: &tauri::ipc::Request<'_>, name: &str) -> Option<String> {
+    request.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string).filter(|v| !v.is_empty())
+}
+
+#[tauri::command]
+pub async fn wa_send_new_sticker(mgr: Mgr<'_>, request: tauri::ipc::Request<'_>) -> Result<MessageDto, String> {
+    let chat_id = header(&request, "x-chat").ok_or("The chat is missing.")?;
+    let reply_to = header(&request, "x-reply");
+    mgr.send_new_sticker(&chat_id, picture(&request)?, reply_to.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn wa_add_new_sticker(mgr: Mgr<'_>, request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let pack = header(&request, "x-pack").ok_or("The pack is missing.")?;
+    mgr.add_new_sticker(&pack, picture(&request)?).await
+}
+
+#[tauri::command]
+pub async fn wa_set_sticker_favorite(
+    mgr: Mgr<'_>,
+    id: Option<String>,
+    chat_id: Option<String>,
+    message_id: Option<String>,
+    favorite: bool,
+) -> Result<(), String> {
+    let message = chat_id.as_deref().zip(message_id.as_deref());
+    mgr.set_sticker_favorite(id.as_deref(), message, favorite).await
+}
+
+#[tauri::command]
+pub fn wa_message_sticker(mgr: Mgr<'_>, chat_id: String, message_id: String) -> Option<String> {
+    mgr.message_sticker(&chat_id, &message_id)
+}
+
+#[tauri::command]
+pub async fn wa_sticker_store(mgr: Mgr<'_>) -> Result<Vec<super::stickers::StorePackDto>, String> {
+    mgr.sticker_store().await
+}
+
+#[tauri::command]
+pub async fn wa_install_pack(mgr: Mgr<'_>, id: String) -> Result<(), String> {
+    mgr.install_store_pack(&id).await
+}
+
+#[tauri::command]
+pub fn wa_remove_pack(mgr: Mgr<'_>, id: String) {
+    mgr.remove_pack(&id)
+}
+
+#[tauri::command]
+pub fn wa_create_pack(mgr: Mgr<'_>, name: String) -> Result<String, String> {
+    mgr.create_pack(&name)
+}
+
+#[tauri::command]
+pub fn wa_rename_pack(mgr: Mgr<'_>, id: String, name: String) -> Result<(), String> {
+    mgr.rename_pack(&id, &name)
+}
+
+#[tauri::command]
+pub fn wa_add_to_pack(
+    mgr: Mgr<'_>,
+    pack_id: String,
+    id: Option<String>,
+    chat_id: Option<String>,
+    message_id: Option<String>,
+) -> Result<(), String> {
+    let message = chat_id.as_deref().zip(message_id.as_deref());
+    mgr.add_to_pack(&pack_id, id.as_deref(), message)
+}
+
+#[tauri::command]
+pub fn wa_remove_from_pack(mgr: Mgr<'_>, pack_id: String, id: String) -> Result<(), String> {
+    mgr.remove_from_pack(&pack_id, &id)
+}
+
+#[tauri::command]
+pub async fn wa_send_gif(
+    mgr: Mgr<'_>,
+    chat_id: String,
+    pick: crate::klipy::GifPick,
+    reply_to: Option<String>,
+) -> Result<MessageDto, String> {
+    mgr.send_klipy_gif(&chat_id, pick, reply_to.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn wa_send_recent_gif(mgr: Mgr<'_>, chat_id: String, id: String, reply_to: Option<String>) -> Result<MessageDto, String> {
+    mgr.send_recent_gif(&chat_id, &id, reply_to.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn wa_send_klipy_sticker(
+    mgr: Mgr<'_>,
+    chat_id: String,
+    pick: crate::klipy::StickerPick,
+    reply_to: Option<String>,
+) -> Result<MessageDto, String> {
+    mgr.send_klipy_sticker(&chat_id, pick, reply_to.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn wa_add_klipy_sticker(mgr: Mgr<'_>, pack_id: String, pick: crate::klipy::StickerPick) -> Result<(), String> {
+    mgr.add_klipy_sticker(&pack_id, pick).await
 }

@@ -13,7 +13,7 @@ use diesel::connection::SimpleConnection;
 use diesel::prelude::*;
 use diesel::sql_types::{BigInt, Integer, Text};
 
-use super::{ChatStore, MAX_MESSAGES_PER_CHAT, STORE_VERSION, StoredChat, StoredMessage, fold, search_text, search_words};
+use super::{ChatStore, MAX_MESSAGES_PER_CHAT, Purge, STORE_VERSION, StoredChat, StoredMessage, fold, search_text, search_words};
 use crate::account::lock;
 
 /// The database's file name in an account's folder.
@@ -67,11 +67,13 @@ pub struct Changes {
     /// kept only when the database doesn't have them, so a replay never
     /// overwrites what happened to them since.
     added: Vec<Row>,
+    /// Chats cleared or deleted: their messages up to a time go.
+    purged: Vec<Purge>,
 }
 
 impl Changes {
     pub fn is_empty(&self) -> bool {
-        self.meta.is_none() && self.chats.is_empty() && self.gone.is_empty() && self.messages.is_empty() && self.added.is_empty()
+        self.meta.is_none() && self.chats.is_empty() && self.gone.is_empty() && self.messages.is_empty() && self.added.is_empty() && self.purged.is_empty()
     }
 }
 
@@ -207,6 +209,7 @@ impl HistoryDb {
         // The store without its chats, which have rows of their own.
         let chats = std::mem::take(&mut store.chats);
         let evicted = std::mem::take(&mut store.evicted);
+        out.purged = std::mem::take(&mut store.purged);
         let meta = serde_json::to_string(&*store);
         store.chats = chats;
         match meta {
@@ -284,6 +287,13 @@ impl HistoryDb {
                     }
                     diesel::sql_query("DELETE FROM messages WHERE chat = ?").bind::<Text, _>(id).execute(conn)?;
                     diesel::sql_query("DELETE FROM chats WHERE id = ?").bind::<Text, _>(id).execute(conn)?;
+                }
+                for purge in &changes.purged {
+                    let starred = if purge.keep_starred { " AND json_extract(data, '$.starred') IS NOT 1" } else { "" };
+                    diesel::sql_query(format!("DELETE FROM messages WHERE chat = ? AND ts_ms <= ?{starred}"))
+                        .bind::<Text, _>(&purge.chat)
+                        .bind::<BigInt, _>(purge.before_ms)
+                        .execute(conn)?;
                 }
                 for (id, data) in &changes.chats {
                     diesel::sql_query("INSERT INTO chats (id, data) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET data = excluded.data")
@@ -538,6 +548,7 @@ mod tests {
                 read_by: Vec::new(),
                 starred: false,
                 deleted: None,
+                edited_ms: None,
             },
         }
     }

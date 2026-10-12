@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ACCOUNTS, ACCOUNT_IDS, type AccountId } from "./accounts/accounts";
+import { formatLastSeen } from "./lib/format";
 import { useAccount, type Account } from "./accounts/useAccount";
 import {
   MockBackend,
@@ -8,19 +9,28 @@ import {
   type ChatBackend,
   type Contact,
   type CustomList,
+  type GroupInfo,
+  type GroupMember,
+  type MemberChange,
   type Message,
   type OutgoingLink,
+  type OutgoingMedia,
+  type PrivacyCategory,
   type StarredMessage,
 } from "./backend";
 import { ChatView } from "./components/ChatView";
+import { ConfirmDialog, type ConfirmRequest } from "./components/ConfirmDialog";
 import { EmptyState } from "./components/EmptyState";
 import { ForwardDialog } from "./components/ForwardDialog";
+import { MuteDialog } from "./components/MuteDialog";
 import { LinkScreen } from "./components/LinkScreen";
 import { ListEditor, chatKey } from "./components/ListEditor";
 import { NavRail, type RailAccount, type SidebarView } from "./components/NavRail";
 import { NewChatPanel } from "./components/NewChatPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { ShortcutsDialog } from "./components/ShortcutsDialog";
+import { chatNumber, shortcutFor } from "./lib/shortcuts";
 import { Sidebar } from "./components/Sidebar";
 import { StarredPanel } from "./components/StarredPanel";
 import { HistoryProgress } from "./components/HistoryProgress";
@@ -166,6 +176,9 @@ function accountBanner(account: Account, onLink: () => void, onReconnect: () => 
 }
 
 /** Pinned chats first, then the most recent: the order each account already uses. */
+/** Someone typing is forgotten after this long without hearing from them. */
+const TYPING_FORGET_MS = 25_000;
+
 function byRecency(a: Chat, b: Chat) {
   if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
   return b.lastAt.localeCompare(a.lastAt);
@@ -214,12 +227,28 @@ function Shell() {
   const [messages, setMessages] = useState<Message[]>([]);
   /** Counts older messages arriving from the phone for the open chat. */
   const [historyTick, setHistoryTick] = useState(0);
+  const [pinsTick, setPinsTick] = useState(0);
+  const [groupTick, setGroupTick] = useState(0);
   /** The messages of recently opened chats, most recent last, by `account:id`. */
   const messageCache = useRef(new Map<string, Message[]>());
   /** The chat whose messages `messages` holds. */
   const messagesOf = useRef<string | null>(null);
-  const [forwarding, setForwarding] = useState<Message | null>(null);
+  const [forwarding, setForwarding] = useState<Message[] | null>(null);
+  /** Who is typing where, by `account:id`, as the list words it. */
+  const [typing, setTyping] = useState<Map<string, string>>(new Map());
+  const typingTimers = useRef(new Map<string, number>());
+  /** Who is online, or when they last were, by `account:id`. */
+  const [presence, setPresence] = useState<Map<string, { online: boolean; lastSeen?: string }>>(new Map());
+  /** A chat asking how long to be muted for, and who waits on the answer. */
+  const [muting, setMuting] = useState<{
+    chat: Pick<Chat, "account" | "id">;
+    resolve: () => void;
+    reject: (reason: unknown) => void;
+  } | null>(null);
+  /** Something that can't be taken back, waiting to be confirmed. */
+  const [confirming, setConfirming] = useState<(ConfirmRequest & { cancel: () => void }) | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
@@ -288,6 +317,26 @@ function Shell() {
           if (notifications && !event.notice.muted && !looking) {
             showNotification(backend.account, event.notice, notificationPreview);
           }
+        } else if (event.type === "typing") {
+          const key = `${backend.account}:${event.chatId}`;
+          const label = event.recording ? "recording audio…" : "typing…";
+          showTyping(key, event.active ? (event.who ? `${event.who} is ${label}` : label) : null);
+        } else if (event.type === "presence") {
+          const key = `${backend.account}:${event.chatId}`;
+          setPresence((prev) => new Map(prev).set(key, { online: event.online, lastSeen: event.lastSeen ?? prev.get(key)?.lastSeen }));
+        } else if (event.type === "cleared") {
+          messageCache.current.delete(`${backend.account}:${event.chatId}`);
+          if (open?.account !== backend.account || open.id !== event.chatId) return;
+          backend
+            .getMessages(event.chatId)
+            .then((list) => {
+              if (messagesOf.current === `${backend.account}:${event.chatId}`) setMessages(list);
+            })
+            .catch(console.error);
+        } else if (event.type === "group") {
+          if (open?.account === backend.account && open.id === event.chatId) setGroupTick((tick) => tick + 1);
+        } else if (event.type === "pins") {
+          if (open?.account === backend.account && open.id === event.chatId) setPinsTick((tick) => tick + 1);
         } else if (event.type === "history") {
           if (open?.account !== backend.account || open.id !== event.chatId) return;
           setHistoryTick((tick) => tick + 1);
@@ -298,7 +347,13 @@ function Shell() {
               if (messagesOf.current === `${backend.account}:${event.chatId}`) setMessages((prev) => (prev.length ? prev : list));
             })
             .catch(console.error);
-        } else if (open?.account === backend.account && open.id === event.message.chatId) {
+        } else if (event.type !== "message") {
+          return;
+        } else if (!event.message.fromMe && typingTimers.current.has(`${backend.account}:${event.message.chatId}`)) {
+          // Their message is what the typing was for.
+          showTyping(`${backend.account}:${event.message.chatId}`, null);
+        }
+        if (event.type === "message" && open?.account === backend.account && open.id === event.message.chatId) {
           setMessages((prev) => upsert(prev, event.message));
           if (!event.message.fromMe && document.hasFocus()) {
             void backend.markRead(event.message.chatId);
@@ -311,6 +366,29 @@ function Shell() {
       for (const stop of unsubscribe) stop();
     };
   }, [sources]);
+
+  // Kept the same between renders, so the settings don't load them again each time.
+  const whatsappPrivacy = useMemo(
+    () => ({
+      load: () => real.whatsapp.privacy!(),
+      save: (category: PrivacyCategory, value: string) => real.whatsapp.setPrivacy!(category, value),
+    }),
+    [real],
+  );
+
+  /** Shows someone typing in a chat, or stops; it stops by itself if no word follows, as WhatsApp does. */
+  const showTyping = useCallback((key: string, label: string | null) => {
+    window.clearTimeout(typingTimers.current.get(key));
+    typingTimers.current.delete(key);
+    if (label) typingTimers.current.set(key, window.setTimeout(() => showTyping(key, null), TYPING_FORGET_MS));
+    setTyping((prev) => {
+      if ((prev.get(key) ?? null) === label) return prev;
+      const next = new Map(prev);
+      if (label) next.set(key, label);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
 
   const backendFor = useCallback(
     (account: AccountId) => sources.find((b) => b.account === account) ?? null,
@@ -372,6 +450,8 @@ function Shell() {
       })
       .catch(console.error);
     void selectedBackend.markRead(selectedId);
+    // Online and last seen come for the chat on screen, as on WhatsApp Web.
+    selectedBackend.watchPresence?.(selectedId).catch(() => {});
     setChatsBy((prev) => {
       const list = prev.get(selectedBackend);
       if (!list?.some((c) => c.id === selectedId && (c.unread > 0 || c.markedUnread))) return prev;
@@ -559,6 +639,17 @@ function Shell() {
     }
   }
 
+  const sendMedia = useMemo(() => {
+    const backend = selectedBackend;
+    const chatId = selectedId;
+    if (!backend?.sendMedia || !chatId) return undefined;
+    // Errors are shown by the panel that sent it.
+    return async (item: OutgoingMedia, replyTo?: string) => {
+      const message = await backend.sendMedia!(chatId, item, replyTo);
+      setMessages((prev) => upsert(prev, message));
+    };
+  }, [selectedBackend, selectedId]);
+
   const loadMedia = useMemo(() => {
     const load = selectedBackend?.mediaUrl;
     return load ? (message: Message, index = 0) => load(message.chatId, message.id, index) : undefined;
@@ -572,6 +663,19 @@ function Shell() {
   const loadLinkThumbnail = useMemo(() => {
     const load = selectedBackend?.linkThumbnailUrl;
     return load ? (message: Message) => load(message.chatId, message.id) : undefined;
+  }, [selectedBackend]);
+
+  const loadGroup = useMemo(() => selectedBackend?.groupInfo?.bind(selectedBackend), [selectedBackend]);
+  const loadGroupDetails = useMemo(() => selectedBackend?.groupDetails?.bind(selectedBackend), [selectedBackend]);
+  const loadContacts = useMemo(() => selectedBackend?.listContacts.bind(selectedBackend), [selectedBackend]);
+  const loadPinned = useMemo(() => selectedBackend?.pinnedMessages?.bind(selectedBackend), [selectedBackend]);
+  const pinMessage = useMemo(() => {
+    const backend = selectedBackend;
+    if (!backend?.pinMessage) return undefined;
+    return async (message: Message, secs: number | null) => {
+      await backend.pinMessage!(message.chatId, message.id, secs);
+      setPinsTick((tick) => tick + 1);
+    };
   }, [selectedBackend]);
 
   const star = useMemo(() => {
@@ -594,6 +698,24 @@ function Shell() {
     };
   }, [selectedBackend]);
 
+  const votePoll = useMemo(() => {
+    const backend = selectedBackend;
+    if (!backend?.votePoll) return undefined;
+    return async (message: Message, options: number[]) => {
+      const voted = await backend.votePoll!(message.chatId, message.id, options);
+      setMessages((prev) => upsert(prev, voted));
+    };
+  }, [selectedBackend]);
+
+  const editMessage = useMemo(() => {
+    const backend = selectedBackend;
+    if (!backend?.editMessage) return undefined;
+    return async (message: Message, text: string) => {
+      const edited = await backend.editMessage!(message.chatId, message.id, text);
+      setMessages((prev) => upsert(prev, edited));
+    };
+  }, [selectedBackend]);
+
   const react = useMemo(() => {
     const backend = selectedBackend;
     if (!backend?.react) return undefined;
@@ -610,7 +732,18 @@ function Shell() {
     () => sources.filter((backend) => (unified ? !backend.demo || !anyLinked : backend.account === active)),
     [sources, unified, anyLinked, active],
   );
-  const chats = shown.flatMap((backend) => chatsBy.get(backend) ?? []);
+  const chats = shown.flatMap((backend) => {
+    const list = chatsBy.get(backend) ?? [];
+    if (!typing.size && !presence.size) return list;
+    // Only the chats with something to add are new objects, so the other rows stay as drawn.
+    return list.map((chat) => {
+      const key = `${backend.account}:${chat.id}`;
+      const typed = typing.get(key);
+      const seen = presence.get(key);
+      if (!typed && !seen) return chat;
+      return { ...chat, typing: typed, online: seen?.online, lastSeen: seen?.lastSeen };
+    });
+  });
   if (shown.length > 1) chats.sort(byRecency);
   const showAccount = unified && anyLinked;
 
@@ -652,6 +785,155 @@ function Shell() {
     });
     const done = unread ? backend.setUnread?.(chat.id, true) : backend.markRead(chat.id);
     done?.catch((e) => setError(String(e)));
+  }
+
+  /** Changes a chat in the list at once; the list that comes back after says the same. */
+  function patchChat(backend: ChatBackend, chatId: string, patch: Partial<Chat>) {
+    setChatsBy((prev) => {
+      const list = prev.get(backend);
+      if (!list) return prev;
+      return new Map(prev).set(backend, list.map((c) => (c.id === chatId ? { ...c, ...patch } : c)));
+    });
+  }
+
+  /** Runs a chat change, putting the list back as it was when it fails. */
+  function changeChat(chat: Chat, patch: Partial<Chat>, run: (backend: ChatBackend) => Promise<void> | undefined) {
+    const backend = backendFor(chat.account);
+    const done = backend && run(backend);
+    if (!backend || !done) return;
+    patchChat(backend, chat.id, patch);
+    done.catch((e) => {
+      setError(String(e instanceof Error ? e.message : e));
+      backend.listChats().then((list) => setChatsBy((prev) => new Map(prev).set(backend, list)), console.error);
+    });
+  }
+
+  function toggleArchived(chat: Chat) {
+    const archived = !chat.archived;
+    changeChat(chat, archived ? { archived, pinned: false } : { archived }, (b) => b.setArchived?.(chat.id, archived));
+  }
+
+  function togglePinned(chat: Chat) {
+    changeChat(chat, { pinned: !chat.pinned }, (b) => b.setPinned?.(chat.id, !chat.pinned));
+  }
+
+  /** Unmutes a chat, or asks for how long to mute it. Settles once it is done, failing when cancelled. */
+  function toggleMuted(chat: Pick<Chat, "account" | "id" | "muted">): Promise<void> {
+    if (chat.muted) {
+      return new Promise((resolve, reject) => {
+        changeChat(chat as Chat, { muted: false }, (b) => {
+          const done = b.setMuted?.(chat.id, false);
+          done?.then(resolve, reject);
+          return done;
+        });
+      });
+    }
+    return new Promise((resolve, reject) => setMuting({ chat, resolve, reject }));
+  }
+
+  /** Where a chat's messages go when it is cleared or deleted, as the dialog says it. */
+  function reachOf(account: AccountId) {
+    return account === "whatsapp" ? "this computer and your phone" : "this computer only; your phone keeps them";
+  }
+
+  /** Asks before something that can't be taken back. Settles once it is done, failing when cancelled. */
+  function ask(request: ConfirmRequest): Promise<void> {
+    return new Promise((resolve, reject) =>
+      setConfirming({
+        ...request,
+        onConfirm: async (option) => {
+          await request.onConfirm(option);
+          resolve();
+        },
+        cancel: () => reject(new Error("cancelled")),
+      }),
+    );
+  }
+
+  function askBlock(account: AccountId, person: { id: string; name: string }, blocked: boolean): Promise<void> {
+    const backend = backendFor(account);
+    if (!backend?.setBlocked) return Promise.reject(new Error("Blocking isn't available here."));
+    return ask({
+      title: `${blocked ? "Block" : "Unblock"} ${person.name}?`,
+      body: blocked
+        ? "They will no longer be able to call you or send you messages. They won't be told."
+        : "They will be able to call you and send you messages again.",
+      confirmLabel: blocked ? "Block" : "Unblock",
+      danger: blocked,
+      onConfirm: async () => {
+        await backend.setBlocked!(person.id, blocked);
+        patchChat(backend, person.id, { blocked });
+      },
+    });
+  }
+
+  function askClearChat(chat: Pick<Chat, "account" | "id">) {
+    const backend = backendFor(chat.account);
+    if (!backend?.clearChat) return;
+    void ask({
+      title: "Clear this chat?",
+      body: `The chat stays in your list, empty. Its messages are removed from ${reachOf(chat.account)}.`,
+      option: { label: "Keep starred messages", initial: true },
+      confirmLabel: "Clear chat",
+      danger: true,
+      onConfirm: async (keepStarred) => {
+        await backend.clearChat!(chat.id, keepStarred);
+        patchChat(backend, chat.id, { lastMessage: "", unread: 0, markedUnread: false, cleared: true });
+      },
+    }).catch(() => {});
+  }
+
+  function askExitGroup(chat: Pick<Chat, "account" | "id" | "name">): Promise<void> {
+    const backend = backendFor(chat.account);
+    if (!backend?.leaveGroup) return Promise.reject(new Error("Groups can't be left from here."));
+    return ask({
+      title: `Exit "${chat.name}"?`,
+      body: "Only the group's admins are told that you left. The chat stays in your list until you delete it.",
+      confirmLabel: "Exit group",
+      danger: true,
+      onConfirm: async () => {
+        await backend.leaveGroup!(chat.id);
+        patchChat(backend, chat.id, { left: true });
+      },
+    });
+  }
+
+  /** Changes a group's members; removing someone asks first. */
+  async function changeMembers(chat: Pick<Chat, "account" | "id" | "name">, change: MemberChange, members: GroupMember[]): Promise<GroupInfo> {
+    const backend = backendFor(chat.account);
+    if (!backend?.changeMembers) throw new Error("Members can't be changed from here.");
+    const run = () => backend.changeMembers!(chat.id, change, members.map((m) => m.id));
+    if (change !== "remove") return run();
+    let changed: GroupInfo | undefined;
+    await ask({
+      title: `Remove ${members.map((m) => m.name).join(", ")}?`,
+      body: `They will no longer be in "${chat.name}".`,
+      confirmLabel: "Remove",
+      danger: true,
+      onConfirm: async () => {
+        changed = await run();
+      },
+    });
+    return changed!;
+  }
+
+  function askDeleteChat(chat: Pick<Chat, "account" | "id" | "isGroup">) {
+    const backend = backendFor(chat.account);
+    if (!backend?.deleteChat) return;
+    void ask({
+      title: chat.isGroup ? "Delete this group?" : "Delete this chat?",
+      body: `Its messages are deleted from ${reachOf(chat.account)}.`,
+      confirmLabel: chat.isGroup ? "Delete group" : "Delete chat",
+      danger: true,
+      onConfirm: async () => {
+        await backend.deleteChat!(chat.id);
+        setChatsBy((prev) => {
+          const list = prev.get(backend);
+          return list ? new Map(prev).set(backend, list.filter((c) => c.id !== chat.id)) : prev;
+        });
+        if (selectedRef.current?.account === chat.account && selectedRef.current.id === chat.id) setSelected(null);
+      },
+    }).catch(() => {});
   }
 
   function toggleFavorite(chat: Chat) {
@@ -771,8 +1053,20 @@ function Shell() {
         return saved ?? { id, account: numberBackend.account, name, initials: initialsFor(name), avatarHue: hueFor(id) };
       }
     : undefined;
+  /** Opens a chat with a number from a contact card, named as the card names it unless it is saved. */
+  async function messageNumber(waId: string, name: string) {
+    try {
+      const found = await lookupNumber!(waId);
+      if (!found) return setError(`${name} is not on WhatsApp.`);
+      const saved = namedContacts?.some((c) => c.account === found.account && c.id === found.id);
+      openContact(saved ? found : { ...found, name, initials: initialsFor(name) });
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    }
+  }
+
   const unreadOf = (backend: ChatBackend | null) =>
-    (backend ? (chatsBy.get(backend) ?? []) : []).reduce((sum, c) => sum + (c.muted ? 0 : Math.max(c.unread, c.markedUnread ? 1 : 0)), 0);
+    (backend ? (chatsBy.get(backend) ?? []) : []).reduce((sum, c) => sum + (c.muted || c.archived ? 0 : Math.max(c.unread, c.markedUnread ? 1 : 0)), 0);
   const rail: RailAccount[] = ACCOUNT_IDS.map((id) => {
     const { status } = accounts[id];
     const backend = backendFor(id);
@@ -797,42 +1091,48 @@ function Shell() {
     (chat) => backendFor(chat.account)?.demo || accounts[chat.account].status.state === "connected",
   );
 
-  async function forward(message: Message, targets: Chat[]) {
-    const text = message.text;
+  /** Sends messages, oldest first, on to each of `targets`, then `note` as a message of our own. */
+  async function forward(messages: Message[], targets: Chat[], note: string) {
     // Attachments are fetched once and uploaded again to each chat.
-    let files: File[] = [];
-    if (message.hasMedia || message.attachments?.length) {
-      const load = selectedBackend?.mediaUrl;
-      if (!load) throw new Error("The attachment can't be read here.");
-      const count = message.attachments?.length || 1;
-      files = await Promise.all(
-        Array.from({ length: count }, async (_, index) => {
-          const response = await fetch(await load(message.chatId, message.id, index));
-          if (!response.ok) throw new Error("The attachment could not be read.");
-          const blob = await response.blob();
-          const attachment = message.attachments?.[index];
-          const type = attachment?.mime || blob.type || "application/octet-stream";
-          const name = attachment?.fileName || message.mediaLabel?.match(/[^/\\]+\.\w{1,8}$/)?.[0] || `forwarded.${type.split("/")[1]?.split(/[;+]/)[0] || "bin"}`;
-          return new File([blob], name, { type });
-        }),
-      );
-    }
-    if (!text && !files.length) return;
-    const score = (message.forwarded ?? 0) + 1;
+    const load = selectedBackend?.mediaUrl;
+    const parts = await Promise.all(
+      messages.map(async (message) => {
+        let files: File[] = [];
+        if (message.hasMedia || message.attachments?.length) {
+          if (!load) throw new Error("The attachment can't be read here.");
+          const count = message.attachments?.length || 1;
+          files = await Promise.all(
+            Array.from({ length: count }, async (_, index) => {
+              const response = await fetch(await load(message.chatId, message.id, index));
+              if (!response.ok) throw new Error("The attachment could not be read.");
+              const blob = await response.blob();
+              const attachment = message.attachments?.[index];
+              const type = attachment?.mime || blob.type || "application/octet-stream";
+              const name = attachment?.fileName || message.mediaLabel?.match(/[^/\\]+\.\w{1,8}$/)?.[0] || `forwarded.${type.split("/")[1]?.split(/[;+]/)[0] || "bin"}`;
+              return new File([blob], name, { type });
+            }),
+          );
+        }
+        return { text: message.text, files, score: (message.forwarded ?? 0) + 1 };
+      }),
+    );
     const failed: string[] = [];
     for (const target of targets) {
       const backend = backendFor(target.account);
       try {
         if (!backend) throw new Error("not linked");
         const sent: Message[] = [];
-        if (files.length) {
-          if (!backend.sendFile) throw new Error("no files here");
-          for (const [index, file] of files.entries()) {
-            sent.push(await backend.sendFile(target.id, file, index === 0 ? text || undefined : undefined, undefined, score));
+        for (const { text, files, score } of parts) {
+          if (files.length) {
+            if (!backend.sendFile) throw new Error("no files here");
+            for (const [index, file] of files.entries()) {
+              sent.push(await backend.sendFile(target.id, file, index === 0 ? text || undefined : undefined, undefined, score));
+            }
+          } else if (text) {
+            sent.push(await backend.sendText(target.id, text, undefined, undefined, score));
           }
-        } else if (text) {
-          sent.push(await backend.sendText(target.id, text, undefined, undefined, score));
         }
+        if (note) sent.push(await backend.sendText(target.id, note));
         const open = selectedRef.current;
         if (open?.account === target.account && open.id === target.id) {
           setMessages((prev) => sent.reduce((list, one) => upsert(list, one), prev));
@@ -841,12 +1141,23 @@ function Shell() {
         failed.push(target.name);
       }
     }
-    if (failed.length) throw new Error(`The message was not sent to ${failed.join(", ")}.`);
+    const what = messages.length === 1 ? "The message was" : "The messages were";
+    if (failed.length) throw new Error(`${what} not sent to ${failed.join(", ")}.`);
   }
 
   function subtitleFor(chat: Chat) {
     const phone = chat.id.match(/^(\d+)@s\.whatsapp\.net$/)?.[1];
-    const detail = chat.isGroup ? "Group" : chat.online ? "online" : phone ? `+${phone}` : "";
+    const detail = chat.typing
+      ? chat.typing
+      : chat.isGroup
+        ? "Group"
+        : chat.online
+          ? "online"
+          : chat.lastSeen
+            ? formatLastSeen(chat.lastSeen)
+            : phone
+              ? `+${phone}`
+              : "";
     return [showAccount ? ACCOUNTS[chat.account].label : "", detail].filter(Boolean).join(" · ");
   }
 
@@ -860,6 +1171,96 @@ function Shell() {
   // In its own environment an unlinked account has nothing else to show.
   const focus = accounts[unified ? "whatsapp" : active];
   const canLink = focus.status.state !== "unsupported";
+
+  // Keyboard shortcuts. The handler is swapped each render so it sees the
+  // chat open now; the listener stays.
+  const onShortcut = useRef<(event: KeyboardEvent) => void>(() => {});
+  onShortcut.current = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.isComposing) return;
+    const chat = selectedChat;
+    const nth = chatNumber(event);
+    if (nth !== null) {
+      event.preventDefault();
+      return openListed((rows) => rows[nth]);
+    }
+    const id = shortcutFor(event);
+    if (!id) return;
+    // Something open over the app answers its own keys.
+    const covered = document.querySelector('[aria-modal="true"], [role="menu"], [role="listbox"][aria-label="Emoji suggestions"], [role="dialog"][aria-label="Emoji"]');
+    if (covered && id !== "help") return;
+    switch (id) {
+      case "newChat":
+        closeLinking();
+        setView("chats");
+        setPanel("new-chat");
+        break;
+      case "search":
+        closeLinking();
+        setView("chats");
+        setPanel("chats");
+        requestAnimationFrame(() => {
+          const box = document.getElementById("chat-search") as HTMLInputElement | null;
+          box?.focus();
+          box?.select();
+        });
+        break;
+      case "nextChat":
+      case "previousChat": {
+        const step = id === "nextChat" ? 1 : -1;
+        openListed((rows, at) => rows[at === -1 ? (step === 1 ? 0 : rows.length - 1) : at + step]);
+        break;
+      }
+      case "closeChat": {
+        // Escape still clears a box with something typed in it.
+        const target = event.target as HTMLElement;
+        const typed = target instanceof HTMLInputElement ? target.value : target.isContentEditable ? target.textContent : "";
+        if (!selected || typed) return;
+        setSelected(null);
+        break;
+      }
+      case "markUnread":
+        if (!chat) return;
+        toggleUnread(chat);
+        break;
+      case "mute":
+        if (!chat) return;
+        void toggleMuted(chat).catch(() => {});
+        break;
+      case "archive":
+        if (!chat) return;
+        toggleArchived(chat);
+        break;
+      case "pin":
+        if (!chat) return;
+        togglePinned(chat);
+        break;
+      case "settings":
+        closeLinking();
+        setView("settings");
+        break;
+      case "help":
+        setShortcutsOpen((open) => !open);
+        break;
+      case "emoji":
+        // The message box opens its own panel.
+        return;
+    }
+    event.preventDefault();
+  };
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => onShortcut.current(event);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
+
+  /** Opens a chat from the list as it shows now (filtered, searched), picked from its rows and the open one's place. */
+  function openListed(pick: (rows: HTMLElement[], at: number) => HTMLElement | undefined) {
+    const rows = [...document.querySelectorAll<HTMLElement>('[aria-label="Chats"] [role="option"]')];
+    const row = pick(rows, rows.findIndex((r) => r.getAttribute("aria-selected") === "true"));
+    if (!row) return;
+    row.click();
+    row.scrollIntoView({ block: "nearest" });
+  }
 
   let main: ReactNode;
   if (linking && !accounts[linking].status.linked) {
@@ -882,6 +1283,8 @@ function Shell() {
         cannotSendReason={`Waiting for ${ACCOUNTS[selectedChat.account].label} to connect…`}
         onSend={handleSend}
         canAttach={Boolean(selectedBackend?.sendFile)}
+        onSendMedia={sendMedia}
+        stickers={selectedBackend?.stickers}
         onError={setError}
         loadMedia={loadMedia}
         openMedia={openMedia}
@@ -896,15 +1299,38 @@ function Shell() {
         onLoadOlder={selectedBackend?.olderMessages ? loadOlder : undefined}
         historyTick={historyTick}
         searchMessages={searchMessages}
+        onEdit={canSend ? editMessage : undefined}
+        onVote={canSend ? votePoll : undefined}
+        onMessageNumber={lookupNumber ? (waId, name) => void messageNumber(waId, name) : undefined}
+        loadPinned={loadPinned}
+        onPin={canSend ? pinMessage : undefined}
+        pinsTick={pinsTick}
+        loadGroup={loadGroup}
+        loadGroupDetails={loadGroupDetails}
         onFocused={clearFocus}
         loadPerson={loadPerson}
         loadPersonDetails={loadPersonDetails}
         onMessagePerson={(person, messageId) => openContact(person, messageId)}
         onOpenChatId={(id) => openChat(selectedChat.account, id)}
         onStarred={() => setPanel("starred")}
+        onTyping={(key, state) => {
+          if (!settings.sendTyping) return;
+          const at = key.indexOf(":");
+          backendFor(key.slice(0, at) as AccountId)
+            ?.setTyping?.(key.slice(at + 1), state)
+            .catch(() => {});
+        }}
+        onBlock={selectedBackend?.setBlocked ? (person, blocked) => askBlock(selectedChat.account, person, blocked) : undefined}
+        onClearChat={selectedBackend?.clearChat ? () => askClearChat(selectedChat) : undefined}
+        onDeleteChat={selectedBackend?.deleteChat ? (id, isGroup) => askDeleteChat({ account: selectedChat.account, id, isGroup }) : undefined}
+        onExitGroup={selectedBackend?.leaveGroup ? () => askExitGroup(selectedChat) : undefined}
+        onEditGroup={selectedBackend?.editGroup ? (changes) => selectedBackend.editGroup!(selectedChat.id, changes) : undefined}
+        onChangeMembers={selectedBackend?.changeMembers ? (change, members) => changeMembers(selectedChat, change, members) : undefined}
+        loadContacts={loadContacts}
+        groupTick={groupTick}
         onMuteChat={
           selectedBackend?.setMuted
-            ? (chatId, muted) => selectedBackend.setMuted!(chatId, muted).catch((e) => setError(String(e)))
+            ? (chatId, muted) => toggleMuted({ account: selectedChat.account, id: chatId, muted: !muted })
             : undefined
         }
       />
@@ -1007,9 +1433,18 @@ function Shell() {
               setPanel("starred");
             }}
             onSettings={() => setView("settings")}
+            onShortcuts={() => setShortcutsOpen(true)}
             onToggleFavorite={toggleFavorite}
             onToggleUnread={toggleUnread}
             onToggleList={toggleList}
+            onToggleArchived={toggleArchived}
+            onTogglePinned={togglePinned}
+            onToggleMuted={(chat) => void toggleMuted(chat).catch(() => {})}
+            onClearChat={askClearChat}
+            onDeleteChat={askDeleteChat}
+            onToggleBlocked={(chat) => void askBlock(chat.account, chat, !chat.blocked).catch(() => {})}
+            canBlock={(chat) => Boolean(backendFor(chat.account)?.setBlocked)}
+            onExitGroup={(chat) => void askExitGroup(chat).catch(() => {})}
             onNewList={(chat) => editList(undefined, chat)}
             onEditList={(name) => editList(name)}
             searchMessages={searchMessages}
@@ -1020,6 +1455,11 @@ function Shell() {
             accounts={ACCOUNT_IDS.map((id) => accounts[id])}
             onBack={() => setView("chats")}
             onLink={openLinking}
+            privacy={
+              accounts.whatsapp.status.state === "connected" && real.whatsapp.privacy && real.whatsapp.setPrivacy
+                ? whatsappPrivacy
+                : undefined
+            }
           />
         )}
       </aside>
@@ -1049,12 +1489,39 @@ function Shell() {
         />
       ) : null}
 
+      {muting ? (
+        <MuteDialog
+          onMute={async (untilMs) => {
+            const backend = backendFor(muting.chat.account);
+            if (!backend?.setMuted) throw new Error("This chat can't be muted.");
+            await backend.setMuted(muting.chat.id, true, untilMs);
+            patchChat(backend, muting.chat.id, { muted: true });
+            muting.resolve();
+          }}
+          onClose={() => {
+            // Closed without muting: whoever asked puts its switch back.
+            muting.reject(new Error("cancelled"));
+            setMuting(null);
+          }}
+        />
+      ) : null}
+      {confirming ? (
+        <ConfirmDialog
+          {...confirming}
+          onClose={() => {
+            // After it is done this does nothing: the promise has settled.
+            confirming.cancel();
+            setConfirming(null);
+          }}
+        />
+      ) : null}
+      {shortcutsOpen ? <ShortcutsDialog onClose={() => setShortcutsOpen(false)} /> : null}
       {forwarding ? (
         <ForwardDialog
-          message={forwarding}
+          messages={forwarding}
           chats={forwardTargets}
           showAccount={showAccount}
-          onForward={(targets) => forward(forwarding, targets)}
+          onForward={(targets, note) => forward(forwarding, targets, note)}
           onClose={() => setForwarding(null)}
         />
       ) : null}

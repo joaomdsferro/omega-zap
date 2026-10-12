@@ -7,18 +7,26 @@ import { formatMessageTime, formatVoiceDuration } from "../lib/format";
 import { URL_PATTERN, fetchLinkPreview, isPlayable, readyLinkPreview } from "../lib/links";
 import { useSettings } from "../settings/settings";
 import { Attachments } from "./Attachments";
+import { Waveform } from "./AudioPlayer";
 import type { LoadMedia } from "./Attachments";
 import { LinkCard, openLink } from "./LinkCard";
+import { canEdit } from "./EditDialog";
+import { PollCard } from "./PollCard";
+import { ContactCards, PlaceCard } from "./SharedCards";
+import { canForward } from "./ForwardDialog";
 import {
   BlockedIcon,
   ChevronDownIcon,
   CopyIcon,
+  EditIcon,
   FileIcon,
   ForwardIcon,
   PersonIcon,
+  PinIcon,
   MoreIcon,
   PlayIcon,
   ReplyIcon,
+  SelectIcon,
   SmileIcon,
   StarIcon,
   Ticks,
@@ -61,6 +69,20 @@ interface MessageBubbleProps {
   onOpenPerson?: (id: string) => void;
   /** Briefly highlighted: the message was jumped to. */
   flash?: boolean;
+  /** Pinned in the chat for everyone. */
+  pinned?: boolean;
+  /** Changes what one of our texts says, while it still can be. */
+  onEdit?: (message: Message) => void;
+  /** Votes on a poll for the options picked; none takes the vote back. */
+  onVote?: (message: Message, options: number[]) => Promise<void>;
+  /** Opens a chat with a number from a contact card, digits only. */
+  onMessageContact?: (waId: string, name: string) => void;
+  /** Pins the message for everyone, or unpins it when `pinned`. */
+  onPin?: (message: Message) => void;
+  /** Starts selecting messages, with this one picked. */
+  onSelect?: (message: Message) => void;
+  /** Further actions for the message's menu, such as a sticker's. */
+  moreActions?: (message: Message) => MenuEntry[];
 }
 
 function Tail({ mine }: { mine: boolean }) {
@@ -84,9 +106,11 @@ const STATUS_LABEL: Record<DeliveryStatus, string> = {
   read: "Read",
 };
 
-function Meta({ message, account }: { message: Message; account: AccountId }) {
+function Meta({ message, account, pinned }: { message: Message; account: AccountId; pinned?: boolean }) {
   return (
     <span className="flex items-center gap-1 text-[11px] leading-3.75 whitespace-nowrap text-(--bubble-meta)">
+      {pinned ? <PinIcon size={11} aria-label="Pinned" aria-hidden={false} role="img" /> : null}
+      {message.edited ? <span>Edited</span> : null}
       {message.starred ? <StarIcon size={11} filled aria-label="Starred" aria-hidden={false} role="img" /> : null}
       <time dateTime={message.sentAt}>{formatMessageTime(message.sentAt)}</time>
       {message.fromMe && message.status ? (
@@ -98,21 +122,6 @@ function Meta({ message, account }: { message: Message; account: AccountId }) {
         </>
       ) : null}
     </span>
-  );
-}
-
-function Waveform() {
-  const bars = [4, 10, 7, 14, 9, 16, 8, 12, 6, 15, 9, 11, 5, 13, 7, 10, 6, 12, 8, 5];
-  return (
-    <div className="flex h-7 flex-1 items-center gap-0.5" aria-hidden>
-      {bars.map((h, i) => (
-        <span
-          key={i}
-          className="w-0.75 rounded-full bg-(--text-secondary) opacity-60"
-          style={{ height: `${h}px` }}
-        />
-      ))}
-    </div>
   );
 }
 
@@ -261,7 +270,7 @@ const LONG_PRESS_MS = 450;
 /** WhatsApp's forwarding score from which a message counts as forwarded many times. */
 const FORWARDED_MANY = 5;
 
-export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight, pinned, onEdit, onPin, onSelect, onVote, onMessageContact, moreActions }: MessageBubbleProps) {
   const { settings } = useSettings();
   const [picking, setPicking] = useState(false);
   // The reactions' details, opened from their pill.
@@ -279,7 +288,10 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
   const reactions = message.reactions ?? [];
   const myReaction = reactions.find((reaction) => reaction.mine)?.emoji;
   const mine = message.fromMe;
-  const hasText = Boolean(message.text);
+  // A poll's text is its question, shown in the poll.
+  const hasText = Boolean(message.text) && !message.poll;
+  /** Drawn as itself rather than as a file placeholder. */
+  const shared = Boolean(message.poll || message.place || message.contacts?.length);
   const bigEmoji = useMemo(
     () => (message.kind === "text" && !message.attachments?.length ? emojiOnlyCount(message.text ?? "") : 0),
     [message.kind, message.attachments, message.text],
@@ -301,7 +313,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
   // The spacer is an invisible copy of the meta, so it always matches its width.
   const metaSpacer = (
     <span className="invisible inline-block pl-1 align-top select-none" aria-hidden>
-      <Meta message={message} account={account} />
+      <Meta message={message} account={account} pinned={pinned} />
     </span>
   );
 
@@ -318,7 +330,9 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
     };
     const close = () => setPicking(false);
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPicking(false);
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setPicking(false);
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -347,6 +361,10 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
   }
 
   const deleted = Boolean(message.deleted);
+  /** Only voice or audio: the time sits on the line of the player's clock. */
+  const soundOnly =
+    !hasText && !message.linkPreview && Boolean(message.attachments?.length) &&
+    message.attachments!.every((attachment) => attachment.kind === "voice" || attachment.kind === "audio");
   const whatsapp = account === "whatsapp";
   const react = deleted ? undefined : onReact;
 
@@ -368,9 +386,10 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
         : null,
       whatsapp ? null : copy,
       // Attachments are uploaded again; ones not on this computer yet are fetched first.
-      onForward && !deleted && (message.hasMedia || message.attachments?.length || (text && message.kind === "text"))
+      onForward && canForward(message)
         ? { label: "Forward", icon: <ForwardIcon size={20} />, onSelect: () => onForward(message) }
         : null,
+      !deleted && onPin ? { label: pinned ? "Unpin" : "Pin", icon: <PinIcon size={20} />, onSelect: () => onPin(message) } : null,
       !deleted && onStar
         ? {
             label: message.starred ? "Unstar" : "Star",
@@ -378,8 +397,12 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
             onSelect: () => onStar(message),
           }
         : null,
+      onEdit && canEdit(message, account) ? { label: "Edit", icon: <EditIcon size={20} />, onSelect: () => onEdit(message) } : null,
+      onSelect ? { label: "Select", icon: <SelectIcon size={20} />, onSelect: () => onSelect(message) } : null,
     ];
     const items: MenuEntry[] = actions.filter((item) => item !== null);
+    const more = moreActions?.(message) ?? [];
+    if (more.length) items.push("separator", ...more);
     if (onDelete) {
       if (items.length > 0) items.push("separator");
       items.push({ label: "Delete", icon: <TrashIcon size={20} />, onSelect: () => onDelete(message) });
@@ -536,7 +559,19 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
           <Photo message={message} loadMedia={loadMedia} onOpen={onOpenPhoto && (() => onOpenPhoto(message, 0))} />
         ) : null}
 
-        {message.kind === "media" && !message.attachments?.length ? (
+        {message.poll && !deleted ? (
+          <PollCard
+            question={message.text ?? ""}
+            poll={message.poll}
+            onVote={onVote ? (options) => onVote(message, options) : undefined}
+          />
+        ) : null}
+
+        {message.place && !deleted ? <PlaceCard place={message.place} /> : null}
+
+        {message.contacts?.length && !deleted ? <ContactCards cards={message.contacts} onMessage={onMessageContact} /> : null}
+
+        {message.kind === "media" && !message.attachments?.length && !shared ? (
           <div className="mb-1 flex items-center gap-3 rounded-md bg-(--quote-bg) px-3 py-2.5">
             <FileIcon size={26} className="shrink-0 text-(--icon)" />
             <span className="min-w-0 truncate text-[14px]">{message.mediaLabel ?? "Attachment"}</span>
@@ -554,7 +589,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
             >
               <PlayIcon size={22} />
             </button>
-            <Waveform />
+            <Waveform levels={message.waveform} />
             <span className="text-[11px] tabular-nums text-(--bubble-meta)">
               {formatVoiceDuration(message.voiceSeconds ?? 0)}
             </span>
@@ -571,7 +606,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
 
         {hasText && !deleted ? (
           bigEmoji ? (
-            <p className="flex gap-0.5 px-0.5 pt-0.5 pb-4">
+            <p className="flex gap-0.5 px-0.5 pt-0.5">
               {withEmoji(message.text ?? "", BIG_EMOJI[bigEmoji])}
             </p>
           ) : (
@@ -582,8 +617,9 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
           )
         ) : null}
 
-        <span className={hasText || deleted ? "absolute right-1.75 bottom-1.25" : "flex justify-end"}>
-          <Meta message={message} account={account} />
+        {/* Under a big emoji the time takes its own line, so the bubble is wide enough for it. */}
+        <span className={(hasText && !bigEmoji) || deleted || soundOnly ? "absolute right-1.75 bottom-1.25" : "flex justify-end"}>
+          <Meta message={message} account={account} pinned={pinned} />
         </span>
 
         {reactions.length > 0 ? (

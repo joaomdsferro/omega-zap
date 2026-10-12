@@ -103,6 +103,8 @@ export interface Settings {
   trayBadge: TrayBadge;
   /** Clicking a notification opens its chat, rather than pointing it out in the list. */
   notificationOpensChat: boolean;
+  /** Let the other side see "typing…" while we write. */
+  sendTyping: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -118,6 +120,7 @@ const DEFAULTS: Settings = {
   notificationPreview: true,
   trayBadge: "red",
   notificationOpensChat: false,
+  sendTyping: true,
 };
 
 const STORAGE_KEY = "omega-zap-settings";
@@ -149,6 +152,7 @@ function load(): Settings {
       notifications: parsed.notifications !== false,
       notificationPreview: parsed.notificationPreview !== false,
       notificationOpensChat: parsed.notificationOpensChat === true,
+      sendTyping: parsed.sendTyping !== false,
       trayBadge: TRAY_BADGES.some((b) => b.id === parsed.trayBadge) ? (parsed.trayBadge as TrayBadge) : DEFAULTS.trayBadge,
     };
   } catch {
@@ -173,6 +177,7 @@ interface SettingsContextValue {
   setNotifications: (on: boolean) => void;
   setNotificationPreview: (on: boolean) => void;
   setTrayBadge: (badge: TrayBadge) => void;
+  setSendTyping: (on: boolean) => void;
   setNotificationOpensChat: (on: boolean) => void;
 }
 
@@ -245,6 +250,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       setNotificationPreview: (notificationPreview) => setSettings((s) => ({ ...s, notificationPreview })),
       setTrayBadge: (trayBadge) => setSettings((s) => ({ ...s, trayBadge })),
       setNotificationOpensChat: (notificationOpensChat) => setSettings((s) => ({ ...s, notificationOpensChat })),
+      setSendTyping: (sendTyping) => setSettings((s) => ({ ...s, sendTyping })),
     }),
     [settings, resolvedTheme, setZoom, stepZoom],
   );

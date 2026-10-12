@@ -117,6 +117,7 @@ export function NewChatPanel({ contacts, showAccount, lookupNumber, lookupLabel,
             }}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
+                e.preventDefault();
                 if (query) setQuery("");
                 else onBack();
               } else if (e.key === "Enter" && looksLikeNumber && lookupNumber) {

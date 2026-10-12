@@ -58,8 +58,28 @@ pub fn signal_person_details(mgr: Mgr<'_>, id: String) -> crate::store::PersonDe
 }
 
 #[tauri::command]
-pub fn signal_set_muted(mgr: Mgr<'_>, chat_id: String, muted: bool) {
-    mgr.set_muted(&chat_id, muted);
+pub fn signal_set_muted(mgr: Mgr<'_>, chat_id: String, muted: bool, until_ms: Option<i64>) {
+    mgr.set_muted(&chat_id, muted, until_ms);
+}
+
+#[tauri::command]
+pub fn signal_delete_chat(mgr: Mgr<'_>, chat_id: String) {
+    mgr.delete_chat(&chat_id);
+}
+
+#[tauri::command]
+pub fn signal_clear_chat(mgr: Mgr<'_>, chat_id: String, keep_starred: bool) {
+    mgr.clear_chat(&chat_id, keep_starred);
+}
+
+#[tauri::command]
+pub fn signal_set_archived(mgr: Mgr<'_>, chat_id: String, archived: bool) {
+    mgr.set_archived(&chat_id, archived);
+}
+
+#[tauri::command]
+pub fn signal_set_pinned(mgr: Mgr<'_>, chat_id: String, pinned: bool) -> Result<(), String> {
+    mgr.set_pinned(&chat_id, pinned)
 }
 
 #[tauri::command]
@@ -77,6 +97,17 @@ pub async fn signal_send_text(
     styled: Option<super::Styled>,
 ) -> Result<MessageDto, String> {
     mgr.send_text(&chat_id, &text, reply_to.as_deref(), link, styled).await
+}
+
+#[tauri::command]
+pub async fn signal_edit_message(
+    mgr: Mgr<'_>,
+    chat_id: String,
+    message_id: String,
+    text: String,
+    styled: Option<super::Styled>,
+) -> Result<MessageDto, String> {
+    mgr.edit_message(&chat_id, &message_id, &text, styled).await
 }
 
 #[tauri::command]

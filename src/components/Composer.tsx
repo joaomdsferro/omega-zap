@@ -1,16 +1,17 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { AccountId } from "../accounts/accounts";
-import type { LinkPreview, OutgoingLink, ReplyQuote } from "../backend";
+import type { LinkPreview, OutgoingLink, OutgoingMedia, ReplyQuote, StickerShelf, TypingState } from "../backend";
 import { Emoji } from "../lib/emoji";
-import { searchEmoji } from "../lib/emojiSearch";
+import { emojiForShortcode, searchEmoji } from "../lib/emojiSearch";
+import { SHORTCUTS, matches } from "../lib/shortcuts";
 import { formatFileSize } from "../lib/format";
 import { URL_PATTERN, fetchLinkPreview } from "../lib/links";
 import { FormattedLine } from "../lib/markup";
 import { outgoingLink } from "../lib/outgoing";
 import { useSettings } from "../settings/settings";
 import { CloseIcon, FileIcon, MicIcon, PlusIcon, SendIcon, SmileIcon } from "./Icons";
+import { MediaPanel } from "./MediaPanel";
 import { MessageInput, type MessageInputHandle } from "./MessageInput";
-import { EmojiGrid } from "./ReactionPicker";
 
 interface ComposerProps {
   chatId: string;
@@ -28,6 +29,54 @@ interface ComposerProps {
   /** Adds files to send; absent where files can't be sent. */
   onAddFiles?: (files: File[]) => void;
   onRemoveFile?: (index: number) => void;
+  /** Tells the chat we are typing, or stopped; absent where it isn't sent. */
+  onTyping?: (chatId: string, state: TypingState) => void;
+  /** ↑ in an empty box: edits our last message, if one can be. */
+  onEditLast?: () => void;
+  /** Sends a sticker or GIF, answering `replyTo`; absent where they can't be sent. */
+  onSendMedia?: (item: OutgoingMedia) => Promise<void>;
+  stickers?: StickerShelf;
+  onError?: (message: string) => void;
+}
+
+/** "Typing" is said again this often while it goes on: the other side forgets it after a while. */
+const TYPING_REPEAT_MS = 10_000;
+/** A pause this long in typing counts as stopping. */
+const TYPING_IDLE_MS = 5_000;
+
+/** Says "typing" while the text changes, and "stopped" after a pause, a send or leaving the chat. */
+function useTypingSignal(chatId: string, onTyping?: (chatId: string, state: TypingState) => void) {
+  const send = useRef(onTyping);
+  send.current = onTyping;
+  const state = useRef<{ chatId: string; sentAt: number; idle?: number } | null>(null);
+
+  const stop = useCallback(() => {
+    const was = state.current;
+    if (!was) return;
+    window.clearTimeout(was.idle);
+    state.current = null;
+    send.current?.(was.chatId, "paused");
+  }, []);
+
+  const typed = useCallback(
+    (hasText: boolean) => {
+      if (!send.current || !hasText) return stop();
+      const now = Date.now();
+      const was = state.current;
+      if (!was || was.chatId !== chatId || now - was.sentAt > TYPING_REPEAT_MS) {
+        if (was && was.chatId !== chatId) stop();
+        send.current(chatId, "typing");
+        state.current = { chatId, sentAt: now };
+      }
+      window.clearTimeout(state.current?.idle);
+      if (state.current) state.current.idle = window.setTimeout(stop, TYPING_IDLE_MS);
+    },
+    [chatId, stop],
+  );
+
+  // Leaving the chat stops it there.
+  useEffect(() => stop, [chatId, stop]);
+  return { typed, stop };
 }
 
 function Spinner({ size }: { size: number }) {
@@ -93,6 +142,8 @@ const LINK_PAUSE_MS = 400;
 const SUGGESTIONS = 8;
 /** What starts an emoji suggestion: a colon, at the start or after a space, and two letters. */
 const SHORTCODE = /(?:^|\s):([\p{L}\p{N}_+-]{2,})$/u;
+/** A whole shortcode, closed with a colon: ":laughing:". */
+const CLOSED_SHORTCODE = /(?:^|\s):([\p{L}\p{N}_+-]+):$/u;
 
 /** The card for the link being typed, once it has been read; `undefined` while it is looked up. */
 function useTypedLink(text: string, enabled: boolean) {
@@ -113,7 +164,7 @@ function useTypedLink(text: string, enabled: boolean) {
   return found?.url === url ? { url, preview: found.preview, loading: false } : { url, preview: null, loading: true };
 }
 
-export function Composer({ chatId, account, disabled, disabledReason, replyTo, onCancelReply, onSend, files = [], onAddFiles, onRemoveFile }: ComposerProps) {
+export function Composer({ chatId, account, disabled, disabledReason, replyTo, onCancelReply, onSend, files = [], onAddFiles, onRemoveFile, onTyping, onEditLast, onSendMedia, stickers, onError }: ComposerProps) {
   const { settings } = useSettings();
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
@@ -123,6 +174,9 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
   const picker = useRef<HTMLInputElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const emojiButton = useRef<HTMLButtonElement>(null);
+  const typing = useTypingSignal(chatId, onTyping);
+  // The Stickers tab, while open, makes pasted pictures into stickers.
+  const pasteIntoStickers = useRef<((files: File[]) => boolean) | null>(null);
 
   useEffect(() => {
     input.current?.setText("");
@@ -140,10 +194,13 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
     if (!emojiOpen) return;
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (!panel.current?.contains(target) && !emojiButton.current?.contains(target)) setEmojiOpen(false);
+      // A sticker's menu opens outside the panel but belongs to it.
+      const inMenu = target instanceof Element && target.closest('[role="menu"]');
+      if (!panel.current?.contains(target) && !emojiButton.current?.contains(target) && !inMenu) setEmojiOpen(false);
     };
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !event.defaultPrevented && !document.querySelector('[role="menu"]')) {
+        event.preventDefault();
         setEmojiOpen(false);
         input.current?.focus();
       }
@@ -155,6 +212,20 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [emojiOpen]);
+
+  // Ctrl+E opens or closes the emoji panel, from anywhere in the chat.
+  useEffect(() => {
+    if (disabled) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || !SHORTCUTS.emoji.combos.some((combo) => matches(event, combo))) return;
+      if (document.querySelector('[aria-modal="true"], [role="menu"]')) return;
+      event.preventDefault();
+      setEmojiOpen((open) => !open);
+      input.current?.focus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [disabled]);
 
   // ":joy" offers 😂 and its neighbours.
   const shortcode = SHORTCODE.exec(text.slice(0, caret));
@@ -169,6 +240,13 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
     input.current?.replaceBefore(caret - query.length - 1, emoji);
   }
 
+  // Closing the shortcode with a colon puts its emoji in at once.
+  useEffect(() => {
+    const closed = CLOSED_SHORTCODE.exec(text.slice(0, caret));
+    const emoji = closed && emojiForShortcode(closed[1]);
+    if (emoji) input.current?.replaceBefore(caret - closed[1].length - 2, emoji);
+  }, [text, caret]);
+
   // The link being typed gets its card above the box, as on the phone.
   const typed = useTypedLink(files.length ? "" : text, settings.fetchLinkPreviews && !disabled);
   const [hiddenLink, setHiddenLink] = useState<string | null>(null);
@@ -179,6 +257,7 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
     const value = text.trim();
     if ((!value && !files.length) || disabled || sending) return;
     setSending(true);
+    typing.stop();
     try {
       const card = !files.length && linkCard?.preview ? await outgoingLink(linkCard.preview) : undefined;
       await onSend(value, files, card);
@@ -215,6 +294,11 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
         return;
       }
     }
+    if (e.key === "ArrowUp" && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !text && !files.length && onEditLast) {
+      e.preventDefault();
+      onEditLast();
+      return;
+    }
     if (e.key === "Escape" && replyTo) {
       e.preventDefault();
       onCancelReply?.();
@@ -237,11 +321,21 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
         <div
           ref={panel}
           role="dialog"
-          aria-label="Emoji"
-          className="reaction-pop absolute bottom-full left-3 z-40 mb-2 flex h-[340px] w-[364px] max-w-[calc(100%-24px)] flex-col overflow-hidden rounded-2xl bg-(--panel-bg)"
+          aria-label={onSendMedia ? "Emoji, GIFs and stickers" : "Emoji"}
+          className={[
+            "reaction-pop absolute bottom-full left-3 z-40 mb-2 flex w-[364px] max-w-[calc(100%-24px)] flex-col overflow-hidden rounded-2xl bg-(--panel-bg)",
+            onSendMedia ? "h-[420px] max-h-[calc(100vh-160px)]" : "h-[340px]",
+          ].join(" ")}
           style={{ boxShadow: "0 2px 5px rgba(11,20,26,.26), 0 2px 10px rgba(11,20,26,.16)" }}
         >
-          <EmojiGrid account={account} autoFocus={false} characters onPick={(emoji) => input.current?.insert(emoji)} />
+          <MediaPanel
+            account={account}
+            onEmoji={(emoji) => input.current?.insert(emoji)}
+            onSend={onSendMedia && !disabled ? onSendMedia : undefined}
+            stickers={stickers}
+            onError={onError}
+            pasteInto={pasteIntoStickers}
+          />
         </div>
       ) : null}
       {suggestions.length ? (
@@ -266,7 +360,8 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
               ].join(" ")}
             >
               <Emoji emoji={entry.emoji} size={22} />
-              <span className="truncate">{entry.name}</span>
+              <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+              {entry.code ? <span className="shrink-0 text-[12.5px] text-(--text-secondary)">:{entry.code}:</span> : null}
             </li>
           ))}
         </ul>
@@ -360,13 +455,17 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
         <MessageInput
           ref={input}
           onChange={(value, at) => {
+            typing.typed(value.trim().length > 0);
             setText(value);
             setCaret(at);
             setDismissed(null);
           }}
           onCaret={setCaret}
           onKeyDown={onKeyDown}
-          onPasteFiles={onAddFiles}
+          onPasteFiles={(pasted) => {
+            if (emojiOpen && pasteIntoStickers.current?.(pasted)) return;
+            onAddFiles?.(pasted);
+          }}
           placeholder={disabled ? (disabledReason ?? "Can't send messages right now") : files.length ? "Add a caption" : "Type a message"}
           disabled={disabled}
           label="Message"

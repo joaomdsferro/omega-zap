@@ -3,7 +3,26 @@ import type { Chat, StarredMessage } from "../backend";
 import { ChatList } from "./ChatList";
 import { MessageResults } from "./MessageResults";
 import { matches } from "../lib/search";
-import { MoreIcon, NewChatIcon, PlusIcon, SearchIcon, SettingsIcon, StarIcon, UnreadIcon } from "./Icons";
+import {
+  ArchiveIcon,
+  BlockedIcon,
+  ClearIcon,
+  ExitIcon,
+  BackIcon,
+  CloseIcon,
+  MoreIcon,
+  MuteIcon,
+  NewChatIcon,
+  PinIcon,
+  PlusIcon,
+  SearchIcon,
+  KeyboardIcon,
+  SettingsIcon,
+  StarIcon,
+  TrashIcon,
+  UnarchiveIcon,
+  UnreadIcon,
+} from "./Icons";
 import { PopupMenu, type MenuEntry } from "./PopupMenu";
 
 /** A built-in filter, or `list:` and the name of a custom list. */
@@ -42,10 +61,24 @@ interface SidebarProps {
   onNewChat: () => void;
   onStarred: () => void;
   onSettings: () => void;
+  onShortcuts: () => void;
   onToggleFavorite: (chat: Chat) => void;
   /** Marks a chat read, or unread by hand. */
   onToggleUnread?: (chat: Chat) => void;
   onToggleList: (chat: Chat, list: string) => void;
+  /** Moves a chat to Archived, or back to the list. */
+  onToggleArchived?: (chat: Chat) => void;
+  onTogglePinned?: (chat: Chat) => void;
+  onToggleMuted?: (chat: Chat) => void;
+  /** Ask before emptying or deleting a chat. */
+  onClearChat?: (chat: Chat) => void;
+  onDeleteChat?: (chat: Chat) => void;
+  /** Ask before blocking or unblocking someone. */
+  onToggleBlocked?: (chat: Chat) => void;
+  /** Whether a chat's account can block. */
+  canBlock?: (chat: Chat) => boolean;
+  /** Ask before leaving a group; a group is left before it can be deleted. */
+  onExitGroup?: (chat: Chat) => void;
   /** Opens the list editor, with a chat already in the new list. */
   onNewList: (chat?: Chat) => void;
   onEditList: (list: string) => void;
@@ -131,9 +164,18 @@ export function Sidebar({
   onNewChat,
   onStarred,
   onSettings,
+  onShortcuts,
   onToggleFavorite,
   onToggleUnread,
   onToggleList,
+  onToggleArchived,
+  onTogglePinned,
+  onToggleMuted,
+  onClearChat,
+  onDeleteChat,
+  onToggleBlocked,
+  canBlock,
+  onExitGroup,
   onNewList,
   onEditList,
   searchMessages,
@@ -159,6 +201,17 @@ export function Sidebar({
   const foundMessages = query.trim().length >= MIN_MESSAGE_SEARCH ? (found?.items ?? []) : [];
   const [chosen, setChosen] = useState<Filter>("all");
   const [menu, setMenu] = useState<OpenMenu | null>(null);
+  /** Showing the archived chats instead of the list. */
+  const [archivedOpen, setArchivedOpen] = useState(false);
+
+  const listed = useMemo(() => chats.filter((c) => !c.archived), [chats]);
+  const archived = useMemo(() => chats.filter((c) => c.archived), [chats]);
+  // Archived chats with something new, muted ones left out, as on the phone.
+  const archivedUnread = archived.filter((c) => !c.muted && (c.unread > 0 || c.markedUnread)).length;
+  const inArchived = archivedOpen && archived.length > 0;
+  useEffect(() => {
+    if (archivedOpen && archived.length === 0) setArchivedOpen(false);
+  }, [archivedOpen, archived.length]);
 
   const filters = useMemo(
     () => [
@@ -176,19 +229,24 @@ export function Sidebar({
 
   const filtered = useMemo(() => {
     const q = query.trim();
-    return chats.filter((c) => {
-      if (!active.test(c)) return false;
+    // A search looks in Archived too.
+    const pool = inArchived ? archived : q ? chats : listed;
+    return pool.filter((c) => {
+      if (!inArchived && !active.test(c)) return false;
       if (!q) return true;
       return matches(c.name, q) || matches(c.lastMessage, q);
     });
-  }, [chats, query, active]);
+  }, [chats, listed, archived, inArchived, query, active]);
 
-  // A chat pointed out has to be in sight: drop a filter or search hiding it.
+  // A chat pointed out has to be in sight: drop a filter or search hiding it,
+  // or go to Archived when it is there.
   useEffect(() => {
     if (!highlighted || filtered.some((c) => `${c.account}:${c.id}` === highlighted)) return;
-    if (!chats.some((c) => `${c.account}:${c.id}` === highlighted)) return;
+    const chat = chats.find((c) => `${c.account}:${c.id}` === highlighted);
+    if (!chat) return;
     setQuery("");
     setChosen("all");
+    setArchivedOpen(Boolean(chat.archived));
     // Only when it is asked for, not each time the list changes after.
   }, [highlighted]);
 
@@ -199,6 +257,34 @@ export function Sidebar({
       y,
       label: `Options for ${chat.name}`,
       items: [
+        ...(onToggleArchived
+          ? [
+              {
+                label: chat.archived ? "Unarchive chat" : "Archive chat",
+                icon: chat.archived ? <UnarchiveIcon size={18} /> : <ArchiveIcon size={18} />,
+                onSelect: () => onToggleArchived(chat),
+              },
+            ]
+          : []),
+        ...(onToggleMuted
+          ? [
+              {
+                label: chat.muted ? "Unmute notifications" : "Mute notifications",
+                icon: <MuteIcon size={18} />,
+                onSelect: () => onToggleMuted(chat),
+              },
+            ]
+          : []),
+        // An archived chat can't be pinned.
+        ...(onTogglePinned && !chat.archived
+          ? [
+              {
+                label: chat.pinned ? "Unpin chat" : "Pin chat",
+                icon: <PinIcon size={18} />,
+                onSelect: () => onTogglePinned(chat),
+              },
+            ]
+          : []),
         ...(onToggleUnread
           ? [
               {
@@ -221,6 +307,18 @@ export function Sidebar({
           onSelect: () => onToggleList(chat, name),
         })),
         { label: "New list…", icon: <PlusIcon size={18} />, onSelect: () => onNewList(chat) },
+        ...(onClearChat || onDeleteChat || onToggleBlocked ? ["separator" as const] : []),
+        ...(onClearChat ? [{ label: "Clear chat", icon: <ClearIcon size={18} />, onSelect: () => onClearChat(chat) }] : []),
+        ...(onToggleBlocked && !chat.isGroup && canBlock?.(chat)
+          ? [{ label: chat.blocked ? "Unblock" : "Block", icon: <BlockedIcon size={18} />, danger: !chat.blocked, onSelect: () => onToggleBlocked(chat) }]
+          : []),
+        ...(chat.isGroup && !chat.left
+          ? onExitGroup
+            ? [{ label: "Exit group", icon: <ExitIcon size={18} />, danger: true, onSelect: () => onExitGroup(chat) }]
+            : []
+          : onDeleteChat
+            ? [{ label: chat.isGroup ? "Delete group" : "Delete chat", icon: <TrashIcon size={18} />, danger: true, onSelect: () => onDeleteChat(chat) }]
+            : []),
       ],
     });
   }
@@ -234,6 +332,7 @@ export function Sidebar({
       items: [
         { label: "Starred messages", icon: <StarIcon size={18} />, onSelect: onStarred },
         { label: "New list", icon: <PlusIcon size={18} />, onSelect: () => onNewList() },
+        { label: "Keyboard shortcuts", icon: <KeyboardIcon size={18} />, onSelect: onShortcuts },
         { label: "Settings", icon: <SettingsIcon size={18} />, onSelect: onSettings },
       ],
     });
@@ -241,15 +340,24 @@ export function Sidebar({
 
   return (
     <div className="flex h-full flex-col bg-(--panel-bg)">
-      <header className="flex h-15 shrink-0 items-center gap-1 pr-2 pl-4">
-        <h1 className="min-w-0 flex-1 truncate font-display text-[22px] font-bold text-(--text-primary)">{title}</h1>
-        <HeaderButton label="New chat" onClick={onNewChat}>
-          <NewChatIcon size={22} />
-        </HeaderButton>
-        <HeaderButton label="Menu" onClick={openHeaderMenu}>
-          <MoreIcon size={22} className="rotate-90" />
-        </HeaderButton>
-      </header>
+      {inArchived ? (
+        <header className="flex h-15 shrink-0 items-center gap-3 pr-2 pl-2">
+          <HeaderButton label="Back to chats" onClick={() => setArchivedOpen(false)}>
+            <BackIcon size={22} />
+          </HeaderButton>
+          <h1 className="min-w-0 flex-1 truncate font-display text-[19px] font-bold text-(--text-primary)">Archived</h1>
+        </header>
+      ) : (
+        <header className="flex h-15 shrink-0 items-center gap-1 pr-2 pl-4">
+          <h1 className="min-w-0 flex-1 truncate font-display text-[22px] font-bold text-(--text-primary)">{title}</h1>
+          <HeaderButton label="New chat" onClick={onNewChat}>
+            <NewChatIcon size={22} />
+          </HeaderButton>
+          <HeaderButton label="Menu" onClick={openHeaderMenu}>
+            <MoreIcon size={22} className="rotate-90" />
+          </HeaderButton>
+        </header>
+      )}
 
       <div className="px-3 pb-2">
         <label className="sr-only" htmlFor="chat-search">
@@ -265,15 +373,36 @@ export function Sidebar({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Escape") setQuery("");
+              if (e.key !== "Escape" || (!query && !inArchived)) return;
+              e.preventDefault();
+              if (query) setQuery("");
+              else setArchivedOpen(false);
             }}
             placeholder="Search chats and messages"
-            className="h-9 w-full rounded-lg bg-(--search-bg) pr-3 pl-12 text-[15px] text-(--text-primary) outline-none placeholder:text-(--text-secondary) focus-visible:outline-none"
+            className="h-9 w-full rounded-lg bg-(--search-bg) pr-10 pl-12 text-[15px] text-(--text-primary) outline-none placeholder:text-(--text-secondary) focus-visible:outline-none"
           />
+          {query ? (
+            <button
+              type="button"
+              onClick={() => {
+                setQuery("");
+                document.getElementById("chat-search")?.focus();
+              }}
+              aria-label="Clear search"
+              title="Clear search (Esc)"
+              className="absolute top-1/2 right-1.5 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-(--icon) hover:bg-(--hover-bg)"
+            >
+              <CloseIcon size={16} />
+            </button>
+          ) : null}
         </div>
       </div>
 
-      <div className="no-scrollbar flex gap-2 overflow-x-auto px-3 pb-2" role="group" aria-label="Filter chats">
+      <div
+        className={`no-scrollbar gap-2 overflow-x-auto px-3 pb-2 ${inArchived ? "hidden" : "flex"}`}
+        role="group"
+        aria-label="Filter chats"
+      >
         {filters.map((f) => {
           const list = f.id.startsWith("list:") ? f.label : null;
           return (
@@ -281,7 +410,7 @@ export function Sidebar({
               key={f.id}
               active={active.id === f.id}
               label={f.label}
-              count={f.id === "all" ? undefined : chats.filter((c) => (c.unread > 0 || c.markedUnread) && f.test(c)).length}
+              count={f.id === "all" ? undefined : listed.filter((c) => (c.unread > 0 || c.markedUnread) && f.test(c)).length}
               onClick={() => setChosen(f.id)}
               onContextMenu={
                 list
@@ -313,10 +442,21 @@ export function Sidebar({
       {banner}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {!inArchived && !query.trim() && active.id === "all" && archived.length > 0 ? (
+          <ArchivedRow unread={archivedUnread} onOpen={() => setArchivedOpen(true)} />
+        ) : null}
         {filtered.length === 0 && foundMessages.length === 0 ? (
           <div className="px-6 py-10 text-center text-[14px] text-(--text-secondary)">
-            <p>{chats.length === 0 ? emptyText : query ? "No chats match" : `No chats in ${active.label}`}</p>
-            {active.id.startsWith("list:") && !query && chats.length > 0 ? (
+            <p>
+              {chats.length === 0
+                ? emptyText
+                : query
+                  ? "No chats match"
+                  : inArchived
+                    ? "No archived chats"
+                    : `No chats in ${active.label}`}
+            </p>
+            {active.id.startsWith("list:") && !inArchived && !query && chats.length > 0 ? (
               <button
                 type="button"
                 onClick={() => onEditList(active.label)}
@@ -355,6 +495,24 @@ export function Sidebar({
         <PopupMenu x={menu.x} y={menu.y} label={menu.label} items={menu.items} onClose={() => setMenu(null)} />
       ) : null}
     </div>
+  );
+}
+
+/** Opens the archived chats, at the top of the list as on the phone. */
+function ArchivedRow({ unread, onOpen }: { unread: number; onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={unread ? `Archived, ${unread} unread` : "Archived"}
+      className="flex h-13 w-full items-center gap-3 pr-4 pl-2.75 text-left transition-colors duration-100 hover:bg-(--hover-bg)"
+    >
+      <span className="flex w-12.25 shrink-0 justify-center text-(--accent)">
+        <ArchiveIcon size={20} />
+      </span>
+      <span className="min-w-0 flex-1 text-[17px] text-(--text-primary)">Archived</span>
+      {unread ? <span className="text-[12.5px] font-medium tabular-nums text-(--accent)">{unread}</span> : null}
+    </button>
   );
 }
 

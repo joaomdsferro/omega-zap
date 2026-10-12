@@ -45,7 +45,9 @@ export function ReactionDetails({ reactions, anchor, onRemove, onClose }: Reacti
       if (!box.current?.contains(target) && !target.closest?.("[data-reaction-pills]")) onClose();
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onClose();
     };
     // It stays where it opened, so scrolling the chat closes it.
     const onWheel = (event: WheelEvent) => {

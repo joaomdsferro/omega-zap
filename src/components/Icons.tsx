@@ -125,6 +125,19 @@ export const CheckIcon = (p: IconProps) => (
   </Svg>
 );
 
+export const SelectIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="4" y="4" width="16" height="16" rx="3" />
+    <path d="m8.5 12.2 2.4 2.4 4.6-4.8" />
+  </Svg>
+);
+
+export const EditIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16zM13.5 6.5l4 4" />
+  </Svg>
+);
+
 export const PhoneIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M6.6 3.5h2.6l1.4 4-2 1.3a11 11 0 0 0 6.6 6.6l1.3-2 4 1.4v2.6a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 4.6 5.7a2 2 0 0 1 2-2.2z" />
@@ -192,6 +205,28 @@ export const PinIcon = (p: IconProps) => (
   </Svg>
 );
 
+/** A map marker, filled with `fill` when given. */
+export const MapPinIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 22s-7-6.1-7-12a7 7 0 0 1 14 0c0 5.9-7 12-7 12z" />
+    <circle cx="12" cy="10" r="2.6" fill="white" stroke="none" />
+  </Svg>
+);
+
+export const ArchiveIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="4" width="18" height="4" rx="1" />
+    <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8M12 11v5M9.5 13.5 12 16l2.5-2.5" />
+  </Svg>
+);
+
+export const UnarchiveIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="4" width="18" height="4" rx="1" />
+    <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8M12 16v-5M9.5 13.5 12 11l2.5 2.5" />
+  </Svg>
+);
+
 export const ReplyIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M9 7 4 12l5 5" />
@@ -219,7 +254,36 @@ export const TrashIcon = (p: IconProps) => (
   </Svg>
 );
 
-/** The mark on a message its sender deleted. */
+export const InfoIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 11v5M12 8h.01" />
+  </Svg>
+);
+
+/** Leaving a group. */
+export const ExitIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M9 8l-4 4 4 4M5 12h10" />
+  </Svg>
+);
+
+/** Clearing a chat of its messages. */
+export const ClearIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M8 12h8" />
+  </Svg>
+);
+
+export const AddPersonIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="10" cy="8" r="3.5" />
+    <path d="M3.5 20a6.5 6.5 0 0 1 11.6-4M18 14v6M15 17h6" />
+  </Svg>
+);
+
+/** The mark on a message its sender deleted, and blocking someone. */
 export const BlockedIcon = (p: IconProps) => (
   <Svg {...p}>
     <circle cx="12" cy="12" r="8.5" />
@@ -345,4 +409,33 @@ export const PersonIcon = ({ size = 24, ...rest }: IconProps) => (
     <circle cx="12" cy="7.5" r="5" />
     <path d="M2.5 22a9.5 9.5 0 0 1 19 0z" />
   </svg>
+);
+
+export const KeyboardIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="2.5" y="6" width="19" height="12" rx="2" />
+    <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M18 14h.01M9 14h6" />
+  </Svg>
+);
+
+export const GifIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="3" />
+    <path d="M10 10.2a2 2 0 0 0-1.6-.7c-1.3 0-2 1-2 2.5s.7 2.5 2 2.5c.9 0 1.6-.5 1.6-1.5v-.6H8.8M12.7 9.6v4.8M15.4 14.4V9.6h2.4M15.4 12h2" strokeWidth={1.5} />
+  </Svg>
+);
+
+export const StickerIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M20 13V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h6z" />
+    <path d="M20 13h-4a3 3 0 0 0-3 3v4" />
+    <path d="M9 10v.5M14 10v.5" strokeWidth={2.2} />
+  </Svg>
+);
+
+export const ClockIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5l3 2" />
+  </Svg>
 );

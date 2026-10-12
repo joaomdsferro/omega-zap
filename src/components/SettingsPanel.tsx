@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { ACCOUNTS, PLANNED_ACCOUNTS, type AccountId } from "../accounts/accounts";
 import type { Account } from "../accounts/useAccount";
+import type { Privacy, PrivacyCategory } from "../backend";
 import { modKey } from "../lib/platform";
 import {
   SIDEBAR_DEFAULT,
@@ -17,6 +18,135 @@ interface SettingsPanelProps {
   accounts: Account[];
   onBack: () => void;
   onLink: (account: AccountId) => void;
+  /** WhatsApp's privacy settings, while it is connected. */
+  privacy?: {
+    load: () => Promise<Privacy>;
+    save: (category: PrivacyCategory, value: string) => Promise<void>;
+  };
+}
+
+const LAST_SEEN_OPTIONS = [
+  { value: "all", label: "Everyone" },
+  { value: "contacts", label: "My contacts" },
+  { value: "none", label: "Nobody" },
+];
+
+const ONLINE_OPTIONS = [
+  { value: "all", label: "Everyone" },
+  { value: "match_last_seen", label: "Same as last seen" },
+];
+
+function Choice({
+  label,
+  name,
+  options,
+  value,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  name: string;
+  options: { value: string; label: string }[];
+  value?: string;
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <fieldset className="px-3 py-2.5" disabled={disabled}>
+      <legend className="text-[15px] text-(--text-primary)">{label}</legend>
+      <div className="mt-1.5 flex flex-wrap gap-x-5 gap-y-1">
+        {options.map((option) => (
+          <label key={option.value} className="flex items-center gap-2 py-1 text-[14px] text-(--text-primary)">
+            <input
+              type="radio"
+              name={name}
+              checked={value === option.value}
+              onChange={() => onChange(option.value)}
+              className="size-4 accent-(--accent)"
+            />
+            {option.label}
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
+/** Who sees our last seen, online and read receipts: the account's own settings, changed on WhatsApp itself. */
+function WhatsAppPrivacy({ load, save }: NonNullable<SettingsPanelProps["privacy"]>) {
+  const [privacy, setPrivacy] = useState<Privacy | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    load()
+      .then((p) => alive && setPrivacy(p))
+      .catch((e) => alive && setError(String(e)));
+    return () => {
+      alive = false;
+    };
+  }, [load]);
+
+  async function change(category: PrivacyCategory, key: keyof Privacy, value: string) {
+    if (!privacy) return;
+    const before = privacy;
+    setPrivacy({ ...privacy, [key]: value });
+    setBusy(true);
+    setError(null);
+    try {
+      await save(category, value);
+    } catch (e) {
+      setPrivacy(before);
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!privacy) {
+    return (
+      <p className="px-3 py-2.5 text-[14px] text-(--text-secondary)">
+        {error ?? "Loading WhatsApp's privacy settings…"}
+      </p>
+    );
+  }
+  // "My contacts except…" is set on the phone, with its list of people.
+  const lastSeen =
+    privacy.lastSeen === "contact_blacklist"
+      ? [...LAST_SEEN_OPTIONS.slice(0, 2), { value: "contact_blacklist", label: "My contacts except…" }, LAST_SEEN_OPTIONS[2]]
+      : LAST_SEEN_OPTIONS;
+  return (
+    <>
+      <Choice
+        label="Last seen"
+        name="privacy-last-seen"
+        options={lastSeen}
+        value={privacy.lastSeen}
+        disabled={busy}
+        onChange={(value) => void change("last", "lastSeen", value)}
+      />
+      <Choice
+        label="Online"
+        name="privacy-online"
+        options={ONLINE_OPTIONS}
+        value={privacy.online}
+        disabled={busy}
+        onChange={(value) => void change("online", "online", value)}
+      />
+      <Switch
+        checked={privacy.readReceipts !== "none"}
+        onChange={(on) => void change("readreceipts", "readReceipts", on ? "all" : "none")}
+        label="Read receipts"
+        description="Others see blue ticks when you read their messages. When off, you don't see theirs either; groups always send them."
+      />
+      <p className="px-3 pt-1 pb-2 text-[13px] text-(--text-secondary)">
+        These are your WhatsApp account's own settings, the same as on your phone. If you don't share your last seen or
+        online, you can't see other people's. You show as online only while the Omega Zap window is in front.
+      </p>
+      {error ? <p className="px-3 text-[13px] text-(--danger)" role="alert">{error}</p> : null}
+    </>
+  );
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -188,7 +318,7 @@ function Switch({ checked, onChange, label, description }: SwitchProps) {
   );
 }
 
-export function SettingsPanel({ accounts, onBack, onLink }: SettingsPanelProps) {
+export function SettingsPanel({ accounts, onBack, onLink, privacy }: SettingsPanelProps) {
   const {
     settings,
     setTheme,
@@ -204,6 +334,7 @@ export function SettingsPanel({ accounts, onBack, onLink }: SettingsPanelProps) 
     setNotificationPreview,
     setTrayBadge,
     setNotificationOpensChat,
+    setSendTyping,
   } = useSettings();
 
   const zoomIndex = ZOOM_STEPS.indexOf(settings.zoom);
@@ -241,6 +372,16 @@ export function SettingsPanel({ accounts, onBack, onLink }: SettingsPanelProps) 
               description="One list for every linked account, each chat marked with its network. When off, you switch between accounts from the side rail."
             />
           </div>
+        </Section>
+
+        <Section title="Privacy">
+          {privacy ? <WhatsAppPrivacy load={privacy.load} save={privacy.save} /> : null}
+          <Switch
+            checked={settings.sendTyping}
+            onChange={setSendTyping}
+            label="Show when I'm typing"
+            description="Others see “typing…” while you write here. This one is only Omega Zap's: your phone still shows it."
+          />
         </Section>
 
         <Section title="Notifications">
@@ -411,7 +552,7 @@ export function SettingsPanel({ accounts, onBack, onLink }: SettingsPanelProps) 
         <Section title="About">
           <p className="text-[14px] text-(--text-primary)">Omega Zap 0.0.1</p>
           <p className="mt-1 text-[13px] leading-5 text-(--text-secondary)">
-            An unofficial WhatsApp and Signal client inspired by ZapFast. Not affiliated with WhatsApp,
+            An unofficial WhatsApp and Signal client. Not affiliated with WhatsApp,
             Meta or Signal.
           </p>
         </Section>

@@ -6,10 +6,14 @@ mod devfiles;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod emoji;
 mod link_preview;
+mod klipy;
 mod links;
 mod notify;
+#[cfg(target_os = "linux")]
+mod players;
 mod signal;
 mod sqlcipher;
+mod sticker_image;
 mod store;
 mod tray;
 mod vault;
@@ -297,6 +301,11 @@ pub fn run() {
                 log::warn!("could not register with the desktop: {e}");
             }
             tray::setup(app.handle())?;
+            #[cfg(target_os = "linux")]
+            players::allow_autoplay(match &app.config().build.dev_url {
+                Some(url) if cfg!(debug_assertions) => url.to_string(),
+                _ => "tauri://localhost".into(),
+            });
             // Made here rather than from the config, so it never opens on
             // a webview cache the migration above is still clearing.
             tray::bring_up(app.handle());
@@ -324,6 +333,12 @@ pub fn run() {
             wa::commands::wa_save_list,
             wa::commands::wa_delete_list,
             wa::commands::wa_set_starred,
+            wa::commands::wa_pinned_messages,
+            wa::commands::wa_pin_message,
+            wa::commands::wa_group_info,
+            wa::commands::wa_group_details,
+            wa::commands::wa_edit_message,
+            wa::commands::wa_vote_poll,
             wa::commands::wa_starred,
             wa::commands::wa_search,
             wa::commands::wa_older_messages,
@@ -333,7 +348,40 @@ pub fn run() {
             wa::commands::wa_set_unread,
             wa::commands::wa_person_details,
             wa::commands::wa_set_muted,
+            wa::commands::wa_set_archived,
+            wa::commands::wa_set_typing,
+            wa::commands::wa_watch_presence,
+            wa::commands::wa_privacy,
+            wa::commands::wa_set_privacy,
+            wa::commands::wa_set_pinned,
+            wa::commands::wa_delete_chat,
+            wa::commands::wa_set_blocked,
+            wa::commands::wa_leave_group,
+            wa::commands::wa_edit_group,
+            wa::commands::wa_change_members,
+            wa::commands::wa_clear_chat,
             wa::commands::wa_lookup_number,
+            wa::commands::wa_sticker_library,
+            wa::commands::wa_library_media,
+            wa::commands::wa_send_sticker,
+            wa::commands::wa_send_new_sticker,
+            wa::commands::wa_add_new_sticker,
+            wa::commands::wa_set_sticker_favorite,
+            wa::commands::wa_message_sticker,
+            wa::commands::wa_sticker_store,
+            wa::commands::wa_install_pack,
+            wa::commands::wa_remove_pack,
+            wa::commands::wa_create_pack,
+            wa::commands::wa_rename_pack,
+            wa::commands::wa_add_to_pack,
+            wa::commands::wa_remove_from_pack,
+            wa::commands::wa_send_gif,
+            wa::commands::wa_send_recent_gif,
+            wa::commands::wa_send_klipy_sticker,
+            wa::commands::wa_add_klipy_sticker,
+            klipy::gif_search_available,
+            klipy::gif_search,
+            klipy::sticker_search,
             notify::show_notification,
             notify::dismiss_notification,
             tray::set_notification_prefs,
@@ -354,6 +402,7 @@ pub fn run() {
             signal::commands::signal_send_text,
             signal::commands::signal_send_file,
             signal::commands::signal_delete_message,
+            signal::commands::signal_edit_message,
             signal::commands::signal_fetch_media,
             signal::commands::signal_open_media,
             signal::commands::signal_react,
@@ -370,6 +419,10 @@ pub fn run() {
             signal::commands::signal_set_unread,
             signal::commands::signal_person_details,
             signal::commands::signal_set_muted,
+            signal::commands::signal_set_archived,
+            signal::commands::signal_set_pinned,
+            signal::commands::signal_delete_chat,
+            signal::commands::signal_clear_chat,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

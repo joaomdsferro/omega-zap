@@ -52,7 +52,10 @@ export function ChatSearch({ query, onQuery, found, onJump, onClose }: ChatSearc
           value={query}
           onChange={(event) => onQuery(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Escape") onClose();
+            if (event.key === "Escape") {
+              event.preventDefault();
+              onClose();
+            }
             else if (event.key === "Enter") {
               event.preventDefault();
               // Enter goes back in time, as reading a chat upwards does.

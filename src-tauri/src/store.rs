@@ -17,6 +17,8 @@ pub const OWN_AVATAR: &str = "me";
 pub const SEARCH_LIMIT: usize = 200;
 /// Messages read from the history database per scroll back.
 pub const OLDER_PAGE: usize = 100;
+/// The most chats WhatsApp lets you pin.
+pub const MAX_PINNED: usize = 3;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -130,12 +132,13 @@ impl CdnRef {
     pub fn attachment(&self) -> Option<AttachmentDto> {
         let kind = self.kind.clone()?;
         Some(AttachmentDto {
-            kind,
             mime: self.mime.clone().unwrap_or_default(),
             file_name: self.file_name.clone(),
             size: u32::try_from(self.size).unwrap_or(u32::MAX),
             width: Some(self.width).filter(|w| *w > 0),
             height: Some(self.height).filter(|h| *h > 0),
+            sticker_id: (kind == "sticker").then(|| self.sha256.clone()),
+            kind,
         })
     }
 }
@@ -146,12 +149,78 @@ pub struct Reaction {
     pub emoji: String,
 }
 
+/// A place shared in a message.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Place {
+    pub lat: f64,
+    pub lng: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// A page about the place, when the sender picked one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// A small map of it, as a data URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
+    /// Shared live: this is where it was when it was sent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live: bool,
+}
+
+/// A contact card shared in a message.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactCard {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub phones: Vec<CardPhone>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CardPhone {
+    /// As the card writes it.
+    pub number: String,
+    /// Their WhatsApp number, when the card names one: digits only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wa_id: Option<String>,
+}
+
+/// A poll: its question is the message's text.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct Poll {
+    pub options: Vec<String>,
+    /// How many options one person can pick; 0 for any number.
+    #[serde(default)]
+    pub selectable: u32,
+    /// The secret votes are sealed with (base64). Without it they can't be read
+    /// or cast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    /// Each person's latest vote.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub votes: Vec<PollVote>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PollVote {
+    pub voter: String,
+    /// Indexes into the poll's options.
+    pub options: Vec<usize>,
+    pub at_ms: i64,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Content {
     pub kind: MsgKind,
     pub text: Option<String>,
     pub media_label: Option<String>,
     pub voice_seconds: Option<u32>,
+    /// A voice message's loudness over its length (WhatsApp sends 64 values, 0–100).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waveform: Vec<u8>,
     pub reply_to: Option<ReplyRef>,
     /// Signal's attachments, in the order they were sent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -169,6 +238,12 @@ pub struct Content {
     /// forwarding score); 0 when it was written by its sender.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub forwarded: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<Place>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contacts: Vec<ContactCard>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll: Option<Poll>,
 }
 
 /// What search looks at in a message: its text and, for a file, its name.
@@ -223,12 +298,16 @@ impl Content {
             text: Some(text.into()),
             media_label: None,
             voice_seconds: None,
+            waveform: Vec::new(),
             reply_to,
             attachments: Vec::new(),
             media: None,
             wa_media: None,
             link: None,
             forwarded: 0,
+            place: None,
+            contacts: Vec::new(),
+            poll: None,
         }
     }
 
@@ -238,12 +317,16 @@ impl Content {
             text: caption.filter(|c| !c.trim().is_empty()),
             media_label: Some(label.into()),
             voice_seconds: None,
+            waveform: Vec::new(),
             reply_to: None,
             attachments: Vec::new(),
             media: None,
             wa_media: None,
             link: None,
             forwarded: 0,
+            place: None,
+            contacts: Vec::new(),
+            poll: None,
         }
     }
 
@@ -262,6 +345,14 @@ impl Content {
 
     /// One-line summary used for chat previews and quotes.
     pub fn preview(&self) -> String {
+        match self.contacts.as_slice() {
+            [] => {}
+            [one] => return format!("Contact: {}", one.name),
+            [first, rest @ ..] => return format!("Contacts: {} and {} more", first.name, rest.len()),
+        }
+        if let Some(name) = self.place.as_ref().and_then(|p| p.name.as_deref()).filter(|_| self.text.is_none()) {
+            return format!("{}: {name}", self.media_label.as_deref().unwrap_or("Location"));
+        }
         match (self.kind, &self.text, &self.media_label) {
             (MsgKind::Text, Some(text), _) => text.clone(),
             (MsgKind::Voice, _, _) => "Voice message".into(),
@@ -279,6 +370,16 @@ impl Content {
 pub struct WireIds {
     pub chat: String,
     pub sender: Option<String>,
+}
+
+/// The newest message of a chat, as WhatsApp keys it.
+pub struct LastMessageKey {
+    pub id: String,
+    pub chat: String,
+    pub from_me: bool,
+    /// Who sent it, in a group.
+    pub sender: Option<String>,
+    pub ts_s: i64,
 }
 
 /// An incoming message that was just read, as a read receipt names it.
@@ -309,6 +410,9 @@ pub struct StoredMessage {
     pub starred: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deleted: Option<Deletion>,
+    /// When its sender last changed what it says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited_ms: Option<i64>,
 }
 
 /// How a message was deleted. Kept rather than dropped, so a history replay
@@ -362,7 +466,79 @@ struct StoredChat {
     members_checked_ms: i64,
     /// Who is in the group, once looked up: finds the groups in common.
     participants: Vec<String>,
+    /// The group's admins, its creator first when it is one.
+    admins: Vec<String>,
+    /// What the group says about itself, and when and by whom it was made.
+    description: Option<String>,
+    created_ms: Option<i64>,
+    creator: Option<String>,
+    /// Messages pinned for everyone, and unpins kept a while so an older
+    /// pin replayed by history does not bring them back.
+    pins: Vec<StoredPin>,
+    /// When the phone was last asked to send this chat's latest messages
+    /// again, to bring their ticks and files up to date.
+    refreshed_ms: i64,
+    /// Who pinned or unpinned what and when, for the "You pinned a message"
+    /// lines in the conversation. Kept after an unpin, as WhatsApp keeps them.
+    pin_notes: Vec<StoredPin>,
+    /// We are no longer in the group: we left or were removed.
+    left: bool,
+    /// Only the group's admins may change its name, description and picture.
+    info_locked: bool,
 }
+
+/// A message pinned in a chat for everyone in it, or unpinned.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct StoredPin {
+    /// The pinned message.
+    id: String,
+    /// When it was pinned or unpinned.
+    at_ms: i64,
+    /// When the pin runs out; `None` once unpinned.
+    until_ms: Option<i64>,
+    /// Who pinned or unpinned it; `None` for us.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    by: Option<String>,
+}
+
+/// A line in a conversation saying someone pinned or unpinned a message.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PinNoteDto {
+    pub message_id: String,
+    pub at: i64,
+    /// Pinned; unpinned when false.
+    pub pinned: bool,
+    pub by_me: bool,
+    /// Who pinned it, by name, when it was someone else.
+    pub by: Option<String>,
+}
+
+/// The messages pinned in a chat and the lines saying who pinned them.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PinsDto {
+    /// The latest pin first.
+    pub messages: Vec<MessageDto>,
+    /// Oldest first.
+    pub notes: Vec<PinNoteDto>,
+}
+
+/// How long a chat's ticks and files are left alone after the phone was
+/// asked for them: in a group, our messages stay short of "read" for good.
+const REFRESH_COOLDOWN_MS: i64 = 24 * 3600 * 1000;
+
+/// How many "pinned a message" lines a chat keeps.
+const MAX_PIN_NOTES: usize = 50;
+
+/// How long after sending a message WhatsApp lets it be edited.
+pub const EDIT_WINDOW_MS: i64 = 15 * 60 * 1000;
+
+/// The most messages a chat shows pinned, as WhatsApp allows.
+pub const MAX_PINNED_MESSAGES: usize = 3;
+
+/// How long an unpin or a lapsed pin is remembered.
+const PIN_MEMORY_MS: i64 = 30 * 24 * 3600 * 1000;
 
 /// A group message counts as read once everyone else has read it.
 fn everyone_read(message: &StoredMessage, members: Option<u32>) -> bool {
@@ -407,12 +583,20 @@ pub struct ChatSummary {
     pub marked_unread: bool,
     pub pinned: bool,
     pub muted: bool,
+    /// Kept out of the chat list, under Archived.
+    pub archived: bool,
     pub is_group: bool,
     /// File name of the profile picture inside the avatars directory.
     pub avatar: Option<String>,
     pub favorite: bool,
     /// The ids of the lists the chat is in.
     pub lists: Vec<String>,
+    /// We blocked them.
+    pub blocked: bool,
+    /// A group we are no longer in.
+    pub left: bool,
+    /// Its messages were cleared: none are coming from the phone.
+    pub cleared: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -425,6 +609,9 @@ pub struct AttachmentDto {
     pub size: u32,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// A WhatsApp sticker's id in the sticker library (its file's hash).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sticker_id: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -474,6 +661,8 @@ pub struct MessageDto {
     pub image_label: Option<String>,
     pub media_label: Option<String>,
     pub voice_seconds: Option<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub waveform: Vec<u8>,
     pub reply_to: Option<ReplyDto>,
     pub status: Option<Delivery>,
     /// The attachment can be fetched.
@@ -492,6 +681,37 @@ pub struct MessageDto {
     pub starred: bool,
     /// Taken back by its sender: only a placeholder is left.
     pub deleted: bool,
+    /// Changed by its sender after it was sent.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub edited: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub place: Option<Place>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub contacts: Vec<ContactCard>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poll: Option<PollDto>,
+}
+
+/// A poll as the UI shows it.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PollDto {
+    pub options: Vec<PollOptionDto>,
+    /// How many options one person can pick; 0 for any number.
+    pub selectable: u32,
+    /// Votes can be read and cast: the poll's secret is known.
+    pub open: bool,
+    /// How many people voted.
+    pub voters: u32,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PollOptionDto {
+    pub name: String,
+    pub mine: bool,
+    /// Who picked it, "You" first.
+    pub people: Vec<String>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -527,6 +747,8 @@ pub struct PersonDto {
     /// What was found the last time contact info opened, refreshed after.
     pub about: Option<String>,
     pub common_groups: Vec<GroupRefDto>,
+    /// We blocked them.
+    pub blocked: bool,
 }
 
 /// What someone's contact info adds from the network.
@@ -537,6 +759,77 @@ pub struct PersonDetailsDto {
     /// File name of their picture at full size inside the avatars directory.
     pub photo: Option<String>,
     pub common_groups: Vec<GroupRefDto>,
+}
+
+/// Someone in a group, as group info lists them.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MemberDto {
+    pub id: String,
+    pub name: String,
+    /// Their number, when they are not a saved contact: WhatsApp shows it beside the name.
+    pub phone: Option<String>,
+    pub avatar: Option<String>,
+    pub is_me: bool,
+    pub admin: bool,
+    pub about: Option<String>,
+}
+
+/// A group's info, as the UI shows it beside the chat.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupInfoDto {
+    pub id: String,
+    pub name: String,
+    pub avatar: Option<String>,
+    pub members: Option<u32>,
+    pub description: Option<String>,
+    pub created_ms: Option<i64>,
+    /// Who made the group, by name.
+    pub created_by: Option<String>,
+    pub muted: bool,
+    pub starred: u32,
+    pub media_count: u32,
+    pub recent_media: Vec<MessageDto>,
+    /// Us first, then admins, then saved contacts and the rest by name.
+    pub participants: Vec<MemberDto>,
+    /// Whether we are an admin of it.
+    pub is_admin: bool,
+    /// We are no longer in it.
+    pub left: bool,
+    /// Only admins may change its name, description and picture.
+    pub info_locked: bool,
+}
+
+/// Someone in a group, as a group lookup names them.
+pub struct GroupMember {
+    pub id: String,
+    pub pn: Option<String>,
+    pub lid: Option<String>,
+    pub admin: bool,
+    /// The group's creator.
+    pub super_admin: bool,
+}
+
+/// What a group lookup says about a group, besides who is in it.
+#[derive(Default)]
+pub struct GroupFacts {
+    pub description: Option<String>,
+    pub created_ms: Option<i64>,
+    pub creator: Option<String>,
+    /// Only admins may edit the group's info.
+    pub locked: bool,
+}
+
+/// A change to a group, as its notifications tell it.
+pub enum GroupChange {
+    Subject(String),
+    Description(Option<String>),
+    Added(Vec<GroupMember>),
+    Removed(Vec<String>),
+    Promoted(Vec<String>),
+    Demoted(Vec<String>),
+    Locked(bool),
 }
 
 /// A group, as listed in someone's contact info.
@@ -672,6 +965,25 @@ pub struct ChatStore {
     /// Chats whose whole history is here: the phone had nothing older.
     #[serde(default)]
     history_complete: HashSet<String>,
+    /// Chats cleared or deleted, here or on another device, with the time of
+    /// the last message that went: older ones a history replay brings back
+    /// are dropped, and a deleted chat stays gone until a newer one comes.
+    #[serde(default)]
+    cleared: HashMap<String, i64>,
+    /// Messages to delete from the history database too.
+    #[serde(skip)]
+    purged: Vec<Purge>,
+    /// People we blocked, as the server last listed them.
+    #[serde(default)]
+    blocked: HashSet<String>,
+}
+
+/// Messages of a chat to delete from the history database: all up to
+/// `before_ms`, starred ones left when `keep_starred`.
+pub struct Purge {
+    pub chat: String,
+    pub before_ms: i64,
+    pub keep_starred: bool,
 }
 
 impl Default for ChatStore {
@@ -698,6 +1010,9 @@ impl Default for ChatStore {
             pending_stars: HashSet::new(),
             evicted: Vec::new(),
             history_complete: HashSet::new(),
+            cleared: HashMap::new(),
+            purged: Vec::new(),
+            blocked: HashSet::new(),
         }
     }
 }
@@ -859,7 +1174,13 @@ impl ChatStore {
         }
     }
 
-    fn canonical(&self, jid: &str) -> String {
+    /// One of our own ids, on any device.
+    pub fn is_own(&self, jid: &str) -> bool {
+        let jid = self.canonical(jid);
+        self.own_ids.iter().any(|own| self.canonical(own) == jid)
+    }
+
+    pub fn canonical(&self, jid: &str) -> String {
         let jid = strip_device(jid);
         if is_lid(&jid)
             && let Some(pn) = self.lid_to_pn.get(&jid)
@@ -895,6 +1216,8 @@ impl ChatStore {
         let into = self.chats.entry(pn.clone()).or_default();
         into.name = into.name.take().or(from.name);
         into.pinned_at = into.pinned_at.or(from.pinned_at);
+        into.pins.extend(from.pins);
+        into.pin_notes.extend(from.pin_notes);
         into.archived |= from.archived;
         into.muted_until_ms = into.muted_until_ms.max(from.muted_until_ms);
         into.unread += from.unread;
@@ -925,7 +1248,7 @@ impl ChatStore {
         self.push_names.insert(jid, name.to_string());
     }
 
-    fn display_name(&self, jid: &str) -> String {
+    pub fn display_name(&self, jid: &str) -> String {
         let jid = self.canonical(jid);
         if self.own_ids.contains(&jid) {
             return "You".into();
@@ -996,19 +1319,7 @@ impl ChatStore {
         let is_me = self.own_ids.contains(&id);
         let saved = self.contact_names.get(&id);
         let chat = self.chats.get(&id);
-        let media: Vec<&StoredMessage> = chat
-            .map(|c| {
-                c.messages
-                    .iter()
-                    .filter(|m| m.deleted.is_none())
-                    .filter(|m| {
-                        matches!(m.content.kind, MsgKind::Image | MsgKind::Media)
-                            || !m.content.attachments.is_empty()
-                            || m.content.link.is_some()
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let (media_count, recent_media) = self.media_of(&id);
         let profile = self.push_names.get(&id).filter(|p| saved.is_some_and(|s| s != *p) || saved.is_none());
         PersonDto {
             name: if is_me { "You".into() } else { self.display_name(&id) },
@@ -1029,16 +1340,115 @@ impl ChatStore {
             has_chat: chat.is_some(),
             muted: chat.is_some_and(|c| c.muted_until_ms.is_some_and(|until| until > now_ms())),
             starred: chat.map_or(0, |c| c.messages.iter().filter(|m| m.starred).count() as u32),
-            media_count: media.len() as u32,
-            recent_media: media
-                .iter()
-                .rev()
-                .filter(|m| matches!(m.content.kind, MsgKind::Image) || m.content.attachments.iter().any(|a| a.kind() == "video"))
-                .take(3)
-                .map(|m| self.to_dto(&id, m))
-                .collect(),
+            media_count,
+            recent_media,
+            blocked: self.blocked.contains(&id),
             id,
         }
+    }
+
+    /// How many photos, videos, files and links a chat holds, and its
+    /// latest photos and videos, newest first.
+    fn media_of(&self, id: &str) -> (u32, Vec<MessageDto>) {
+        let media: Vec<&StoredMessage> = self
+            .chats
+            .get(id)
+            .map(|c| {
+                c.messages
+                    .iter()
+                    .filter(|m| m.deleted.is_none())
+                    .filter(|m| {
+                        matches!(m.content.kind, MsgKind::Image | MsgKind::Media)
+                            || !m.content.attachments.is_empty()
+                            || m.content.link.is_some()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let recent = media
+            .iter()
+            .rev()
+            .filter(|m| matches!(m.content.kind, MsgKind::Image) || m.content.attachments.iter().any(|a| a.kind() == "video"))
+            .take(3)
+            .map(|m| self.to_dto(id, m))
+            .collect();
+        (media.len() as u32, recent)
+    }
+
+    /// A group's info, from what is known here.
+    pub fn group_info(&self, id: &str) -> GroupInfoDto {
+        let id = self.canonical(id);
+        let chat = self.chats.get(&id);
+        let (media_count, recent_media) = self.media_of(&id);
+        let admins: Vec<String> = chat.map(|c| c.admins.iter().map(|a| self.canonical(a)).collect()).unwrap_or_default();
+        let mut participants: Vec<MemberDto> = chat
+            .map(|c| c.participants.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .map(|member| {
+                let member = self.canonical(member);
+                let is_me = self.own_ids.contains(&member);
+                MemberDto {
+                    name: self.display_name(&member),
+                    phone: if self.contact_names.contains_key(&member) || is_me { None } else { format_phone(&member) },
+                    avatar: if is_me {
+                        self.own_avatar()
+                    } else {
+                        self.chats.get(&member).and_then(|c| c.avatar_id.as_deref()).map(|pic| avatar_file(&member, pic))
+                    },
+                    admin: admins.contains(&member),
+                    about: if is_me { None } else { self.abouts.get(&member).cloned() },
+                    is_me,
+                    id: member,
+                }
+            })
+            .collect();
+        // Us, admins, saved contacts, then everyone else, each by name.
+        participants.sort_by_cached_key(|m| {
+            let rank = if m.is_me { 0 } else if m.admin { 1 } else if m.phone.is_none() { 2 } else { 3 };
+            (rank, m.name.to_lowercase())
+        });
+        GroupInfoDto {
+            name: chat.map_or_else(|| "Group".into(), |c| self.chat_name(&id, c)),
+            avatar: self
+                .full_pictures
+                .get(&id)
+                .cloned()
+                .or_else(|| chat.and_then(|c| c.avatar_id.as_deref()).map(|pic| avatar_file(&id, pic))),
+            members: chat.and_then(|c| c.members),
+            description: chat.and_then(|c| c.description.clone()),
+            created_ms: chat.and_then(|c| c.created_ms),
+            created_by: chat.and_then(|c| c.creator.as_deref()).map(|c| self.display_name(c)),
+            muted: chat.is_some_and(|c| c.muted_until_ms.is_some_and(|until| until > now_ms())),
+            starred: chat.map_or(0, |c| c.messages.iter().filter(|m| m.starred).count() as u32),
+            media_count,
+            recent_media,
+            is_admin: participants.iter().any(|m| m.is_me && m.admin),
+            left: chat.is_some_and(|c| c.left),
+            info_locked: chat.is_some_and(|c| c.info_locked),
+            participants,
+            id,
+        }
+    }
+
+    /// Keeps what a lookup of one group found beyond its members.
+    pub fn set_group_facts(&mut self, group: &str, facts: GroupFacts) {
+        let creator = facts.creator.map(|c| self.canonical(&c));
+        if let Some(chat) = self.chats.get_mut(&self.canonical(group)) {
+            chat.description = facts.description.filter(|d| !d.trim().is_empty());
+            chat.created_ms = facts.created_ms.or(chat.created_ms);
+            chat.creator = creator.or(chat.creator.take());
+            chat.info_locked = facts.locked;
+        }
+    }
+
+    /// Keeps a group's full-size picture, found by group info.
+    pub fn remember_group_picture(&mut self, id: &str, picture: Option<&str>) {
+        let id = self.canonical(id);
+        match picture {
+            Some(file) => self.full_pictures.insert(id, file.to_string()),
+            None => self.full_pictures.remove(&id),
+        };
     }
 
     /// Whether the members of every group are due a lookup: once a day.
@@ -1067,18 +1477,116 @@ impl ChatStore {
         self.full_pictures.get(&self.canonical(id)).map(String::as_str)
     }
 
-    pub fn set_group_participants(&mut self, group: &str, members: &[(String, Option<String>, Option<String>)]) {
-        for (_, pn, lid) in members {
-            if let (Some(pn), Some(lid)) = (pn, lid) {
+    pub fn set_group_participants(&mut self, group: &str, members: &[GroupMember]) {
+        for member in members {
+            if let (Some(pn), Some(lid)) = (&member.pn, &member.lid) {
                 self.learn_mapping(lid, pn);
             }
         }
-        let ids: Vec<String> = members.iter().map(|(id, _, _)| self.canonical(id)).collect();
+        let ids: Vec<String> = members.iter().map(|m| self.canonical(&m.id)).collect();
+        let mut admins: Vec<(bool, String)> =
+            members.iter().filter(|m| m.admin || m.super_admin).map(|m| (!m.super_admin, self.canonical(&m.id))).collect();
+        admins.sort();
         let group = self.canonical(group);
+        // Only members are told who is in a group. Not finding ourselves
+        // proves nothing: our id may be one not mapped yet.
+        let in_it = ids.iter().any(|id| self.own_ids.contains(id));
         if let Some(chat) = self.chats.get_mut(&group) {
             chat.members = Some(ids.len() as u32);
             chat.participants = ids;
+            chat.admins = admins.into_iter().map(|(_, id)| id).collect();
+            chat.left &= !in_it;
         }
+    }
+
+    /// Marks a group as one we left or are back in.
+    pub fn set_left(&mut self, group: &str, left: bool) {
+        if let Some(chat) = self.chats.get_mut(&self.canonical(group)) {
+            chat.left = left;
+            if left {
+                chat.admins.retain(|a| !self.own_ids.contains(a));
+                let before = chat.participants.len();
+                chat.participants.retain(|p| !self.own_ids.contains(p));
+                if chat.participants.len() < before {
+                    chat.members = Some(chat.participants.len() as u32);
+                }
+            }
+        }
+    }
+
+    /// Applies what a group's notification says changed. Returns whether
+    /// anything did.
+    pub fn apply_group_change(&mut self, group: &str, change: GroupChange) -> bool {
+        let group = self.canonical(group);
+        if !self.chats.contains_key(&group) {
+            return false;
+        }
+        let ids = |store: &Self, list: Vec<String>| -> Vec<String> { list.iter().map(|j| store.canonical(j)).collect() };
+        let change = match change {
+            GroupChange::Added(members) => {
+                for member in &members {
+                    if let (Some(pn), Some(lid)) = (&member.pn, &member.lid) {
+                        self.learn_mapping(lid, pn);
+                    }
+                }
+                GroupChange::Added(members)
+            }
+            other => other,
+        };
+        let own = self.own_ids.clone();
+        let canon: Vec<String> = match &change {
+            GroupChange::Added(members) => members.iter().map(|m| self.canonical(&m.id)).collect(),
+            GroupChange::Removed(list) | GroupChange::Promoted(list) | GroupChange::Demoted(list) => ids(self, list.clone()),
+            _ => Vec::new(),
+        };
+        let mine = canon.iter().any(|id| own.contains(id));
+        let Some(chat) = self.chats.get_mut(&group) else { return false };
+        match change {
+            GroupChange::Subject(name) => {
+                if name.trim().is_empty() {
+                    return false;
+                }
+                chat.name = Some(name.trim().to_string());
+            }
+            GroupChange::Description(text) => chat.description = text.filter(|d| !d.trim().is_empty()),
+            GroupChange::Locked(locked) => chat.info_locked = locked,
+            GroupChange::Added(_) => {
+                let known = !chat.participants.is_empty();
+                for id in canon {
+                    if !chat.participants.contains(&id) {
+                        if known {
+                            chat.participants.push(id);
+                        } else {
+                            chat.members = chat.members.map(|n| n + 1);
+                        }
+                    }
+                }
+                if known {
+                    chat.members = Some(chat.participants.len() as u32);
+                }
+                if mine {
+                    chat.left = false;
+                }
+            }
+            GroupChange::Removed(_) => {
+                let before = chat.participants.len();
+                chat.participants.retain(|p| !canon.contains(p));
+                chat.admins.retain(|a| !canon.contains(a));
+                chat.members = if before > 0 { Some(chat.participants.len() as u32) } else { chat.members.map(|n| n.saturating_sub(canon.len() as u32)) };
+                if mine {
+                    chat.left = true;
+                }
+            }
+            GroupChange::Promoted(_) => {
+                for id in canon {
+                    if !chat.admins.contains(&id) {
+                        chat.admins.push(id);
+                    }
+                }
+            }
+            GroupChange::Demoted(_) => chat.admins.retain(|a| !canon.contains(a)),
+        }
+        true
     }
 
     /// The groups someone is in with us, as far as their members are known.
@@ -1147,6 +1655,12 @@ impl ChatStore {
             reply.author_jid = reply.author_jid.as_deref().map(|j| self.canonical(j));
         }
 
+        // What was cleared stays cleared when history brings it again.
+        if self.cleared.get(&chat_id).is_some_and(|before| message.ts_ms <= *before)
+            && !self.chats.get(&chat_id).is_some_and(|c| c.messages.iter().any(|m| m.id == message.id))
+        {
+            return None;
+        }
         let chat = self.chats.entry(chat_id.clone()).or_default();
         chat.is_group |= incoming.is_group;
         if let Some(known) = chat.messages.iter_mut().find(|m| m.id == message.id) {
@@ -1181,7 +1695,21 @@ impl ChatStore {
                     known.id = reply.id.clone();
                 }
             }
-            if known.content.link.as_ref().is_none_or(|link| link.large.is_none())
+            // Stored when polls, places and contact cards were only labels.
+            if known.content.place.is_none() {
+                known.content.place = message.content.place.take();
+            }
+            if known.content.contacts.is_empty() {
+                known.content.contacts = std::mem::take(&mut message.content.contacts);
+            }
+            match (known.content.poll.as_mut(), message.content.poll.take()) {
+                (None, poll) => known.content.poll = poll,
+                (Some(known), Some(poll)) if known.secret.is_none() => known.secret = poll.secret,
+                _ => {}
+            }
+            // An edit's card is newer than the one the message came with.
+            if known.edited_ms.is_none()
+                && known.content.link.as_ref().is_none_or(|link| link.large.is_none())
                 && message.content.link.is_some()
             {
                 known.content.link = message.content.link;
@@ -1213,7 +1741,7 @@ impl ChatStore {
             self.learn_mapping(id, lid);
         }
         let chat_id = self.canonical(id);
-        if is_hidden_chat(&chat_id) {
+        if is_hidden_chat(&chat_id) || self.was_deleted(&chat_id, meta.conversation_ts_s.map_or(0, |ts| ts as i64 * 1000)) {
             return;
         }
         let chat = self.chats.entry(chat_id.clone()).or_default();
@@ -1542,13 +2070,83 @@ impl ChatStore {
     /// chat has any message.
     fn chat_for_state(&mut self, jid: &str) -> Option<&mut StoredChat> {
         let chat_id = self.canonical(jid);
-        if is_hidden_chat(&chat_id) {
+        if is_hidden_chat(&chat_id) || self.was_deleted(&chat_id, 0) {
             return None;
         }
         let is_group = chat_id.ends_with("@g.us");
         let chat = self.chats.entry(chat_id).or_default();
         chat.is_group |= is_group;
         Some(chat)
+    }
+
+    /// A chat deleted, and nothing newer than `at_ms` brought it back.
+    fn was_deleted(&self, chat_id: &str, at_ms: i64) -> bool {
+        !self.chats.contains_key(chat_id) && self.cleared.get(chat_id).is_some_and(|before| at_ms <= *before)
+    }
+
+    /// Empties a chat of its messages up to `before_ms`, keeping it in the
+    /// list; starred ones stay when `keep_starred`. Returns whether there was
+    /// such a chat.
+    pub fn clear_chat(&mut self, jid: &str, before_ms: i64, keep_starred: bool) -> bool {
+        let chat_id = self.canonical(jid);
+        let Some(chat) = self.chats.get_mut(&chat_id) else { return false };
+        chat.messages.retain(|m| m.ts_ms > before_ms || keep_starred && m.starred);
+        if chat.messages.iter().all(|m| m.ts_ms <= before_ms) {
+            chat.unread = 0;
+            chat.marked_unread = false;
+        }
+        chat.pins.clear();
+        chat.pin_notes.clear();
+        self.evicted.retain(|(c, m)| *c != chat_id || m.ts_ms > before_ms || keep_starred && m.starred);
+        // Nothing older is to be asked of the phone.
+        self.history_complete.insert(chat_id.clone());
+        self.forget_until(chat_id, before_ms, keep_starred);
+        true
+    }
+
+    /// Deletes a chat and its messages up to `before_ms`. Messages newer than
+    /// that, which came after another device deleted it, keep it listed.
+    pub fn delete_chat(&mut self, jid: &str, before_ms: i64) -> bool {
+        let chat_id = self.canonical(jid);
+        let Some(chat) = self.chats.get(&chat_id) else { return false };
+        if chat.messages.iter().any(|m| m.ts_ms > before_ms) {
+            return self.clear_chat(&chat_id, before_ms, false);
+        }
+        self.chats.remove(&chat_id);
+        self.evicted.retain(|(c, _)| *c != chat_id);
+        self.history_complete.remove(&chat_id);
+        // Its rows go with the chat; this only keeps the cutoff.
+        self.cleared.insert(chat_id, before_ms);
+        true
+    }
+
+    fn forget_until(&mut self, chat_id: String, before_ms: i64, keep_starred: bool) {
+        let before_ms = self.cleared.get(&chat_id).map_or(before_ms, |was| before_ms.max(*was));
+        self.cleared.insert(chat_id.clone(), before_ms);
+        self.purged.push(Purge { chat: chat_id, before_ms, keep_starred });
+    }
+
+    /// When the newest message of a chat was sent, as far as is known: what
+    /// clearing or deleting it now covers.
+    pub fn clear_point(&self, jid: &str) -> i64 {
+        self.chats.get(&self.canonical(jid)).map_or(0, |c| c.messages.iter().map(|m| m.ts_ms).max().unwrap_or(0).max(c.last_ts_ms))
+    }
+
+    /// Keeps who we blocked, as the server lists them. Returns whether it changed.
+    pub fn set_blocklist(&mut self, jids: impl IntoIterator<Item = String>) -> bool {
+        let blocked: HashSet<String> = jids.into_iter().map(|j| self.canonical(&j)).collect();
+        let changed = blocked != self.blocked;
+        self.blocked = blocked;
+        changed
+    }
+
+    pub fn set_blocked(&mut self, jid: &str, blocked: bool) {
+        let jid = self.canonical(jid);
+        if blocked {
+            self.blocked.insert(jid);
+        } else {
+            self.blocked.remove(&jid);
+        }
     }
 
     pub fn set_pinned(&mut self, jid: &str, pinned_at_ms: Option<i64>) {
@@ -1579,6 +2177,39 @@ impl ChatStore {
         if let Some(chat) = self.chat_for_state(jid) {
             chat.archived = archived;
         }
+    }
+
+    pub fn unarchive_unless_muted(&mut self, jid: &str) {
+        let now = now_ms();
+        if let Some(chat) = self.chats.get_mut(&self.canonical(jid))
+            && !chat.muted_until_ms.is_some_and(|until| until > now)
+        {
+            chat.archived = false;
+        }
+    }
+
+    /// How many chats in the list are pinned, archived ones left out.
+    pub fn pinned_count(&self) -> usize {
+        self.chats
+            .iter()
+            .filter(|(id, chat)| chat.pinned_at.is_some() && !chat.archived && !is_hidden_chat(id))
+            .count()
+    }
+
+    pub fn is_pinned(&self, jid: &str) -> bool {
+        self.chats.get(&self.canonical(jid)).is_some_and(|c| c.pinned_at.is_some())
+    }
+
+    /// The newest message of a chat, for the range an archive is sent with.
+    pub fn last_message_key(&self, jid: &str) -> Option<LastMessageKey> {
+        let chat_id = self.canonical(jid);
+        let chat = self.chats.get(&chat_id)?;
+        let m = chat.messages.iter().rev().find(|m| m.deleted != Some(Deletion::ForMe))?;
+        let (chat, sender) = match &m.wire {
+            Some(wire) => (wire.chat.clone(), wire.sender.clone()),
+            None => (chat_id, m.author_jid.clone()),
+        };
+        Some(LastMessageKey { id: m.id.clone(), chat, from_me: m.from_me, sender, ts_s: m.ts_ms / 1000 })
     }
 
     /// Read or marked unread on another device. A mutation older than the
@@ -1738,7 +2369,7 @@ impl ChatStore {
         let mut stale: Vec<_> = self
             .chats
             .iter()
-            .filter(|(id, _)| !is_hidden_chat(id))
+            .filter(|(id, chat)| !is_hidden_chat(id) && now_ms() - chat.refreshed_ms > REFRESH_COOLDOWN_MS)
             .filter_map(|(id, chat)| {
                 let (last, before) = chat.messages.split_last()?;
                 let recent = before.iter().rev().take(window);
@@ -1762,7 +2393,7 @@ impl ChatStore {
         let mut stale: Vec<_> = self
             .chats
             .iter()
-            .filter(|(id, _)| !is_hidden_chat(id))
+            .filter(|(id, chat)| !is_hidden_chat(id) && now_ms() - chat.refreshed_ms > REFRESH_COOLDOWN_MS)
             .filter_map(|(id, chat)| {
                 let (last, before) = chat.messages.split_last()?;
                 let recent = before.iter().rev().take(window);
@@ -1775,6 +2406,13 @@ impl ChatStore {
         stale.sort_by_key(|(_, _, _, ts)| std::cmp::Reverse(*ts));
         stale.truncate(limit);
         stale
+    }
+
+    /// Notes that the phone was asked for a chat's latest messages again.
+    pub fn mark_refreshed(&mut self, chat: &str) {
+        if let Some(stored) = self.chats.get_mut(&self.canonical(chat)) {
+            stored.refreshed_ms = now_ms();
+        }
     }
 
     /// Whether a group's size should be looked up now. Saying yes counts as
@@ -1909,6 +2547,91 @@ impl ChatStore {
         Some(self.to_dto(&chat_id, &message))
     }
 
+    /// Whether we can still change what one of our messages says: a text,
+    /// not deleted, sent less than `window_ms` ago.
+    pub fn can_edit(&self, chat: &str, id: &str, window_ms: i64) -> bool {
+        self.find_message(chat, id).is_some_and(|(_, m)| {
+            m.from_me && m.content.kind == MsgKind::Text && m.deleted.is_none() && now_ms() - m.ts_ms < window_ms
+        })
+    }
+
+    /// A poll's options, how many can be picked, its secret, and who made it:
+    /// `None` for us, else as the message arrived.
+    pub fn poll_of(&self, chat: &str, id: &str) -> Option<(Vec<String>, u32, Option<String>, Option<String>)> {
+        let (_, message) = self.find_message(chat, id)?;
+        let poll = message.content.poll.as_ref().filter(|_| message.deleted.is_none())?;
+        let creator = (!message.from_me).then(|| {
+            let wire = message.wire.as_ref().and_then(|w| w.sender.clone());
+            wire.or_else(|| message.author_jid.clone()).unwrap_or_else(|| self.canonical(chat))
+        });
+        Some((poll.options.clone(), poll.selectable, poll.secret.clone(), creator))
+    }
+
+    /// Sets someone's vote on a poll, unless a newer one is known. No
+    /// options takes the vote back. Returns the poll's message when it changed.
+    pub fn set_poll_vote(&mut self, chat: &str, id: &str, voter: &str, options: Vec<usize>, at_ms: i64) -> Option<MessageDto> {
+        let chat_id = self.canonical(chat);
+        let voter = self.canonical(voter);
+        let message = self.chats.get_mut(&chat_id)?.messages.iter_mut().find(|m| m.id == id)?;
+        let poll = message.content.poll.as_mut()?;
+        let mut options: Vec<usize> = options.into_iter().filter(|&i| i < poll.options.len()).collect();
+        options.sort_unstable();
+        options.dedup();
+        match poll.votes.iter_mut().find(|v| v.voter == voter) {
+            Some(known) if known.at_ms > at_ms => return None,
+            Some(known) => {
+                known.options = options;
+                known.at_ms = at_ms;
+            }
+            None if options.is_empty() => return None,
+            // A vote taken back stays, empty, so an older one replayed doesn't return.
+            None => poll.votes.push(PollVote { voter, options, at_ms }),
+        }
+        let message = message.clone();
+        Some(self.to_dto(&chat_id, &message))
+    }
+
+    /// The message a stored message quotes, if any.
+    pub fn reply_of(&self, chat: &str, id: &str) -> Option<ReplyRef> {
+        self.find_message(chat, id)?.1.content.reply_to.clone()
+    }
+
+    /// Changes what a message says, as its sender edited it at `at_ms`. A
+    /// photo or file keeps its file and takes the new caption. Ignored for
+    /// someone else's message, a deleted one, or an edit older than the
+    /// one shown. Returns the message when it changed.
+    pub fn edit_message(&mut self, chat: &str, id: &str, editor: Option<&str>, new: Content, at_ms: i64) -> Option<MessageDto> {
+        let chat_id = self.canonical(chat);
+        let editor = editor.map(|e| self.canonical(e));
+        let is_own = editor.as_deref().is_none_or(|e| self.is_own(e));
+        let is_group = self.chats.get(&chat_id)?.is_group;
+        let message = self.chats.get_mut(&chat_id)?.messages.iter_mut().find(|m| m.id == id)?;
+        let sender_ok = if message.from_me {
+            is_own
+        } else if is_group {
+            editor.is_some() && message.author_jid.as_deref().is_none_or(|a| Some(a) == editor.as_deref())
+        } else {
+            !is_own
+        };
+        if !sender_ok || message.deleted.is_some() || message.edited_ms.is_some_and(|at| at >= at_ms) {
+            return None;
+        }
+        let text = new.text.filter(|t| !t.trim().is_empty());
+        match message.content.kind {
+            MsgKind::Text => {
+                let text = text?;
+                // The card stays while its link does.
+                let kept = message.content.link.take().filter(|link| text.contains(&link.url));
+                message.content.link = new.link.or(kept);
+                message.content.text = Some(text);
+            }
+            _ => message.content.text = text,
+        }
+        message.edited_ms = Some(at_ms);
+        let message = message.clone();
+        Some(self.to_dto(&chat_id, &message))
+    }
+
     /// Sets or clears one person's reaction. Returns the message when it is known.
     pub fn set_reaction(
         &mut self,
@@ -1931,6 +2654,59 @@ impl ChatStore {
         }
         let message = message.clone();
         Some(self.to_dto(&chat_id, &message))
+    }
+
+    /// Pins a message until `until_ms`, or unpins it without, unless a later
+    /// pin or unpin of it is already known. `by` is who did it, `None` for
+    /// us. Whether anything changed.
+    pub fn set_message_pin(&mut self, chat: &str, id: &str, at_ms: i64, until_ms: Option<i64>, by: Option<&str>) -> bool {
+        let by = by.map(|b| self.canonical(b)).filter(|b| !self.own_ids.contains(b));
+        let Some(chat) = self.chats.get_mut(&self.canonical(chat)) else { return false };
+        if !chat.pin_notes.iter().any(|n| n.id == id && n.at_ms == at_ms) {
+            chat.pin_notes.push(StoredPin { id: id.to_string(), at_ms, until_ms, by: by.clone() });
+            chat.pin_notes.sort_by_key(|n| n.at_ms);
+            let extra = chat.pin_notes.len().saturating_sub(MAX_PIN_NOTES);
+            chat.pin_notes.drain(..extra);
+        }
+        if chat.pins.iter().any(|p| p.id == id && p.at_ms >= at_ms) {
+            return false;
+        }
+        chat.pins.retain(|p| p.id != id);
+        chat.pins.push(StoredPin { id: id.to_string(), at_ms, until_ms, by });
+        let now = now_ms();
+        chat.pins.retain(|p| p.until_ms.is_some_and(|until| until > now) || now - p.at_ms < PIN_MEMORY_MS);
+        true
+    }
+
+    /// The messages pinned in a chat now, the latest pin first.
+    pub fn pinned_ids(&self, chat: &str) -> Vec<String> {
+        let Some(chat) = self.chats.get(&self.canonical(chat)) else { return Vec::new() };
+        let now = now_ms();
+        let mut pins: Vec<&StoredPin> = chat.pins.iter().filter(|p| p.until_ms.is_some_and(|until| until > now)).collect();
+        pins.sort_by_key(|p| std::cmp::Reverse(p.at_ms));
+        pins.into_iter().take(MAX_PINNED_MESSAGES).map(|p| p.id.clone()).collect()
+    }
+
+    /// The "pinned a message" lines of a chat, oldest first.
+    pub fn pin_notes(&self, chat: &str) -> Vec<PinNoteDto> {
+        let Some(stored) = self.chats.get(&self.canonical(chat)) else { return Vec::new() };
+        stored
+            .pin_notes
+            .iter()
+            .map(|n| PinNoteDto {
+                message_id: n.id.clone(),
+                at: n.at_ms,
+                pinned: n.until_ms.is_some(),
+                by_me: n.by.is_none(),
+                by: n.by.as_deref().map(|b| self.display_name(b)),
+            })
+            .collect()
+    }
+
+    /// A message as the UI shows it, unless it was deleted for us.
+    pub fn message_dto(&self, chat: &str, id: &str) -> Option<MessageDto> {
+        let (_, message) = self.find_message(chat, id)?;
+        (message.deleted != Some(Deletion::ForMe)).then(|| self.to_dto(&self.canonical(chat), message))
     }
 
     /// Counts left behind our own last message, which older history used to
@@ -2042,7 +2818,8 @@ impl ChatStore {
             .iter()
             // Chats the first sync named without sending any of their messages
             // are listed too: their history is fetched in the background.
-            .filter(|(id, chat)| !chat.archived && !is_hidden_chat(id))
+            // Archived ones come along, marked, for the Archived view.
+            .filter(|(id, _)| !is_hidden_chat(id))
             .map(|(id, chat)| {
                 let last = chat.messages.iter().rev().find(|m| m.deleted != Some(Deletion::ForMe));
                 let preview = last.map(|m| self.with_mentions(&deleted_or_preview(m)).0).unwrap_or_default();
@@ -2064,6 +2841,7 @@ impl ChatStore {
                     marked_unread: chat.marked_unread && chat.unread == 0,
                     pinned: chat.pinned_at.is_some(),
                     muted: chat.muted_until_ms.is_some_and(|until| until > now),
+                    archived: chat.archived,
                     is_group: chat.is_group,
                     avatar: chat.avatar_id.as_deref().map(|pic| avatar_file(id, pic)),
                     favorite: favorites.contains(id),
@@ -2072,6 +2850,9 @@ impl ChatStore {
                         .filter(|(_, chats)| chats.contains(id))
                         .map(|(list, _)| list.to_string())
                         .collect(),
+                    blocked: self.blocked.contains(id),
+                    left: chat.left,
+                    cleared: self.cleared.contains_key(id),
                 }
             })
             .collect();
@@ -2127,6 +2908,7 @@ impl ChatStore {
             image_label,
             media_label,
             voice_seconds: m.content.voice_seconds,
+            waveform: m.content.waveform.clone(),
             reply_to: m.content.reply_to.as_ref().map(|r| {
                 let from_me = r.author_jid.as_deref().is_some_and(|j| {
                     self.own_ids.iter().any(|own| own == j) || self.own_ids.contains(&self.canonical(j))
@@ -2155,6 +2937,7 @@ impl ChatStore {
                     size: a.size,
                     width: Some(a.width).filter(|w| *w > 0),
                     height: Some(a.height).filter(|h| *h > 0),
+                    sticker_id: None,
                 })
                 .chain(m.content.wa_media.as_ref().and_then(CdnRef::attachment))
                 .collect(),
@@ -2171,6 +2954,36 @@ impl ChatStore {
             reactions: self.reaction_dtos(&m.reactions),
             starred: m.starred,
             deleted: m.deleted.is_some(),
+            edited: m.edited_ms.is_some() && m.deleted.is_none(),
+            place: m.content.place.clone(),
+            contacts: m.content.contacts.clone(),
+            poll: m.content.poll.as_ref().map(|poll| self.poll_dto(poll)),
+        }
+    }
+
+    fn poll_dto(&self, poll: &Poll) -> PollDto {
+        let mut options: Vec<PollOptionDto> = poll
+            .options
+            .iter()
+            .map(|name| PollOptionDto { name: name.clone(), mine: false, people: Vec::new() })
+            .collect();
+        for vote in &poll.votes {
+            let mine = self.own_ids.contains(&self.canonical(&vote.voter));
+            for &index in &vote.options {
+                let Some(option) = options.get_mut(index) else { continue };
+                if mine {
+                    option.mine = true;
+                    option.people.insert(0, "You".into());
+                } else {
+                    option.people.push(self.display_name(&vote.voter));
+                }
+            }
+        }
+        PollDto {
+            options,
+            selectable: poll.selectable,
+            open: poll.secret.is_some(),
+            voters: poll.votes.iter().filter(|v| !v.options.is_empty()).count() as u32,
         }
     }
 
@@ -2246,8 +3059,72 @@ mod tests {
                 read_by: Vec::new(),
                 starred: false,
                 deleted: None,
+                edited_ms: None,
             },
         }
+    }
+
+    #[test]
+    fn cleared_messages_stay_cleared() {
+        let chat = "351900000000@s.whatsapp.net";
+        let mut store = ChatStore::default();
+        store.ingest(incoming(chat, "a", 1_000, false), true);
+        let mut starred = incoming(chat, "b", 2_000, false);
+        starred.message.starred = true;
+        store.ingest(starred, true);
+        assert!(store.clear_chat(chat, store.clear_point(chat), true));
+        let ids = |store: &ChatStore| store.chats[chat].messages.iter().map(|m| m.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&store), ["b"]);
+        assert_eq!(store.chats[chat].unread, 0);
+        // History brings the cleared one again; a newer one still comes in.
+        assert!(store.ingest(incoming(chat, "a", 1_000, false), true).is_none());
+        assert!(store.ingest(incoming(chat, "c", 3_000, false), true).is_some());
+        assert_eq!(ids(&store), ["b", "c"]);
+        assert_eq!(store.purged.len(), 1);
+    }
+
+    #[test]
+    fn deleted_chats_stay_gone_until_a_newer_message() {
+        let chat = "351900000000@s.whatsapp.net";
+        let mut store = ChatStore::default();
+        store.ingest(incoming(chat, "a", 1_000, false), true);
+        assert!(store.delete_chat(chat, store.clear_point(chat)));
+        assert!(!store.chats.contains_key(chat));
+        store.ingest(incoming(chat, "a", 1_000, false), true);
+        store.set_archived(chat, true);
+        assert!(!store.chats.contains_key(chat));
+        store.ingest(incoming(chat, "b", 2_000, false), true);
+        assert_eq!(store.chats[chat].messages.len(), 1);
+        // A delete from another device older than what came after it only clears.
+        let other = "351911111111@s.whatsapp.net";
+        store.ingest(incoming(other, "x", 1_000, false), true);
+        store.ingest(incoming(other, "y", 5_000, false), true);
+        assert!(store.delete_chat(other, 2_000));
+        assert_eq!(store.chats[other].messages.len(), 1);
+    }
+
+    #[test]
+    fn group_changes_follow_members_and_admins() {
+        let group = "120363000000000000@g.us";
+        let me = "351922222222@s.whatsapp.net";
+        let maya = "351911111111@s.whatsapp.net";
+        let mut store = ChatStore::default();
+        store.set_own_ids([me.to_string()]);
+        let mut message = incoming(group, "a", 1_000, false);
+        message.is_group = true;
+        store.ingest(message, false);
+        let member = |id: &str| GroupMember { id: id.into(), pn: None, lid: None, admin: false, super_admin: false };
+        store.set_group_participants(group, &[member(me)]);
+        assert!(store.apply_group_change(group, GroupChange::Added(vec![member(maya)])));
+        assert!(store.apply_group_change(group, GroupChange::Promoted(vec![maya.into()])));
+        assert!(store.apply_group_change(group, GroupChange::Subject("Trip".into())));
+        let info = store.group_info(group);
+        assert_eq!((info.name.as_str(), info.members, info.left), ("Trip", Some(2), false));
+        assert!(info.participants.iter().any(|m| m.id == maya && m.admin));
+        store.apply_group_change(group, GroupChange::Removed(vec![me.into()]));
+        let info = store.group_info(group);
+        assert_eq!((info.members, info.left), (Some(1), true));
+        assert!(store.list_chats()[0].left);
     }
 
     #[test]
@@ -2493,10 +3370,92 @@ mod tests {
         store.ingest(incoming("3@s.whatsapp.net", "b", 9, false), false);
 
         let chats = store.list_chats();
-        assert_eq!(chats.len(), 2);
+        assert_eq!(chats.len(), 3);
         assert_eq!(chats[0].id, "1@s.whatsapp.net");
         assert!(chats[0].pinned);
         assert!(!chats[1].pinned);
+        assert!(chats.iter().find(|c| c.id == "2@s.whatsapp.net").is_some_and(|c| c.archived));
+        assert!(chats.iter().filter(|c| c.id != "2@s.whatsapp.net").all(|c| !c.archived));
+    }
+
+    #[test]
+    fn poll_votes_keep_each_voters_latest() {
+        let mut store = ChatStore::default();
+        store.set_own_ids(["me@s.whatsapp.net".to_string()]);
+        let chat = "1@s.whatsapp.net";
+        let mut poll = incoming(chat, "p", now_ms(), false);
+        poll.message.content = Content::media(MsgKind::Media, "Poll", Some("Lunch?".into()));
+        poll.message.content.poll = Some(Poll { options: vec!["Pizza".into(), "Sushi".into()], selectable: 1, ..Default::default() });
+        store.ingest(poll, false);
+        let shown = store.set_poll_vote(chat, "p", chat, vec![1], 10).expect("voted");
+        let shown = shown.poll.expect("a poll");
+        assert_eq!((shown.voters, shown.options[1].people.len(), shown.open), (1, 1, false));
+        assert!(store.set_poll_vote(chat, "p", chat, vec![0], 5).is_none(), "an older vote replayed");
+        let shown = store.set_poll_vote(chat, "p", "me@s.whatsapp.net", vec![0, 7], 20).unwrap().poll.unwrap();
+        assert!(shown.options[0].mine && shown.options[0].people == ["You"], "out-of-range options dropped");
+        let shown = store.set_poll_vote(chat, "p", chat, Vec::new(), 30).unwrap().poll.unwrap();
+        assert_eq!(shown.voters, 1, "a vote taken back");
+        assert!(store.set_poll_vote(chat, "p", chat, vec![1], 25).is_none(), "and not brought back by an older one");
+    }
+
+    #[test]
+    fn edits_change_the_text_once_and_only_from_the_sender() {
+        let mut store = ChatStore::default();
+        let chat = "1@s.whatsapp.net";
+        store.ingest(incoming(chat, "a", now_ms(), false), false);
+        let edited = store.edit_message(chat, "a", Some(chat), Content::text("hello", None), 10).expect("edited");
+        assert_eq!(edited.text.as_deref(), Some("hello"));
+        assert!(edited.edited);
+        assert!(store.edit_message(chat, "a", Some(chat), Content::text("older", None), 5).is_none(), "an older edit replayed");
+        assert!(store.edit_message(chat, "a", None, Content::text("mine", None), 20).is_none(), "not ours to edit");
+        store.ingest(incoming(chat, "a", now_ms(), false), false);
+        assert_eq!(store.messages(chat)[0].text.as_deref(), Some("hello"), "history replay keeps the edit");
+        assert!(!store.can_edit(chat, "a", EDIT_WINDOW_MS), "only our own texts");
+        store.ingest(incoming(chat, "b", now_ms(), true), false);
+        assert!(store.can_edit(chat, "b", EDIT_WINDOW_MS));
+        store.ingest(incoming(chat, "c", now_ms() - EDIT_WINDOW_MS - 1, true), false);
+        assert!(!store.can_edit(chat, "c", EDIT_WINDOW_MS), "past the window");
+    }
+
+    #[test]
+    fn pinned_messages_latest_first_and_old_replays_ignored() {
+        let mut store = ChatStore::default();
+        let chat = "1@s.whatsapp.net";
+        for id in ["a", "b", "c", "d"] {
+            store.ingest(incoming(chat, id, 1, false), false);
+        }
+        let now = now_ms();
+        let later = now + 60_000;
+        for (at, id) in ["a", "b", "c", "d"].into_iter().enumerate() {
+            assert!(store.set_message_pin(chat, id, now - 100 + at as i64, Some(later), (id == "b").then_some("2@s.whatsapp.net")));
+        }
+        assert_eq!(store.pinned_ids(chat), ["d", "c", "b"], "three at most, latest first");
+        assert!(store.set_message_pin(chat, "d", now - 50, None, None));
+        assert!(!store.set_message_pin(chat, "d", now - 97, Some(later), None), "an older pin replayed by history");
+        assert!(store.set_message_pin(chat, "a", now - 40, Some(now - 1), None));
+        assert_eq!(store.pinned_ids(chat), ["c", "b"], "unpinned and lapsed ones left out");
+        let notes = store.pin_notes(chat);
+        let ids: Vec<&str> = notes.iter().map(|n| n.message_id.as_str()).collect();
+        assert_eq!(ids, ["a", "b", "c", "d", "d", "a"], "every pin and unpin keeps its line, in order");
+        assert!(!notes[4].pinned && notes[5].pinned);
+        assert!(!notes[1].by_me && notes[1].by.is_some() && notes[0].by_me);
+    }
+
+    #[test]
+    fn pins_count_and_archive_comes_back_unless_muted() {
+        let mut store = ChatStore::default();
+        for id in ["1@s.whatsapp.net", "2@s.whatsapp.net"] {
+            store.ingest(incoming(id, "a", 1, false), false);
+            store.set_archived(id, true);
+        }
+        store.set_pinned("1@s.whatsapp.net", Some(1));
+        assert_eq!(store.pinned_count(), 0, "archived pins don't count");
+        store.set_muted("2@s.whatsapp.net", Some(i64::MAX));
+        store.unarchive_unless_muted("1@s.whatsapp.net");
+        store.unarchive_unless_muted("2@s.whatsapp.net");
+        assert_eq!(store.pinned_count(), 1);
+        let chats = store.list_chats();
+        assert!(chats.iter().find(|c| c.id == "2@s.whatsapp.net").is_some_and(|c| c.archived));
     }
 
     #[test]

@@ -27,11 +27,15 @@ use crate::store::{
 const BRIDGE: &str = "omega-zap-signal";
 const SESSION_FILE: &str = "signal.db";
 const LINKED_MARKER: &str = "linked";
+/// The most chats Signal lets you pin.
+const MAX_PINNED: usize = 4;
 const CACHE_FILE: &str = "chats.json";
 const SAVE_INTERVAL: Duration = Duration::from_secs(3);
 pub const MEDIA_DIR: &str = "media";
 pub const AVATAR_DIR: &str = "avatars";
 const SEND_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long after sending a message Signal lets it be edited.
+const EDIT_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 const MEDIA_TIMEOUT: Duration = Duration::from_secs(150);
 /// Uploading a file of up to 100 MB, then sending the message.
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(600);
@@ -98,6 +102,17 @@ enum BridgeEvent {
         chat: String,
         sender: String,
         target_ts: i64,
+        #[serde(default)]
+        history: bool,
+    },
+    /// A message changed by its sender: `target_ts` names it as first sent,
+    /// `ts` is when it was edited.
+    Edit {
+        chat: String,
+        sender: String,
+        target_ts: i64,
+        ts: i64,
+        text: Option<String>,
         #[serde(default)]
         history: bool,
     },
@@ -589,10 +604,62 @@ impl SignalManager {
         crate::store::PersonDetailsDto { common_groups: lock(&self.store).common_groups(id), ..Default::default() }
     }
 
-    /// Mutes a chat for good, or unmutes it, on this computer.
-    pub fn set_muted(&self, chat_id: &str, muted: bool) {
-        lock(&self.store).set_muted(chat_id, muted.then_some(i64::MAX));
+    /// Mutes a chat until a time, or for good without one, or unmutes it,
+    /// on this computer.
+    pub fn set_muted(&self, chat_id: &str, muted: bool, until_ms: Option<i64>) {
+        lock(&self.store).set_muted(chat_id, muted.then(|| until_ms.unwrap_or(i64::MAX)));
         self.mark_dirty();
+    }
+
+    /// Archives a chat or brings it back, on this computer: Signal doesn't
+    /// tell linked devices. Archiving unpins it.
+    pub fn set_archived(&self, chat_id: &str, archived: bool) {
+        let mut store = lock(&self.store);
+        store.set_archived(chat_id, archived);
+        if archived {
+            store.set_pinned(chat_id, None);
+        }
+        drop(store);
+        self.mark_dirty();
+    }
+
+    /// Deletes a chat and its messages, on this computer: Signal doesn't tell
+    /// linked devices.
+    pub fn delete_chat(&self, chat_id: &str) {
+        let mut store = lock(&self.store);
+        let before = store.clear_point(chat_id);
+        store.delete_chat(chat_id, before);
+        drop(store);
+        self.chat_emptied(chat_id);
+    }
+
+    /// Empties a chat of its messages on this computer, keeping it in the
+    /// list; starred messages stay when `keep_starred`.
+    pub fn clear_chat(&self, chat_id: &str, keep_starred: bool) {
+        let mut store = lock(&self.store);
+        let before = store.clear_point(chat_id);
+        store.clear_chat(chat_id, before, keep_starred);
+        drop(store);
+        self.chat_emptied(chat_id);
+    }
+
+    /// Tells the UI a chat lost its messages, so an open one shows it.
+    fn chat_emptied(&self, chat_id: &str) {
+        let chat = lock(&self.store).chat_key(chat_id);
+        let _ = self.app.emit("signal://cleared", chat);
+        self.mark_dirty();
+    }
+
+    /// Pins a chat to the top of the list or unpins it, on this computer.
+    pub fn set_pinned(&self, chat_id: &str, pinned: bool) -> Result<(), String> {
+        let mut store = lock(&self.store);
+        if pinned && store.pinned_count() >= MAX_PINNED {
+            return Err(format!("You can only pin up to {MAX_PINNED} chats."));
+        }
+        store.set_pinned(chat_id, pinned.then(crate::store::now_ms));
+        drop(store);
+        self.mark_dirty();
+        Ok(())
     }
 
     /// Marks a chat unread, or read. Signal keeps no such mark for linked
@@ -872,6 +939,50 @@ impl SignalManager {
         Ok(dto.filter(|_| for_everyone))
     }
 
+    /// Changes what one of our texts says, for everyone, within Signal's
+    /// edit window. `styled` is the text as Signal formats it.
+    pub async fn edit_message(&self, chat_id: &str, message_id: &str, text: &str, styled: Option<Styled>) -> Result<MessageDto, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("The message is empty.".into());
+        }
+        self.recall(chat_id, message_id);
+        let (target, reply) = {
+            let store = lock(&self.store);
+            if !store.can_edit(chat_id, message_id, EDIT_WINDOW_MS) {
+                return Err("Only your own texts can be edited, up to 24 hours after sending.".into());
+            }
+            let target = store.quote_source(chat_id, message_id).ok_or("That message is gone.")?;
+            (target, store.reply_of(chat_id, message_id))
+        };
+        // An edit is the whole message again, so it repeats the quote; one
+        // whose quoted message is unknown goes without it.
+        let quote = reply.and_then(|reply| {
+            let ts: i64 = reply.id?.split('-').next()?.parse().ok()?;
+            Some(serde_json::json!({ "ts": ts, "author": reply.author_jid?, "text": reply.text }))
+        });
+        let (body, ranges) = match styled.filter(|s| !s.ranges.is_empty()) {
+            Some(styled) => (styled.body, styled.ranges),
+            None => (text.to_string(), Vec::new()),
+        };
+        let ts = now_ms();
+        let command = serde_json::json!({
+            "cmd": "edit",
+            "chat": chat_id,
+            "targetTs": target.ts_ms,
+            "text": body,
+            "ranges": ranges,
+            "quote": quote,
+            "ts": ts,
+        });
+        self.request(command, SEND_TIMEOUT)
+            .await
+            .map_err(|e| format!("The message was not edited: {e}"))?;
+        let dto = lock(&self.store).edit_message(chat_id, message_id, None, Content::text(text, None), ts);
+        self.mark_dirty();
+        dto.ok_or_else(|| "The message is no longer here.".into())
+    }
+
     /// Sends a text, quoting the message `reply_to` when there is one.
     /// The message `reply_to` names, as the bridge quotes it and as it is
     /// shown here.
@@ -915,6 +1026,7 @@ impl SignalManager {
                 read_by: Vec::new(),
                 starred: false,
                 deleted: None,
+                edited_ms: None,
             },
         };
         let dto = lock(&self.store)
@@ -1132,12 +1244,16 @@ impl SignalManager {
                     text,
                     media_label,
                     voice_seconds: None,
+                    waveform: Vec::new(),
                     reply_to,
                     attachments,
                     media: None,
                     wa_media: None,
                     link: None,
                     forwarded: 0,
+                    place: None,
+                    contacts: Vec::new(),
+                    poll: None,
                 };
                 let id = if from_me { ts.to_string() } else { self.message_id(&sender, ts) };
                 let incoming = Incoming {
@@ -1158,6 +1274,7 @@ impl SignalManager {
                         read_by: Vec::new(),
                         starred: false,
                         deleted: None,
+                        edited_ms: None,
                     },
                 };
                 // History arrives in bulk and was already seen on the phone.
@@ -1165,6 +1282,9 @@ impl SignalManager {
                 if let Some(dto) = store.ingest(incoming, !history)
                     && !history
                 {
+                    // As on the phone, a new message brings an archived chat
+                    // back, unless it is muted.
+                    store.unarchive_unless_muted(&dto.chat_id);
                     let notice = store.message_notice(&dto.chat_id, &dto.id);
                     drop(store);
                     let _ = self.app.emit("signal://message", dto);
@@ -1179,6 +1299,17 @@ impl SignalManager {
                 self.recall(&chat, &id);
                 let deleted = lock(&self.store).delete_message(&chat, &id, Deletion::ForEveryone);
                 if let Some(dto) = deleted {
+                    if !history {
+                        let _ = self.app.emit("signal://message", dto);
+                    }
+                    self.mark_dirty();
+                }
+            }
+            BridgeEvent::Edit { chat, sender, target_ts, ts, text, history } => {
+                let id = self.message_id(&sender, target_ts);
+                self.recall(&chat, &id);
+                let edited = lock(&self.store).edit_message(&chat, &id, Some(&sender), Content::text(text.unwrap_or_default(), None), ts);
+                if let Some(dto) = edited {
                     if !history {
                         let _ = self.app.emit("signal://message", dto);
                     }

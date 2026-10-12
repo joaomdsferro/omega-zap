@@ -239,10 +239,12 @@ textarea {
   select,
   summary,
   label[for],
+  label:has(> input:is([type="checkbox"], [type="radio"])),
   [role="button"],
   [role="option"],
   [role="radio"],
   [role="tab"],
+  [role="slider"],
   [role="switch"],
   [role="checkbox"],
   [role="menuitem"],
@@ -431,10 +433,65 @@ textarea {
   }
 }
 
+/* Someone typing, in the chat list: a faint tint on the row, a ring around
+ * the picture, and a bubble of dots that pulse in turn, as on the phone. */
+.chat-typing {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.typing-ring {
+  border-radius: 9999px;
+  box-shadow:
+    0 0 0 2px var(--panel-bg),
+    0 0 0 4px var(--accent);
+}
+
+.typing-bubble {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 3px;
+  padding: 5px 7px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.typing-bubble > i {
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: var(--accent);
+  animation: typing-dot 1.2s ease-in-out infinite;
+}
+
+.typing-bubble > i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-bubble > i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .chat-highlight::after {
     animation: none;
     transition: none;
+  }
+  .typing-bubble > i {
+    animation: none;
+    opacity: 0.8;
   }
   .animate-fade-rise,
   .animate-fade-in,

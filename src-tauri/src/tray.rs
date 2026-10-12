@@ -161,7 +161,10 @@ fn build_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/dev/128x128.png")) {
         builder = builder.icon(icon).ok()?;
     }
-    builder.build().inspect_err(|e| log::warn!("could not open the window: {e}")).ok()
+    let window = builder.build().inspect_err(|e| log::warn!("could not open the window: {e}")).ok()?;
+    #[cfg(target_os = "linux")]
+    let _ = window.with_webview(|platform| crate::players::fix_tiktok(&platform.inner()));
+    Some(window)
 }
 
 /// Remembers how the window is, for the next time it is made.
@@ -186,6 +189,17 @@ fn save_window_state(background: &Background, window: &tauri::WebviewWindow) {
 /// Closing the window frees what it holds. WebKitGTK keeps the page's
 /// process running after its view is gone, so it is ended here first.
 pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
+    // We show as online on WhatsApp only while the window is in front.
+    let active = match event {
+        tauri::WindowEvent::Focused(focused) => Some(*focused),
+        tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => Some(false),
+        _ => None,
+    };
+    if let Some(active) = active
+        && let Some(manager) = window.app_handle().try_state::<std::sync::Arc<wa::WaManager>>()
+    {
+        manager.set_active(active);
+    }
     let tauri::WindowEvent::CloseRequested { api, .. } = event else {
         return;
     };

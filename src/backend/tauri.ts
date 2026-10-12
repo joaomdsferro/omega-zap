@@ -7,6 +7,10 @@ import { fileUrl } from "../lib/files";
 import { signalBody } from "../lib/markup";
 import { MAX_SEND_BYTES, base64Json, fileDetails } from "../lib/outgoing";
 import type {
+  Pins,
+  Place,
+  Poll,
+  ContactCard,
   Attachment,
   BackendEvent,
   Chat,
@@ -18,12 +22,19 @@ import type {
   Message,
   MessageKind,
   OutgoingLink,
+  GroupInfo,
+  MemberChange,
   GroupRef,
   Person,
   PersonDetails,
   Notice,
+  Privacy,
+  PrivacyCategory,
   ReactionCount,
   StarredMessage,
+  StickerShelf,
+  OutgoingMedia,
+  TypingState,
 } from "./types";
 
 interface RawChat {
@@ -37,10 +48,14 @@ interface RawChat {
   markedUnread: boolean;
   pinned: boolean;
   muted: boolean;
+  archived: boolean;
   isGroup: boolean;
   avatar: string | null;
   favorite: boolean;
   lists: string[];
+  blocked: boolean;
+  left: boolean;
+  cleared: boolean;
 }
 
 interface RawContact {
@@ -70,12 +85,13 @@ interface RawMessage {
   imageLabel: string | null;
   mediaLabel: string | null;
   voiceSeconds: number | null;
+  waveform?: number[];
   replyTo: { author: string; fromMe: boolean; id: string | null; text: string } | null;
   mentions: Mention[];
   authorId: string | null;
   status: DeliveryStatus | null;
   hasMedia: boolean;
-  attachments: { kind: Attachment["kind"]; mime: string; fileName: string | null; size: number; width: number | null; height: number | null }[];
+  attachments: { kind: Attachment["kind"]; mime: string; fileName: string | null; size: number; width: number | null; height: number | null; stickerId?: string }[];
   mediaWidth: number | null;
   mediaHeight: number | null;
   forwarded: number;
@@ -83,6 +99,10 @@ interface RawMessage {
   reactions: ReactionCount[];
   starred: boolean;
   deleted: boolean;
+  edited?: boolean;
+  place?: Place;
+  contacts?: ContactCard[];
+  poll?: Poll;
 }
 
 interface RawGroupRef {
@@ -90,6 +110,57 @@ interface RawGroupRef {
   name: string;
   avatar: string | null;
   members: number | null;
+}
+
+interface RawGroupInfo {
+  id: string;
+  name: string;
+  avatar: string | null;
+  members: number | null;
+  description: string | null;
+  createdMs: number | null;
+  createdBy: string | null;
+  muted: boolean;
+  starred: number;
+  mediaCount: number;
+  recentMedia: RawMessage[];
+  participants: { id: string; name: string; phone: string | null; avatar: string | null; isMe: boolean; admin: boolean; about: string | null }[];
+  isAdmin: boolean;
+  left: boolean;
+  infoLocked: boolean;
+}
+
+function toGroupInfo(raw: RawGroupInfo, account: AccountId): GroupInfo {
+  return {
+    left: raw.left || undefined,
+    infoLocked: raw.infoLocked || undefined,
+    id: raw.id,
+    account,
+    name: raw.name,
+    avatarUrl: raw.avatar ? fileUrl(raw.avatar, "avatar") : undefined,
+    avatarHue: hueFor(raw.id),
+    initials: initialsFor(raw.name),
+    members: raw.members ?? undefined,
+    description: raw.description ?? undefined,
+    createdAt: raw.createdMs ? new Date(raw.createdMs).toISOString() : undefined,
+    createdBy: raw.createdBy ?? undefined,
+    muted: raw.muted,
+    starred: raw.starred,
+    mediaCount: raw.mediaCount,
+    recentMedia: raw.recentMedia.map(toMessage),
+    participants: raw.participants.map((m) => ({
+      id: m.id,
+      name: m.name,
+      phone: m.phone ?? undefined,
+      avatarUrl: m.avatar ? fileUrl(m.avatar, "avatar") : undefined,
+      avatarHue: hueFor(m.id),
+      initials: initialsFor(m.name),
+      isMe: m.isMe,
+      admin: m.admin,
+      about: m.about ?? undefined,
+    })),
+    isAdmin: raw.isAdmin,
+  };
 }
 
 function toGroupRef(g: RawGroupRef): GroupRef {
@@ -119,9 +190,13 @@ function toChat(raw: RawChat, account: AccountId): Chat {
     markedUnread: raw.markedUnread || undefined,
     pinned: raw.pinned,
     muted: raw.muted,
+    archived: raw.archived || undefined,
     isGroup: raw.isGroup,
     favorite: raw.favorite,
     lists: raw.lists,
+    blocked: raw.blocked || undefined,
+    left: raw.left || undefined,
+    cleared: raw.cleared || undefined,
   };
 }
 
@@ -137,6 +212,7 @@ function toMessage(raw: RawMessage): Message {
     imageLabel: raw.imageLabel ?? undefined,
     mediaLabel: raw.mediaLabel ?? undefined,
     voiceSeconds: raw.voiceSeconds ?? undefined,
+    waveform: raw.waveform?.length ? raw.waveform : undefined,
     mentions: raw.mentions?.length ? raw.mentions : undefined,
     authorId: raw.authorId ?? undefined,
     replyTo: raw.replyTo ? { author: raw.replyTo.author, fromMe: raw.replyTo.fromMe, id: raw.replyTo.id ?? undefined, text: raw.replyTo.text } : undefined,
@@ -150,6 +226,7 @@ function toMessage(raw: RawMessage): Message {
           size: a.size,
           width: a.width ?? undefined,
           height: a.height ?? undefined,
+          stickerId: a.stickerId,
         }))
       : undefined,
     mediaWidth: raw.mediaWidth ?? undefined,
@@ -167,6 +244,10 @@ function toMessage(raw: RawMessage): Message {
     reactions: raw.reactions,
     starred: raw.starred,
     deleted: raw.deleted,
+    edited: raw.edited,
+    place: raw.place,
+    contacts: raw.contacts,
+    poll: raw.poll,
   };
 }
 
@@ -179,6 +260,22 @@ export class TauriBackend implements ChatBackend {
   openMedia?: (chatId: string, messageId: string, index: number) => Promise<void>;
   linkThumbnailUrl?: (chatId: string, messageId: string) => Promise<string>;
   lookupNumber?: (phone: string) => Promise<string | null>;
+  pinnedMessages?: (chatId: string) => Promise<Pins>;
+  pinMessage?: (chatId: string, messageId: string, secs: number | null) => Promise<void>;
+  groupInfo?: (id: string) => Promise<GroupInfo>;
+  editMessage?: (chatId: string, messageId: string, text: string) => Promise<Message>;
+  votePoll?: (chatId: string, messageId: string, options: number[]) => Promise<Message>;
+  groupDetails?: (id: string) => Promise<GroupInfo>;
+  setTyping?: (chatId: string, state: TypingState) => Promise<void>;
+  watchPresence?: (chatId: string) => Promise<void>;
+  privacy?: () => Promise<Privacy>;
+  setPrivacy?: (category: PrivacyCategory, value: string) => Promise<void>;
+  setBlocked?: (id: string, blocked: boolean) => Promise<void>;
+  leaveGroup?: (id: string) => Promise<void>;
+  editGroup?: (id: string, changes: { name?: string; description?: string }) => Promise<GroupInfo>;
+  changeMembers?: (id: string, change: MemberChange, members: string[]) => Promise<GroupInfo>;
+  sendMedia?: (chatId: string, item: OutgoingMedia, replyTo?: string) => Promise<Message>;
+  stickers?: StickerShelf;
 
   constructor(readonly account: AccountId) {
     this.prefix = COMMAND_PREFIX[account];
@@ -187,10 +284,85 @@ export class TauriBackend implements ChatBackend {
     this.openMedia = async (chatId, messageId, index) => {
       await invoke(`${this.prefix}_open_media`, { chatId, messageId, index });
     };
+    this.editMessage = async (chatId, messageId, text) => {
+      const args: Record<string, unknown> = { chatId, messageId, text };
+      // Signal formats with ranges over the text rather than markers in it.
+      if (account === "signal") args.styled = signalBody(text.trim());
+      return toMessage(await invoke<RawMessage>(`${this.prefix}_edit_message`, args));
+    };
     if (account === "whatsapp") {
+      this.sendMedia = async (chatId, item, replyTo) => {
+        const reply = replyTo ?? null;
+        switch (item.kind) {
+          case "sticker":
+            return toMessage(await invoke<RawMessage>("wa_send_sticker", { chatId, id: item.id, replyTo: reply }));
+          case "new-sticker":
+            return toMessage(
+              await invoke<RawMessage>("wa_send_new_sticker", new Uint8Array(await item.picture.arrayBuffer()), {
+                headers: { "x-chat": chatId, "x-reply": replyTo ?? "" },
+              }),
+            );
+          case "found-sticker":
+            return toMessage(await invoke<RawMessage>("wa_send_klipy_sticker", { chatId, pick: item.pick, replyTo: reply }));
+          case "gif":
+            return toMessage(await invoke<RawMessage>("wa_send_gif", { chatId, pick: item.pick, replyTo: reply }));
+          case "recent-gif":
+            return toMessage(await invoke<RawMessage>("wa_send_recent_gif", { chatId, id: item.id, replyTo: reply }));
+        }
+      };
+      const target = (t: { id: string } | { chatId: string; messageId: string }) =>
+        "id" in t ? { id: t.id, chatId: null, messageId: null } : { id: null, chatId: t.chatId, messageId: t.messageId };
+      this.stickers = {
+        library: () => invoke("wa_sticker_library"),
+        fileUrl: async (id) => fileUrl(await invoke<string>("wa_library_media", { id }), "media"),
+        setFavorite: (t, favorite) => invoke("wa_set_sticker_favorite", { ...target(t), favorite }),
+        store: () => invoke("wa_sticker_store"),
+        installPack: (id) => invoke("wa_install_pack", { id }),
+        removePack: (id) => invoke("wa_remove_pack", { id }),
+        createPack: (name) => invoke<string>("wa_create_pack", { name }),
+        renamePack: (id, name) => invoke("wa_rename_pack", { id, name }),
+        addToPack: (packId, t) => invoke("wa_add_to_pack", { packId, ...target(t) }),
+        removeFromPack: (packId, id) => invoke("wa_remove_from_pack", { packId, id }),
+        addNewSticker: async (packId, picture) => {
+          await invoke("wa_add_new_sticker", new Uint8Array(await picture.arrayBuffer()), { headers: { "x-pack": packId } });
+        },
+        addFoundSticker: (packId, pick) => invoke("wa_add_klipy_sticker", { packId, pick }),
+        subscribe: (listener) => {
+          const pending = listen("wa://stickers", () => listener());
+          return () => void pending.then((unlisten) => unlisten());
+        },
+      };
       this.linkThumbnailUrl = async (chatId, messageId) =>
         fileUrl(await invoke<string>("wa_link_thumbnail", { chatId, messageId }), "media");
       this.lookupNumber = (phone) => invoke<string | null>("wa_lookup_number", { phone });
+      this.votePoll = async (chatId, messageId, options) => toMessage(await invoke<RawMessage>("wa_vote_poll", { chatId, messageId, options }));
+      this.groupInfo = async (id) => toGroupInfo(await invoke<RawGroupInfo>("wa_group_info", { id }), account);
+      this.groupDetails = async (id) => toGroupInfo(await invoke<RawGroupInfo>("wa_group_details", { id }), account);
+      this.pinnedMessages = async (chatId) => {
+        const raw = await invoke<{ messages: RawMessage[]; notes: { messageId: string; at: number; pinned: boolean; byMe: boolean; by: string | null }[] }>("wa_pinned_messages", { chatId });
+        return {
+          messages: raw.messages.map(toMessage),
+          notes: raw.notes.map((n) => ({ messageId: n.messageId, at: new Date(n.at).toISOString(), pinned: n.pinned, byMe: n.byMe, by: n.by ?? undefined })),
+        };
+      };
+      this.pinMessage = (chatId, messageId, secs) => invoke("wa_pin_message", { chatId, messageId, secs });
+      this.setTyping = (chatId, state) => invoke("wa_set_typing", { chatId, state });
+      this.watchPresence = (chatId) => invoke("wa_watch_presence", { chatId });
+      this.privacy = async () => {
+        const raw = await invoke<{ lastSeen: string | null; online: string | null; readReceipts: string | null }>("wa_privacy");
+        return {
+          lastSeen: raw.lastSeen ?? undefined,
+          online: raw.online ?? undefined,
+          readReceipts: raw.readReceipts ?? undefined,
+        };
+      };
+      this.setPrivacy = (category, value) => invoke("wa_set_privacy", { category, value });
+      this.setBlocked = (id, blocked) => invoke("wa_set_blocked", { id, blocked });
+      this.leaveGroup = (id) => invoke("wa_leave_group", { id });
+      this.editGroup = async (id, { name, description }) =>
+        toGroupInfo(await invoke<RawGroupInfo>("wa_edit_group", { id, name: name ?? null, description: description ?? null }), account);
+      this.changeMembers = async (id, change, members) =>
+        toGroupInfo(await invoke<RawGroupInfo>("wa_change_members", { id, change, members }), account);
     }
   }
 
@@ -294,6 +466,7 @@ export class TauriBackend implements ChatBackend {
       recentMedia: RawMessage[];
       about: string | null;
       commonGroups: RawGroupRef[];
+      blocked: boolean;
     }>(`${this.prefix}_person`, { id });
     return {
       id: raw.id,
@@ -313,6 +486,7 @@ export class TauriBackend implements ChatBackend {
       recentMedia: raw.recentMedia.map(toMessage),
       about: raw.about ?? undefined,
       commonGroups: raw.commonGroups.map(toGroupRef),
+      blocked: raw.blocked || undefined,
     };
   }
 
@@ -329,8 +503,24 @@ export class TauriBackend implements ChatBackend {
     };
   }
 
-  async setMuted(chatId: string, muted: boolean): Promise<void> {
-    await invoke(`${this.prefix}_set_muted`, { chatId, muted });
+  async setMuted(chatId: string, muted: boolean, untilMs?: number): Promise<void> {
+    await invoke(`${this.prefix}_set_muted`, { chatId, muted, untilMs: untilMs ?? null });
+  }
+
+  async setArchived(chatId: string, archived: boolean): Promise<void> {
+    await invoke(`${this.prefix}_set_archived`, { chatId, archived });
+  }
+
+  async setPinned(chatId: string, pinned: boolean): Promise<void> {
+    await invoke(`${this.prefix}_set_pinned`, { chatId, pinned });
+  }
+
+  async deleteChat(chatId: string): Promise<void> {
+    await invoke(`${this.prefix}_delete_chat`, { chatId });
+  }
+
+  async clearChat(chatId: string, keepStarred: boolean): Promise<void> {
+    await invoke(`${this.prefix}_clear_chat`, { chatId, keepStarred });
   }
 
   async listContacts(): Promise<Contact[]> {
@@ -351,8 +541,22 @@ export class TauriBackend implements ChatBackend {
     const pending: Promise<UnlistenFn>[] = [
       listen(`${this.prefix}://chats`, () => listener({ type: "chats-changed" })),
       listen<string>(`${this.prefix}://history`, (e) => listener({ type: "history", chatId: e.payload })),
+      listen<string>(`${this.prefix}://pins`, (e) => listener({ type: "pins", chatId: e.payload })),
+      listen<string>(`${this.prefix}://cleared`, (e) => listener({ type: "cleared", chatId: e.payload })),
+      listen<string>(`${this.prefix}://group`, (e) => listener({ type: "group", chatId: e.payload })),
       listen<RawMessage>(`${this.prefix}://message`, (e) =>
         listener({ type: "message", message: toMessage(e.payload) }),
+      ),
+      listen<{ chatId: string; who: string | null; recording: boolean; active: boolean }>(`${this.prefix}://typing`, (e) =>
+        listener({ type: "typing", ...e.payload, who: e.payload.who ?? undefined }),
+      ),
+      listen<{ chatId: string; online: boolean; lastSeenMs: number | null }>(`${this.prefix}://presence`, (e) =>
+        listener({
+          type: "presence",
+          chatId: e.payload.chatId,
+          online: e.payload.online,
+          lastSeen: e.payload.lastSeenMs ? new Date(e.payload.lastSeenMs).toISOString() : undefined,
+        }),
       ),
       listen<RawNotice>(`${this.prefix}://notice`, (e) => {
         const notice: Notice = { ...e.payload, avatar: e.payload.avatar ?? undefined };

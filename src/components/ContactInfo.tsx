@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Message, Person, PersonDetails } from "../backend";
 import type { LoadMedia } from "./Attachments";
 import { Avatar } from "./Avatar";
-import { BackIcon, ChevronRightIcon, FileIcon, MuteIcon, NewChatIcon, PhoneIcon, StarIcon, VideoIcon } from "./Icons";
+import { BackIcon, BlockedIcon, ChevronRightIcon, FileIcon, MuteIcon, NewChatIcon, PhoneIcon, StarIcon, TrashIcon, VideoIcon } from "./Icons";
 
 interface ContactInfoProps {
   load: () => Promise<Person>;
@@ -15,10 +15,14 @@ interface ContactInfoProps {
   onOpenGroup?: (id: string) => void;
   onStarred?: () => void;
   onMute?: (person: Person, muted: boolean) => Promise<void>;
+  /** Asks to block or unblock them; settles once it is done, failing when cancelled. */
+  onBlock?: (person: Person, blocked: boolean) => Promise<void>;
+  /** Asks to delete the chat with them. */
+  onDeleteChat?: (person: Person) => void;
 }
 
 /** Someone's contact info, as WhatsApp shows it beside the chat. */
-export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, onOpenGroup, onStarred, onMute }: ContactInfoProps) {
+export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, onOpenGroup, onStarred, onMute, onBlock, onDeleteChat }: ContactInfoProps) {
   const [person, setPerson] = useState<Person | null>(null);
   const [details, setDetails] = useState<PersonDetails | null>(null);
 
@@ -44,7 +48,12 @@ export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, 
   }, [loadDetails]);
 
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    const onKeyDown = (event: KeyboardEvent) => {
+      // A menu or dialog over the panel takes its own Escape.
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      onClose();
+    };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
@@ -54,6 +63,14 @@ export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, 
     const muted = !person.muted;
     setPerson({ ...person, muted });
     await onMute(person, muted).catch(() => setPerson({ ...person, muted: !muted }));
+  }
+
+  function toggleBlocked() {
+    if (!person || !onBlock) return;
+    const blocked = !person.blocked;
+    onBlock(person, blocked)
+      .then(() => setPerson((now) => now && { ...now, blocked }))
+      .catch(() => {});
   }
 
   // What was found last time shows at once; the network's answer replaces it.
@@ -129,24 +146,7 @@ export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, 
               {person.starred > 0 ? (
                 <Row icon={<StarIcon size={20} />} label="Starred messages" value={String(person.starred)} onClick={onStarred} />
               ) : null}
-              {onMute ? (
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={person.muted}
-                  onClick={toggleMute}
-                  className="flex w-full items-center gap-5 rounded-lg px-3 py-3 text-left hover:bg-(--hover-bg)"
-                >
-                  <MuteIcon size={20} className="text-(--text-secondary)" />
-                  <span className="flex-1 text-[15px] text-(--text-primary)">Mute notifications</span>
-                  <span
-                    className={["flex h-6 w-11 shrink-0 items-center rounded-full px-0.5 transition-colors", person.muted ? "bg-(--accent)" : "bg-(--text-secondary)/40"].join(" ")}
-                    aria-hidden
-                  >
-                    <span className={["h-5 w-5 rounded-full bg-white transition-transform", person.muted ? "translate-x-5" : ""].join(" ")} />
-                  </span>
-                </button>
-              ) : null}
+              {onMute ? <MuteSwitch muted={person.muted} onToggle={toggleMute} /> : null}
             </Section>
           ) : null}
 
@@ -176,6 +176,21 @@ export function ContactInfo({ load, loadDetails, loadMedia, onClose, onMessage, 
             </Section>
           ) : null}
 
+          {!person.isMe && (onBlock || (onDeleteChat && person.hasChat)) ? (
+            <Section>
+              {onBlock ? (
+                <DangerRow
+                  icon={<BlockedIcon size={20} />}
+                  label={`${person.blocked ? "Unblock" : "Block"} ${person.name}`}
+                  onClick={toggleBlocked}
+                />
+              ) : null}
+              {onDeleteChat && person.hasChat ? (
+                <DangerRow icon={<TrashIcon size={20} />} label="Delete chat" onClick={() => onDeleteChat(person)} />
+              ) : null}
+            </Section>
+          ) : null}
+
           {!person.saved && !person.isMe ? (
             <p className="px-8 py-5 text-center text-[13px] text-(--text-secondary)">Not in your contacts</p>
           ) : null}
@@ -202,11 +217,32 @@ function Action({ icon, label, onClick, soon }: { icon: ReactNode; label: string
   );
 }
 
-function Section({ children }: { children: ReactNode }) {
+export function MuteSwitch({ muted, onToggle }: { muted: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={muted}
+      onClick={onToggle}
+      className="flex w-full items-center gap-5 rounded-lg px-3 py-3 text-left hover:bg-(--hover-bg)"
+    >
+      <MuteIcon size={20} className="text-(--text-secondary)" />
+      <span className="flex-1 text-[15px] text-(--text-primary)">Mute notifications</span>
+      <span
+        className={["flex h-6 w-11 shrink-0 items-center rounded-full px-0.5 transition-colors", muted ? "bg-(--accent)" : "bg-(--text-secondary)/40"].join(" ")}
+        aria-hidden
+      >
+        <span className={["h-5 w-5 rounded-full bg-white transition-transform", muted ? "translate-x-5" : ""].join(" ")} />
+      </span>
+    </button>
+  );
+}
+
+export function Section({ children }: { children: ReactNode }) {
   return <section className="border-t-8 border-(--panel-header-bg) px-3 py-3">{children}</section>;
 }
 
-function Row({ icon, label, value, onClick }: { icon: ReactNode; label: string; value?: string; onClick?: () => void }) {
+export function Row({ icon, label, value, onClick }: { icon: ReactNode; label: string; value?: string; onClick?: () => void }) {
   return (
     <button
       type="button"
@@ -222,8 +258,18 @@ function Row({ icon, label, value, onClick }: { icon: ReactNode; label: string; 
   );
 }
 
+/** Block, delete, exit: red, as WhatsApp has them at the bottom of the panel. */
+export function DangerRow({ icon, label, onClick }: { icon: ReactNode; label: string; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className="flex w-full items-center gap-5 rounded-lg px-3 py-3 text-left hover:bg-(--hover-bg)">
+      <span className="text-(--danger)">{icon}</span>
+      <span className="flex-1 truncate text-[15px] text-(--danger)">{label}</span>
+    </button>
+  );
+}
+
 /** A photo or video from the chat with them, square. */
-function Thumb({ message, loadMedia, onOpen }: { message: Message; loadMedia?: LoadMedia; onOpen?: () => void }) {
+export function Thumb({ message, loadMedia, onOpen }: { message: Message; loadMedia?: LoadMedia; onOpen?: () => void }) {
   const [url, setUrl] = useState<string | null>(null);
   const video = useRef(message.kind !== "image");
   useEffect(() => {

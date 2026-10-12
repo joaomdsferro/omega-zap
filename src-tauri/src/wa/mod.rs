@@ -1,5 +1,6 @@
 pub mod commands;
 mod convert;
+mod stickers;
 
 use std::collections::HashMap;
 use std::fs;
@@ -8,21 +9,25 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use whatsapp_rust::download::{DownloadParams, MediaType};
+use whatsapp_rust::features::{GroupDescription, GroupSubject, PreviousDescription, SyncActionMessageRange};
+use whatsapp_rust::wacore::stanza::groups::{GroupNotificationAction, GroupParticipantInfo};
 use whatsapp_rust::http::HttpRequest;
 use whatsapp_rust::prelude::*;
 use whatsapp_rust::wacore::store::DevicePropsOverride;
 use whatsapp_rust::wacore::types::events::LazyHistorySync;
-use whatsapp_rust::wacore::types::presence::ReceiptType;
+use whatsapp_rust::wacore::iq::privacy::{PrivacyCategory, PrivacyValue};
+use whatsapp_rust::wacore::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
 use whatsapp_rust::waproto::buffa::MessageField;
 use whatsapp_rust::waproto::whatsapp::sync_action_value::label_edit_action::ListType;
 use whatsapp_rust::waproto::whatsapp::sync_action_value::{FavoritesAction, LabelEditAction, favorites_action};
 use whatsapp_rust::{
-    AppStateResyncMode, ErrorChainExt, MediaRetryResult, MediaReuploadRequest, ProfilePictureLookup, RevokeType, UploadOptions,
-    WAPatchName, schemas,
+    AppStateResyncMode, ChatStateType, ErrorChainExt, MediaRetryResult, MediaReuploadRequest, PresencePolicy, PresenceStatus,
+    PinDuration, ProfilePictureLookup, RevokeType, UploadOptions, WAPatchName, message_key, message_range, schemas,
 };
 
 use crate::account::{
@@ -30,7 +35,7 @@ use crate::account::{
 };
 use crate::store;
 use crate::store::{
-    CdnRef, ChatStore, History, ContactDto, Content, Deletion, Delivery, LinkPreview, ListDto, ReplyRef, MessageDto, Notice, StarredDto, StoredMessage,
+    CdnRef, ChatStore, History, ContactDto, Content, Deletion, Delivery, LinkPreview, ListDto, ReplyRef, MessageDto, Notice, PinsDto, StarredDto, StoredMessage,
     now_ms,
 };
 pub use crate::store::ChatSummary;
@@ -48,8 +53,11 @@ const ON_DEMAND: i32 = 6;
 const BACKFILL_START: Duration = Duration::from_secs(30);
 /// …asks for this many messages at a time…
 const BACKFILL_PAGE: i32 = 50;
-/// …and lets this much time pass between requests, to stay light.
-const BACKFILL_PACE: Duration = Duration::from_secs(4);
+/// …about this many chats at once, so the phone handles them in one go
+/// (each time it is woken it shows a "syncing" notification)…
+const BACKFILL_BURST: usize = 6;
+/// …and lets this much time pass between bursts, to stay light.
+const BACKFILL_PACE: Duration = Duration::from_secs(3);
 /// How long the phone has to answer a request.
 const BACKFILL_TIMEOUT: Duration = Duration::from_secs(40);
 /// Unanswered requests after which a chat counts as complete.
@@ -58,13 +66,16 @@ const BACKFILL_STRIKES: u32 = 2;
 const BACKFILL_SILENT: u32 = 3;
 /// How long to wait for a phone that is away before trying again.
 const BACKFILL_RETRY: Duration = Duration::from_secs(5 * 60);
+/// How often a fetch with nothing left to do looks again.
+const BACKFILL_IDLE: Duration = Duration::from_secs(30 * 60);
 /// Pause between profile picture lookups, to stay clear of the rate limit.
 const AVATAR_PACE: Duration = Duration::from_millis(150);
 /// How many chats the phone is asked about when old ticks are refreshed, how
-/// many messages of each, and the pause between the requests.
+/// many messages of each, and the pause between the requests: short, so the
+/// phone deals with them in one go.
 const TICK_CHATS: usize = 40;
 const TICK_MESSAGES: usize = 50;
-const TICK_PACE: Duration = Duration::from_secs(1);
+const TICK_PACE: Duration = Duration::from_millis(250);
 
 /// Why a CDN fetch failed. `Rejected` means the reference itself is no longer
 /// served, which a re-upload can fix.
@@ -130,6 +141,51 @@ pub struct WaManager {
     backfill_for: AtomicU64,
     /// A chat opened while it had no messages here: fetched next.
     backfill_next: Mutex<Option<String>>,
+    /// Rung when a chat is opened, for a fetch that had nothing left to do.
+    backfill_wake: tokio::sync::Notify,
+    /// The window is open and in front: we show as online, as WhatsApp Web
+    /// does while it is looked at.
+    active: AtomicBool,
+    /// What the server was last told: 0 nothing since connecting, 1 offline, 2 online.
+    announced: std::sync::atomic::AtomicU8,
+    /// Recent and favorite stickers, sticker packs and recent GIFs.
+    stickers: Mutex<stickers::Library>,
+    /// WhatsApp's sticker store's list of packs, and when it was fetched.
+    sticker_store: tokio::sync::Mutex<Option<(Instant, Vec<whatsapp_rust::sticker_pack::StickerPack>)>>,
+}
+
+/// How long the window can be out of focus before we show as offline, so
+/// a menu or a quick switch doesn't flicker it.
+const AWAY_AFTER: Duration = Duration::from_secs(10);
+
+/// Someone typing or recording in a chat, or stopping.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TypingDto {
+    chat_id: String,
+    /// Who, in a group.
+    who: Option<String>,
+    recording: bool,
+    active: bool,
+}
+
+/// Whether someone is online, or when they last were.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PresenceDto {
+    chat_id: String,
+    online: bool,
+    last_seen_ms: Option<i64>,
+}
+
+/// The account's privacy settings that decide what others see of it, as
+/// WhatsApp names their values.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivacyDto {
+    last_seen: Option<String>,
+    online: Option<String>,
+    read_receipts: Option<String>,
 }
 
 impl WaManager {
@@ -152,7 +208,6 @@ impl WaManager {
         };
         Ok(Arc::new(Self {
             app,
-            dir,
             status: Mutex::new(WaStatus::idle(linked)),
             store: Mutex::new(store),
             history,
@@ -166,6 +221,12 @@ impl WaManager {
             on_demand_answered: tokio::sync::Notify::new(),
             backfill_for: AtomicU64::new(u64::MAX),
             backfill_next: Mutex::new(None),
+            backfill_wake: tokio::sync::Notify::new(),
+            active: AtomicBool::new(false),
+            announced: std::sync::atomic::AtomicU8::new(0),
+            stickers: Mutex::new(if linked { stickers::Library::load(&dir) } else { stickers::Library::default() }),
+            sticker_store: tokio::sync::Mutex::new(None),
+            dir,
         }))
     }
 
@@ -264,6 +325,61 @@ impl WaManager {
         }
     }
 
+    /// The messages pinned in a chat, the latest pin first, and who pinned
+    /// what. Pinned messages only the history database has are brought back
+    /// into memory.
+    pub fn pinned_messages(&self, chat_id: &str) -> PinsDto {
+        let ids = lock(&self.store).pinned_ids(chat_id);
+        for id in &ids {
+            self.recall(chat_id, id);
+        }
+        let store = lock(&self.store);
+        PinsDto {
+            messages: ids.iter().filter_map(|id| store.message_dto(chat_id, id)).collect(),
+            notes: store.pin_notes(chat_id),
+        }
+    }
+
+    /// Pins a message for everyone for `secs` (24 hours, 7 days or 30
+    /// days), or unpins it when `secs` is `None`.
+    pub async fn pin_message(&self, chat_id: &str, message_id: &str, secs: Option<u32>) -> Result<(), String> {
+        self.recall(chat_id, message_id);
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
+        let target = lock(&self.store).reaction_target(chat_id, message_id).ok_or("That message is gone.")?;
+        let key = wa::MessageKey {
+            remote_jid: Some(chat_id.to_string()),
+            from_me: Some(target.from_me),
+            id: Some(message_id.to_string()),
+            participant: target.author.filter(|_| chat_id.ends_with("@g.us") && !target.from_me),
+            ..Default::default()
+        };
+        let at_ms = now_ms();
+        let until_ms = match secs {
+            Some(secs) => {
+                let duration = match secs {
+                    0..=86_400 => PinDuration::Hours24,
+                    86_401..=604_800 => PinDuration::Days7,
+                    _ => PinDuration::Days30,
+                };
+                client.pin_message(jid, key, duration).await.map_err(|e| format!("The message was not pinned: {e}"))?;
+                Some(at_ms + secs as i64 * 1000)
+            }
+            None => {
+                client.unpin_message(jid, key).await.map_err(|e| format!("The message was not unpinned: {e}"))?;
+                None
+            }
+        };
+        let chat = {
+            let mut store = lock(&self.store);
+            store.set_message_pin(chat_id, message_id, at_ms, until_ms, None);
+            store.chat_key(chat_id)
+        };
+        let _ = self.app.emit("wa://pins", chat);
+        self.mark_dirty();
+        Ok(())
+    }
+
     /// Messages of a chat from before `before_ms`, for scrolling back past
     /// what memory keeps.
     pub fn older_messages(&self, chat_id: &str, before_ms: i64, limit: usize) -> Vec<MessageDto> {
@@ -359,6 +475,9 @@ impl WaManager {
                     .with_platform_type(wa::device_props::PlatformType::CHROME),
             )
             .with_event_delivery(EventDelivery::Ordered { capacity: 8192 })
+            // Online only while the window is in front, not whenever the app
+            // runs in the tray: that would also keep the phone from ringing.
+            .with_presence_policy(PresencePolicy::Manual)
             .on_event(move |event, client| {
                 let mgr = mgr.clone();
                 async move { mgr.handle_event(generation, event, client).await }
@@ -554,6 +673,7 @@ impl WaManager {
             read_by: Vec::new(),
             starred: false,
             deleted: None,
+            edited_ms: None,
         };
         let incoming = store::Incoming {
             chat: chat_id.to_string(),
@@ -982,6 +1102,86 @@ impl WaManager {
         Ok(dto)
     }
 
+    /// Opens a vote on a poll with the poll's secret and records it.
+    /// Returns the poll's message when it changed.
+    async fn open_vote(&self, client: &Client, chat: &str, voter: &str, vote: convert::SealedVote) -> Option<MessageDto> {
+        let Some((options, _, secret, _)) = lock(&self.store).poll_of(chat, &vote.target) else {
+            log::info!("whatsapp: a vote on a poll not kept here was skipped");
+            return None;
+        };
+        let Some(secret) = secret.and_then(|s| BASE64.decode(s).ok()) else {
+            log::info!("whatsapp: a vote on a poll without its secret was skipped");
+            return None;
+        };
+        let creator = match &vote.creator {
+            Some(creator) => creator.parse::<Jid>().ok()?,
+            None => client.pn()?.to_non_ad(),
+        };
+        let voter_jid: Jid = voter.parse().ok()?;
+        let ciphertext = whatsapp_rust::wacore::poll::PollVoteCiphertext { enc_payload: &vote.payload, enc_iv: &vote.iv };
+        let hashes = match client.polls().decrypt_vote(ciphertext, &secret, &vote.target, &creator, &voter_jid).await {
+            Ok(hashes) => hashes,
+            Err(e) => {
+                log::warn!("whatsapp: a poll vote could not be opened: {e}");
+                return None;
+            }
+        };
+        lock(&self.store).set_poll_vote(chat, &vote.target, voter, convert::picked(&options, &hashes), vote.at_ms)
+    }
+
+    /// Votes on a poll for the options at `picked`; none takes our vote back.
+    pub async fn vote_poll(&self, chat_id: &str, message_id: &str, picked: Vec<usize>) -> Result<MessageDto, String> {
+        self.recall(chat_id, message_id);
+        let (options, selectable, secret, creator) =
+            lock(&self.store).poll_of(chat_id, message_id).ok_or("That poll is gone.")?;
+        let secret = secret
+            .and_then(|s| BASE64.decode(s).ok())
+            .ok_or("This poll can't be voted on from here: WhatsApp didn't send its key.")?;
+        if selectable > 0 && picked.len() > selectable as usize {
+            return Err(format!("Pick up to {selectable}."));
+        }
+        let names: Vec<String> = picked.iter().filter_map(|&i| options.get(i).cloned()).collect();
+        let client = self.connected_client().await?;
+        let creator: Jid = match creator {
+            Some(creator) => creator.parse().map_err(|e| format!("Unknown poll author {creator}: {e}"))?,
+            None => client.pn().ok_or("WhatsApp is not connected.")?.to_non_ad(),
+        };
+        let chat: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
+        client
+            .polls()
+            .vote(chat, message_id, &creator, &secret, &names)
+            .await
+            .map_err(|e| format!("The vote was not sent: {e}"))?;
+        let mut store = lock(&self.store);
+        let me = store.own_id().ok_or("WhatsApp is not connected.")?.to_string();
+        let dto = store.set_poll_vote(chat_id, message_id, &me, picked, store::now_ms());
+        drop(store);
+        self.mark_dirty();
+        dto.ok_or_else(|| "That poll is gone.".into())
+    }
+
+    /// Changes what one of our texts says, for everyone, within WhatsApp's
+    /// edit window.
+    pub async fn edit_message(&self, chat_id: &str, message_id: &str, text: &str) -> Result<MessageDto, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("The message is empty.".into());
+        }
+        self.recall(chat_id, message_id);
+        if !lock(&self.store).can_edit(chat_id, message_id, store::EDIT_WINDOW_MS) {
+            return Err("Only your own texts can be edited, up to 15 minutes after sending.".into());
+        }
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
+        client
+            .edit_message(jid, message_id, wa::Message::text(text))
+            .await
+            .map_err(|e| format!("The message was not edited: {e}"))?;
+        let dto = lock(&self.store).edit_message(chat_id, message_id, None, Content::text(text, None), store::now_ms());
+        self.mark_dirty();
+        dto.ok_or_else(|| "The message is no longer here.".into())
+    }
+
     /// Deletes a message on our devices, or for everyone when `for_everyone`
     /// and it is ours. Returns what is left of it, if anything is shown.
     pub async fn delete_message(&self, chat_id: &str, message_id: &str, for_everyone: bool) -> Result<Option<MessageDto>, String> {
@@ -1043,14 +1243,188 @@ impl WaManager {
         self.client().await.ok_or_else(|| "WhatsApp is not connected.".to_string())
     }
 
-    /// Mutes a chat for good, or unmutes it, here and on the phone.
-    pub async fn set_muted(&self, chat_id: &str, muted: bool) -> Result<(), String> {
+    /// Mutes a chat until a time, or for good without one, or unmutes it,
+    /// here and on the phone.
+    pub async fn set_muted(&self, chat_id: &str, muted: bool, until_ms: Option<i64>) -> Result<(), String> {
         let client = self.connected_client().await?;
         let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
         let actions = client.chat_actions();
-        if muted { actions.mute_chat(&jid).await } else { actions.unmute_chat(&jid).await }
-            .map_err(|e| format!("The chat was not {}: {e}", if muted { "muted" } else { "unmuted" }))?;
-        lock(&self.store).set_muted(chat_id, muted.then_some(i64::MAX));
+        match (muted, until_ms) {
+            (true, Some(until)) => actions.mute_chat_until(&jid, until).await,
+            (true, None) => actions.mute_chat(&jid).await,
+            (false, _) => actions.unmute_chat(&jid).await,
+        }
+        .map_err(|e| format!("The chat was not {}: {e}", if muted { "muted" } else { "unmuted" }))?;
+        lock(&self.store).set_muted(chat_id, muted.then(|| until_ms.unwrap_or(i64::MAX)));
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// Shows us online while the window is in front, and offline otherwise.
+    pub fn set_active(self: &Arc<Self>, active: bool) {
+        if self.active.swap(active, Ordering::AcqRel) == active {
+            return;
+        }
+        let mgr = self.clone();
+        tauri::async_runtime::spawn(async move {
+            if !active {
+                tokio::time::sleep(AWAY_AFTER).await;
+            }
+            // Back in front meanwhile, or gone again: a later call decides.
+            if mgr.active.load(Ordering::Acquire) == active {
+                mgr.announce_presence().await;
+            }
+        });
+    }
+
+    /// Tells the server whether we are online, when that changed since it
+    /// was last told.
+    async fn announce_presence(&self) {
+        let Some(client) = self.client().await else {
+            return;
+        };
+        let active = self.active.load(Ordering::Acquire);
+        if self.announced.swap(if active { 2 } else { 1 }, Ordering::AcqRel) == if active { 2 } else { 1 } {
+            return;
+        }
+        let status = if active { PresenceStatus::Available } else { PresenceStatus::Unavailable };
+        if let Err(e) = client.presence().set(status).await {
+            self.announced.store(0, Ordering::Release);
+            log::warn!("whatsapp: presence not sent: {e}");
+        }
+    }
+
+    /// Tells the chat we are typing, recording, or have stopped.
+    pub async fn set_typing(&self, chat_id: &str, state: &str) -> Result<(), String> {
+        let state = match state {
+            "typing" => ChatStateType::Composing,
+            "recording" => ChatStateType::Recording,
+            _ => ChatStateType::Paused,
+        };
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
+        client.chatstate().send(&jid, state).await.map_err(|e| format!("Typing not sent: {e}"))
+    }
+
+    /// Asks to be told when someone comes online or goes away. Groups have
+    /// no presence of their own.
+    pub async fn watch_presence(&self, chat_id: &str) -> Result<(), String> {
+        if chat_id.ends_with("@g.us") || chat_id.ends_with("@broadcast") || chat_id.ends_with("@newsletter") {
+            return Ok(());
+        }
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
+        client.presence().subscribe(jid).await.map_err(|e| format!("Presence not asked for: {e}"))
+    }
+
+    pub async fn privacy(&self) -> Result<PrivacyDto, String> {
+        let client = self.connected_client().await?;
+        let settings = client.fetch_privacy_settings().await.map_err(|e| format!("Privacy settings not loaded: {e}"))?;
+        let value = |category| settings.get_value(&category).map(|v: &PrivacyValue| v.to_string());
+        Ok(PrivacyDto {
+            last_seen: value(PrivacyCategory::Last),
+            online: value(PrivacyCategory::Online),
+            read_receipts: value(PrivacyCategory::ReadReceipts),
+        })
+    }
+
+    /// Changes who sees our last seen (`last`), online (`online`) or read
+    /// receipts (`readreceipts`), on the account itself.
+    pub async fn set_privacy(&self, category: &str, value: &str) -> Result<(), String> {
+        let category = PrivacyCategory::from(category);
+        let value = PrivacyValue::from(value);
+        if matches!(category, PrivacyCategory::Other(_)) || !category.is_valid_value(&value) {
+            return Err("That privacy setting can't be changed here.".into());
+        }
+        let client = self.connected_client().await?;
+        client
+            .set_privacy_setting(category, value)
+            .await
+            .map_err(|e| format!("The privacy setting was not changed: {e}"))?;
+        Ok(())
+    }
+
+    /// Archives a chat or brings it back, here and on the phone. Archiving
+    /// unpins it, as the phone does.
+    pub async fn set_archived(&self, chat_id: &str, archived: bool) -> Result<(), String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
+        let pinned = lock(&self.store).is_pinned(chat_id);
+        let range = self.last_range(chat_id);
+        let actions = client.chat_actions();
+        if archived { actions.archive_chat(&jid, range).await } else { actions.unarchive_chat(&jid, range).await }
+            .map_err(|e| format!("The chat was not {}: {e}", if archived { "archived" } else { "unarchived" }))?;
+        if archived && pinned {
+            match actions.unpin_chat(&jid).await {
+                Ok(()) => lock(&self.store).set_pinned(chat_id, None),
+                Err(e) => log::warn!("whatsapp: unpin on archive failed: {e}"),
+            }
+        }
+        lock(&self.store).set_archived(chat_id, archived);
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// The range the phone weighs a change to a chat against: its newest
+    /// message.
+    fn last_range(&self, chat_id: &str) -> Option<SyncActionMessageRange> {
+        let last = lock(&self.store).last_message_key(chat_id)?;
+        let chat: Jid = last.chat.parse().ok()?;
+        let sender = last.sender.and_then(|s| s.parse::<Jid>().ok());
+        let key = message_key(last.id, &chat, last.from_me, sender.as_ref());
+        Some(message_range(last.ts_s, None, vec![(key, last.ts_s)]))
+    }
+
+    /// Deletes a chat and its messages, here and on the phone.
+    pub async fn delete_chat(&self, chat_id: &str) -> Result<(), String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
+        let before = lock(&self.store).clear_point(chat_id);
+        client
+            .chat_actions()
+            .delete_chat(&jid, false, self.last_range(chat_id))
+            .await
+            .map_err(|e| format!("The chat was not deleted: {e}"))?;
+        lock(&self.store).delete_chat(chat_id, before);
+        self.chat_emptied(chat_id);
+        Ok(())
+    }
+
+    /// Empties a chat of its messages, here and on the phone, keeping it in
+    /// the list; starred messages stay when `keep_starred`.
+    pub async fn clear_chat(&self, chat_id: &str, keep_starred: bool) -> Result<(), String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
+        let before = lock(&self.store).clear_point(chat_id);
+        client
+            .chat_actions()
+            .clear_chat(&jid, !keep_starred, false, self.last_range(chat_id))
+            .await
+            .map_err(|e| format!("The chat was not cleared: {e}"))?;
+        lock(&self.store).clear_chat(chat_id, before, keep_starred);
+        self.chat_emptied(chat_id);
+        Ok(())
+    }
+
+    /// Tells the UI a chat lost its messages, so an open one shows it.
+    fn chat_emptied(&self, chat_id: &str) {
+        let chat = lock(&self.store).chat_key(chat_id);
+        let _ = self.app.emit("wa://cleared", chat);
+        self.mark_dirty();
+    }
+
+    /// Pins a chat to the top of the list or unpins it, here and on the
+    /// phone, which holds three at most.
+    pub async fn set_pinned(&self, chat_id: &str, pinned: bool) -> Result<(), String> {
+        if pinned && lock(&self.store).pinned_count() >= store::MAX_PINNED {
+            return Err(format!("You can only pin up to {} chats.", store::MAX_PINNED));
+        }
+        let client = self.connected_client().await?;
+        let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
+        let actions = client.chat_actions();
+        if pinned { actions.pin_chat(&jid).await } else { actions.unpin_chat(&jid).await }
+            .map_err(|e| format!("The chat was not {}: {e}", if pinned { "pinned" } else { "unpinned" }))?;
+        lock(&self.store).set_pinned(chat_id, pinned.then(now_ms));
         self.mark_dirty();
         Ok(())
     }
@@ -1073,6 +1447,106 @@ impl WaManager {
         self.mark_dirty();
         let common_groups = lock(&self.store).common_groups(id);
         Ok(store::PersonDetailsDto { about, photo, common_groups })
+    }
+
+    pub fn group_info(&self, id: &str) -> store::GroupInfoDto {
+        lock(&self.store).group_info(id)
+    }
+
+    /// A group's info fresh from the network: members and their roles,
+    /// description, and its picture at full size.
+    pub async fn group_details(&self, id: &str) -> Result<store::GroupInfoDto, String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = id.parse().map_err(|e| format!("Not a group: {e}"))?;
+        let groups = client.groups();
+        let mut metadata = groups.fetch_metadata(&jid).await.map_err(|e| format!("The group could not be looked up: {e}"))?;
+        groups.resolve_participant_addresses(&mut metadata).await;
+        let photo = self.full_picture(&client, id, &jid).await;
+        let members = members_of(&metadata);
+        {
+            let mut store = lock(&self.store);
+            store.set_group_participants(id, &members);
+            store.set_group_facts(id, facts_of(&metadata));
+            store.remember_group_picture(id, photo.as_deref());
+        }
+        self.mark_dirty();
+        Ok(self.group_info(id))
+    }
+
+    /// Leaves a group. Its chat stays, read-only, until it is deleted.
+    pub async fn leave_group(&self, id: &str) -> Result<(), String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = id.parse().map_err(|e| format!("Not a group: {e}"))?;
+        client.groups().leave(jid).await.map_err(|e| format!("You did not leave the group: {e}"))?;
+        lock(&self.store).set_left(id, true);
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// Renames a group, or changes or removes its description.
+    pub async fn edit_group(&self, id: &str, name: Option<String>, description: Option<String>) -> Result<store::GroupInfoDto, String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = id.parse().map_err(|e| format!("Not a group: {e}"))?;
+        let groups = client.groups();
+        if let Some(name) = name {
+            let subject = GroupSubject::new(name.trim()).map_err(|e| format!("That name can't be used: {e}"))?;
+            groups.set_subject(jid.clone(), subject).await.map_err(|e| format!("The group was not renamed: {e}"))?;
+            lock(&self.store).apply_group_change(id, store::GroupChange::Subject(name));
+        }
+        if let Some(text) = description {
+            let text = text.trim();
+            let body = if text.is_empty() {
+                None
+            } else {
+                Some(GroupDescription::new(text).map_err(|e| format!("That description can't be used: {e}"))?)
+            };
+            groups
+                .set_description(jid, body, PreviousDescription::Resolve)
+                .await
+                .map_err(|e| format!("The description was not changed: {e}"))?;
+            lock(&self.store).apply_group_change(id, store::GroupChange::Description(Some(text.to_string())));
+        }
+        self.mark_dirty();
+        Ok(self.group_info(id))
+    }
+
+    /// Adds people to a group, removes one, or makes one an admin or not.
+    /// Says who could not be changed, and why when the server says.
+    pub async fn change_members(&self, id: &str, change: &str, members: Vec<String>) -> Result<store::GroupInfoDto, String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = id.parse().map_err(|e| format!("Not a group: {e}"))?;
+        let people: Vec<Jid> = members.iter().map(|m| m.parse::<Jid>()).collect::<Result<_, _>>().map_err(|e| format!("Not a person: {e}"))?;
+        let groups = client.groups();
+        let result = match change {
+            "add" => groups.add_participants(jid.clone(), &people).await,
+            "remove" => groups.remove_participants(jid.clone(), &people).await,
+            "promote" => groups.promote_participants(jid.clone(), &people).await,
+            "demote" => groups.demote_participants(jid.clone(), &people).await,
+            other => return Err(format!("Unknown change: {other}")),
+        }
+        .map_err(|e| format!("The group was not changed: {e}"))?;
+        let failed: Vec<String> = result
+            .iter()
+            .filter(|r| !r.is_ok())
+            .map(|r| {
+                let who = lock(&self.store).display_name(&r.jid.to_non_ad_string());
+                match r.error.as_deref() {
+                    // Their privacy settings only let contacts add them: WhatsApp invites them instead.
+                    Some("403") => format!("{who} can only be added by an invite link"),
+                    Some("409") if change == "add" => format!("{who} is already in the group"),
+                    Some("408") => format!("{who} left recently and can't be added yet"),
+                    Some(code) => format!("{who} ({code})"),
+                    None => who,
+                }
+            })
+            .collect();
+        // The server's own answer: who is in it and who is admin.
+        let info = self.group_details(id).await.unwrap_or_else(|_| self.group_info(id));
+        if failed.is_empty() {
+            Ok(info)
+        } else {
+            Err(format!("Not changed: {}.", failed.join("; ")))
+        }
     }
 
     /// Looks up who is in every group, in one request, at most once a day:
@@ -1100,6 +1574,35 @@ impl WaManager {
             }
             mgr.mark_dirty();
         });
+    }
+
+    /// Looks up who we blocked: the phone can change it without telling us.
+    fn sync_blocklist(self: &Arc<Self>, generation: u64, client: Arc<Client>) {
+        let mgr = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let entries = match client.blocking().get_blocklist().await {
+                Ok(entries) => entries,
+                Err(e) => return log::warn!("whatsapp: blocklist lookup failed: {e}"),
+            };
+            if mgr.generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            if lock(&mgr.store).set_blocklist(entries.into_iter().map(|e| e.jid.to_non_ad_string())) {
+                mgr.mark_dirty();
+            }
+        });
+    }
+
+    /// Blocks someone or unblocks them, here and on the phone.
+    pub async fn set_blocked(&self, id: &str, blocked: bool) -> Result<(), String> {
+        let client = self.connected_client().await?;
+        let jid: Jid = id.parse().map_err(|e| format!("Not a person: {e}"))?;
+        let blocking = client.blocking();
+        if blocked { blocking.block(&jid).await } else { blocking.unblock(&jid).await }
+            .map_err(|e| format!("They were not {}: {e}", if blocked { "blocked" } else { "unblocked" }))?;
+        lock(&self.store).set_blocked(id, blocked);
+        self.mark_dirty();
+        Ok(())
     }
 
     /// Someone's profile picture at full size, saved encrypted beside the
@@ -1408,6 +1911,12 @@ impl WaManager {
                         stale.push(chat);
                     }
                 }
+                // Each request wakes the phone, so a start asks about a few
+                // dozen chats at most, each once a day.
+                stale.truncate(TICK_CHATS);
+                for (chat, ..) in &stale {
+                    store.mark_refreshed(chat);
+                }
                 stale
             };
             mgr.save_dirty.store(true, Ordering::Release);
@@ -1608,10 +2117,18 @@ impl WaManager {
                     s.error = None;
                 });
                 self.mark_dirty();
+                // A new connection starts offline.
+                self.announced.store(1, Ordering::Release);
+                if self.active.load(Ordering::Acquire) {
+                    let mgr = self.clone();
+                    tauri::async_runtime::spawn(async move { mgr.announce_presence().await });
+                }
                 self.sync_chat_state(generation, client.clone());
+                self.sync_sticker_favorites(generation, client.clone());
                 self.refresh_ticks(generation, client.clone());
                 self.fetch_all_history(generation, client.clone());
                 self.sync_participants(generation, client.clone());
+                self.sync_blocklist(generation, client.clone());
                 self.sync_avatars(generation, client);
             }
             Event::Disconnected(_) if self.is_linked() => {
@@ -1633,9 +2150,15 @@ impl WaManager {
             Event::Messages(batch) => {
                 let mut dtos: Vec<MessageDto> = Vec::new();
                 let mut notices: Vec<Notice> = Vec::new();
+                let mut pinned_in: Vec<String> = Vec::new();
+                // Opened once the store is free: (chat, voter, vote).
+                let mut votes: Vec<(String, String, convert::SealedVote)> = Vec::new();
                 // Reactions and deletions can be for messages only the history has.
                 for m in batch.iter() {
-                    let target = convert::revoke(&m.message).or_else(|| convert::reaction(&m.message).map(|(target, _)| target));
+                    let target = convert::revoke(&m.message)
+                        .or_else(|| convert::reaction(&m.message).map(|(target, _)| target))
+                        .or_else(|| convert::edit(&m.message, 0).map(|edit| edit.target))
+                        .or_else(|| convert::poll_vote(&m.message, 0).map(|vote| vote.target));
                     if let Some(target) = target {
                         self.recall(&m.info.source.chat.to_non_ad_string(), &target);
                     }
@@ -1646,6 +2169,40 @@ impl WaManager {
                         if let Some(target) = convert::revoke(&m.message) {
                             let chat = m.info.source.chat.to_non_ad_string();
                             dtos.extend(store.delete_message(&chat, &target, Deletion::ForEveryone));
+                            continue;
+                        }
+                        if let Some(edit) = convert::edit(&m.message, m.info.timestamp.timestamp_millis()) {
+                            let chat = m.info.source.chat.to_non_ad_string();
+                            let sender = m.info.source.sender.to_non_ad_string();
+                            if let Some(alt) = &m.info.source.sender_alt {
+                                store.learn_mapping(&sender, &alt.to_non_ad_string());
+                            }
+                            let editor = (!m.info.source.is_from_me).then_some(sender);
+                            dtos.extend(store.edit_message(&chat, &edit.target, editor.as_deref(), edit.content, edit.at_ms));
+                            continue;
+                        }
+                        if let Some(vote) = convert::poll_vote(&m.message, m.info.timestamp.timestamp_millis()) {
+                            let sender = m.info.source.sender.to_non_ad_string();
+                            if let Some(alt) = &m.info.source.sender_alt {
+                                store.learn_mapping(&sender, &alt.to_non_ad_string());
+                            }
+                            votes.push((m.info.source.chat.to_non_ad_string(), sender, vote));
+                            continue;
+                        }
+                        if convert::is_sealed_edit(&m.message) {
+                            log::info!("whatsapp: an edit sealed with the original message's secret was skipped");
+                            continue;
+                        }
+                        if let Some(pin) = convert::pin(&m.message, m.info.timestamp.timestamp_millis()) {
+                            let chat = m.info.source.chat.to_non_ad_string();
+                            let by = (!m.info.source.is_from_me).then(|| m.info.source.sender.to_non_ad_string());
+                            let stored = store.set_message_pin(&chat, &pin.target, pin.at_ms, pin.until_ms, by.as_deref());
+                            log::info!(
+                                "whatsapp: {} of {} in {chat} (stored: {stored})",
+                                if pin.until_ms.is_some() { "pin" } else { "unpin" },
+                                pin.target
+                            );
+                            pinned_in.push(store.chat_key(&chat));
                             continue;
                         }
                         match convert::reaction(&m.message) {
@@ -1661,9 +2218,11 @@ impl WaManager {
                                 dtos.push(dto);
                             }
                             None => {
-                                let Some(dto) = convert::live(&m.message, &m.info)
-                                    .and_then(|incoming| store.ingest(incoming, true))
-                                else {
+                                let Some(incoming) = convert::live(&m.message, &m.info) else {
+                                    continue;
+                                };
+                                self.note_own_media([&incoming.message]);
+                                let Some(dto) = store.ingest(incoming, true) else {
                                     continue;
                                 };
                                 notices.extend(store.message_notice(&dto.chat_id, &dto.id));
@@ -1672,8 +2231,16 @@ impl WaManager {
                         }
                     }
                 }
+                for (chat, voter, vote) in votes {
+                    dtos.extend(self.open_vote(&client, &chat, &voter, vote).await);
+                }
                 for dto in dtos {
                     let _ = self.app.emit("wa://message", dto);
+                }
+                pinned_in.sort();
+                pinned_in.dedup();
+                for chat in pinned_in {
+                    let _ = self.app.emit("wa://pins", chat);
                 }
                 for notice in notices {
                     crate::notify::deliver(&self.app, "whatsapp", "wa://notice", notice);
@@ -1761,12 +2328,58 @@ impl WaManager {
                 );
                 self.mark_dirty();
             }
+            Event::ChatPresence(update) => {
+                let source = &update.source;
+                let store = lock(&self.store);
+                let sender = source.sender.to_non_ad_string();
+                if source.is_from_me || store.is_own(&sender) {
+                    return;
+                }
+                let typing = TypingDto {
+                    chat_id: store.canonical(&source.chat.to_non_ad_string()),
+                    who: source.is_group.then(|| store.display_name(&sender)),
+                    recording: update.media == ChatPresenceMedia::Audio,
+                    active: update.state == ChatPresence::Composing,
+                };
+                drop(store);
+                let _ = self.app.emit("wa://typing", typing);
+            }
+            Event::Presence(update) => {
+                let presence = PresenceDto {
+                    chat_id: lock(&self.store).canonical(&update.from.to_non_ad_string()),
+                    online: !update.unavailable,
+                    last_seen_ms: update.last_seen.map(|t| t.timestamp_millis()),
+                };
+                let _ = self.app.emit("wa://presence", presence);
+            }
             Event::ArchiveUpdate(update) => {
                 lock(&self.store).set_archived(
                     &update.jid.to_non_ad_string(),
                     update.action.archived.unwrap_or(false),
                 );
                 self.mark_dirty();
+            }
+            Event::GroupUpdate(update) => {
+                let Some(change) = group_change(&update.action) else { return };
+                let group = update.group_jid.to_non_ad_string();
+                if lock(&self.store).apply_group_change(&group, change) {
+                    self.mark_dirty();
+                    let _ = self.app.emit("wa://group", lock(&self.store).chat_key(&group));
+                }
+            }
+            Event::DeleteChatUpdate(update) => {
+                let chat = update.jid.to_non_ad_string();
+                let before = range_end(update.action.message_range.as_option(), update.action_timestamp.unwrap_or(update.timestamp).timestamp_millis());
+                if lock(&self.store).delete_chat(&chat, before) {
+                    self.chat_emptied(&chat);
+                }
+            }
+            Event::ClearChatUpdate(update) => {
+                let chat = update.jid.to_non_ad_string();
+                let before = range_end(update.action.message_range.as_option(), update.action_timestamp.unwrap_or(update.timestamp).timestamp_millis());
+                if lock(&self.store).clear_chat(&chat, before, !update.delete_starred) {
+                    self.chat_emptied(&chat);
+                }
             }
             Event::StarUpdate(update) => {
                 let changed = lock(&self.store).set_starred(
@@ -1778,6 +2391,12 @@ impl WaManager {
                     let _ = self.app.emit("wa://message", dto);
                     self.mark_dirty();
                 }
+            }
+            Event::FavoriteStickerUpdate(update) => {
+                self.phone_favorite(&update.filehash, &update.action, update.timestamp.timestamp_millis());
+            }
+            Event::RemoveRecentStickerUpdate(update) => {
+                self.phone_removed_recent(&update.filehash, update.action.last_sticker_sent_ts);
             }
             Event::FavoritesUpdate(update) => {
                 let ids = update.action.favorites.iter().filter_map(|f| f.id.clone()).collect();
@@ -1837,6 +2456,8 @@ impl WaManager {
     fn ingest_history(&self, lazy: &LazyHistorySync) -> Result<(), String> {
         let on_demand = lazy.sync_type() == ON_DEMAND;
         let mut answered: HashMap<String, u32> = HashMap::new();
+        // Our stickers and GIFs, kept as recent once the chunk is in.
+        let mut own_media: Vec<StoredMessage> = Vec::new();
         let mut stream = lazy.stream();
         let mut conversation = wa::Conversation::default();
         while stream
@@ -1862,10 +2483,27 @@ impl WaManager {
             if on_demand {
                 *answered.entry(store.chat_key(&c.id)).or_default() += c.messages.len() as u32;
             }
+            // Edits are applied once the messages they change are in.
+            let mut edits = Vec::new();
             for item in &c.messages {
+                edits.extend(convert::history_edit(&c.id, item));
+                for pin in convert::history_pins(&c.id, item) {
+                    store.set_message_pin(&c.id, &pin.target, pin.at_ms, pin.until_ms, pin.by.as_deref());
+                }
                 if let Some(incoming) = convert::history(&c.id, item) {
                     let id = incoming.message.id.clone();
+                    let options = incoming.message.content.poll.as_ref().map(|p| p.options.clone());
+                    if incoming.message.from_me && incoming.message.content.wa_media.is_some() {
+                        own_media.push(incoming.message.clone());
+                    }
                     store.ingest(incoming, false);
+                    // The phone sends a poll's votes already opened.
+                    for (voter, hashes, at_ms) in options.as_ref().map(|_| convert::history_votes(&c.id, item)).unwrap_or_default() {
+                        let voter = voter.or_else(|| store.own_id().map(str::to_string));
+                        if let (Some(voter), Some(options)) = (voter, &options) {
+                            store.set_poll_vote(&c.id, &id, &voter, convert::picked(options, &hashes), at_ms);
+                        }
+                    }
                     for (author, emoji) in convert::history_reactions(&c.id, item) {
                         let author = author.or_else(|| store.own_id().map(str::to_string));
                         if let Some(author) = author {
@@ -1874,8 +2512,13 @@ impl WaManager {
                     }
                 }
             }
+            for (editor, edit) in edits {
+                store.edit_message(&c.id, &edit.target, editor.as_deref(), edit.content, edit.at_ms);
+            }
         }
+        self.note_own_media(&own_media);
         let rest = stream.remainder().map_err(|e| e.to_string())?;
+        self.note_phone_recents(&rest.recent_stickers);
         let mut store = lock(&self.store);
         for mapping in &rest.phone_number_to_lid_mappings {
             if let (Some(pn), Some(lid)) = (&mapping.pn_jid, &mapping.lid_jid) {
@@ -1899,9 +2542,12 @@ impl WaManager {
         Ok(())
     }
 
-    /// Asks the phone for every chat's older messages, a page at a time and
-    /// slowly, newest chats first, until it has nothing older. Chats found
-    /// complete stay so across restarts. Shows where it is in the status.
+    /// Asks the phone for every chat's older messages, a page at a time,
+    /// a few chats per request burst, newest chats first, until it has
+    /// nothing older. Chats with no message here are left until they are
+    /// opened: there is nothing to count back from, and the phone is woken
+    /// for each one. Chats found complete stay so across restarts. Shows
+    /// where it is in the status.
     fn fetch_all_history(self: &Arc<Self>, generation: u64, client: Arc<Client>) {
         if self.backfill_for.swap(generation, Ordering::SeqCst) == generation {
             return;
@@ -1915,6 +2561,8 @@ impl WaManager {
             let mut silent = 0u32;
             // Chats the phone did not answer for, this run.
             let mut strikes: HashMap<String, u32> = HashMap::new();
+            // Chats with no message here, left until opened.
+            let mut empty: std::collections::HashSet<String> = std::collections::HashSet::new();
             loop {
                 if !current() {
                     return;
@@ -1925,90 +2573,111 @@ impl WaManager {
                 }
                 // What came in is written first, so the oldest message is known.
                 mgr.save_now();
-                let (queue, (done, total)) = {
-                    let store = lock(&mgr.store);
-                    (store.history_queue(), store.history_counts())
-                };
-                let first = lock(&mgr.backfill_next).take();
-                let mut queue: Vec<(String, String)> =
-                    queue.into_iter().filter(|(chat, _)| strikes.get(chat).is_none_or(|n| *n < BACKFILL_STRIKES)).collect();
-                if let Some(at) = first.and_then(|first| queue.iter().position(|(chat, _)| *chat == first)) {
-                    let opened = queue.remove(at);
-                    queue.insert(0, opened);
+                let queue = lock(&mgr.store).history_queue();
+                let opened = lock(&mgr.backfill_next).take();
+                let mut queue: Vec<(String, String)> = queue
+                    .into_iter()
+                    .filter(|(chat, _)| strikes.get(chat).is_none_or(|n| *n < BACKFILL_STRIKES))
+                    .filter(|(chat, _)| !empty.contains(chat) || opened.as_ref() == Some(chat))
+                    .collect();
+                if let Some(at) = opened.as_ref().and_then(|first| queue.iter().position(|(chat, _)| chat == first)) {
+                    let chat = queue.remove(at);
+                    queue.insert(0, chat);
                 }
-                let Some((chat, name)) = queue.into_iter().next() else {
-                    mgr.set_backfill(BackfillState::Done, None, fetched);
-                    return;
-                };
-                let in_memory = lock(&mgr.store).oldest_message(&chat).cloned();
-                let oldest = match (in_memory, mgr.history.oldest(&chat)) {
-                    (Some(a), Some(b)) => Some(if b.ts_ms < a.ts_ms { b } else { a }),
-                    (a, b) => a.or(b),
-                };
-                let Ok(jid) = chat.parse::<Jid>() else {
-                    lock(&mgr.store).mark_history_complete(&chat);
-                    continue;
-                };
-                // A chat with no message here yet is asked for what came
-                // before the last time it was active, with nothing to count from.
-                let anchor = match &oldest {
-                    Some(m) => (m.id.clone(), m.from_me, m.ts_ms),
-                    None => {
-                        let last = lock(&mgr.store).chat_last_ts(&chat);
-                        (String::new(), false, if last > 0 { last + 1 } else { now_ms() })
+                // The burst: each chat with where to count back from.
+                let mut burst: Vec<(String, String, Jid, (String, bool, i64))> = Vec::new();
+                for (chat, name) in queue {
+                    if burst.len() >= BACKFILL_BURST {
+                        break;
                     }
-                };
-                let oldest_ts = anchor.2;
-                mgr.set_status(|s| {
-                    s.backfill = Some(Backfill { state: BackfillState::Fetching, chat: Some(name.clone()), done, total, messages: fetched });
-                });
-                lock(&mgr.on_demand).remove(&chat);
-                let asked = client
-                    .fetch_message_history(&jid, &anchor.0, anchor.1, anchor.2, BACKFILL_PAGE)
-                    .await;
-                if let Err(e) = asked {
-                    log::warn!("whatsapp: could not ask for older messages of {chat}: {e}");
-                    mgr.set_backfill(BackfillState::WaitingForPhone, Some(name), fetched);
-                    tokio::time::sleep(BACKFILL_RETRY).await;
-                    continue;
-                }
-                let got = mgr.wait_for_answer(&chat).await;
-                match got {
-                    // The phone answered with nothing older: this chat is all here.
-                    Some(0) => {
+                    let Ok(jid) = chat.parse::<Jid>() else {
                         lock(&mgr.store).mark_history_complete(&chat);
-                        silent = 0;
-                    }
-                    Some(count) => {
-                        fetched += count;
-                        silent = 0;
-                        mgr.save_now();
-                        let _ = mgr.app.emit("wa://history", &chat);
-                        // Anything already known means the phone has no more before it.
-                        let older = mgr.history.oldest(&chat).is_some_and(|now| now.ts_ms < oldest_ts)
-                            || lock(&mgr.store).oldest_message(&chat).is_some_and(|now| now.ts_ms < oldest_ts);
-                        if !older {
-                            lock(&mgr.store).mark_history_complete(&chat);
+                        continue;
+                    };
+                    let in_memory = lock(&mgr.store).oldest_message(&chat).cloned();
+                    let oldest = match (in_memory, mgr.history.oldest(&chat)) {
+                        (Some(a), Some(b)) => Some(if b.ts_ms < a.ts_ms { b } else { a }),
+                        (a, b) => a.or(b),
+                    };
+                    let anchor = match &oldest {
+                        Some(m) => (m.id.clone(), m.from_me, m.ts_ms),
+                        // Opened with no message here: asked for what came before
+                        // the last time it was active, with nothing to count from.
+                        None if opened.as_ref() == Some(&chat) => {
+                            let last = lock(&mgr.store).chat_last_ts(&chat);
+                            (String::new(), false, if last > 0 { last + 1 } else { now_ms() })
                         }
-                        mgr.mark_dirty();
-                    }
-                    None => {
-                        let strike = strikes.entry(chat.clone()).or_default();
-                        *strike += 1;
-                        // A phone that answers nothing for a chat it was asked
-                        // about twice has nothing older for it.
-                        if *strike >= BACKFILL_STRIKES {
-                            lock(&mgr.store).mark_history_complete(&chat);
+                        None => {
+                            empty.insert(chat);
+                            continue;
                         }
-                        silent += 1;
-                        if silent >= BACKFILL_SILENT {
-                            // Several chats in a row without an answer: the phone is away.
-                            mgr.set_backfill(BackfillState::WaitingForPhone, None, fetched);
-                            tokio::time::sleep(BACKFILL_RETRY).await;
+                    };
+                    burst.push((chat, name, jid, anchor));
+                }
+                if burst.is_empty() {
+                    mgr.set_backfill_counts(BackfillState::Done, None, fetched, empty.len() as u32);
+                    // Opening a chat brings it back to work; now and then, so
+                    // does a look at which empty chats have messages by now.
+                    tokio::select! {
+                        _ = mgr.backfill_wake.notified() => {}
+                        _ = tokio::time::sleep(BACKFILL_IDLE) => empty.clear(),
+                    }
+                    continue;
+                }
+                mgr.set_backfill_counts(BackfillState::Fetching, Some(burst[0].1.clone()), fetched, empty.len() as u32);
+                let mut sent = Vec::new();
+                let mut failed = false;
+                for (chat, name, jid, anchor) in burst {
+                    lock(&mgr.on_demand).remove(&chat);
+                    match client.fetch_message_history(&jid, &anchor.0, anchor.1, anchor.2, BACKFILL_PAGE).await {
+                        Ok(_) => sent.push((chat, name, anchor.2)),
+                        Err(e) => {
+                            log::warn!("whatsapp: could not ask for older messages of {chat}: {e}");
+                            failed = true;
+                            break;
+                        }
+                    }
+                }
+                let deadline = Instant::now() + BACKFILL_TIMEOUT;
+                for (chat, _, oldest_ts) in sent {
+                    match mgr.wait_for_answer(&chat, deadline).await {
+                        // The phone answered with nothing older: this chat is all here.
+                        Some(0) => {
+                            lock(&mgr.store).mark_history_complete(&chat);
                             silent = 0;
-                            strikes.clear();
+                        }
+                        Some(count) => {
+                            fetched += count;
+                            silent = 0;
+                            mgr.save_now();
+                            let _ = mgr.app.emit("wa://history", &chat);
+                            // Anything already known means the phone has no more before it.
+                            let older = mgr.history.oldest(&chat).is_some_and(|now| now.ts_ms < oldest_ts)
+                                || lock(&mgr.store).oldest_message(&chat).is_some_and(|now| now.ts_ms < oldest_ts);
+                            if !older {
+                                lock(&mgr.store).mark_history_complete(&chat);
+                            }
+                            mgr.mark_dirty();
+                        }
+                        None => {
+                            let strike = strikes.entry(chat.clone()).or_default();
+                            *strike += 1;
+                            // A phone that answers nothing for a chat it was asked
+                            // about twice has nothing older for it.
+                            if *strike >= BACKFILL_STRIKES {
+                                lock(&mgr.store).mark_history_complete(&chat);
+                            }
+                            silent += 1;
                         }
                     }
+                }
+                if failed || silent >= BACKFILL_SILENT {
+                    // Several chats in a row without an answer: the phone is away.
+                    mgr.set_backfill_counts(BackfillState::WaitingForPhone, None, fetched, empty.len() as u32);
+                    tokio::time::sleep(BACKFILL_RETRY).await;
+                    silent = 0;
+                    strikes.clear();
+                    continue;
                 }
                 tokio::time::sleep(BACKFILL_PACE).await;
             }
@@ -2019,12 +2688,12 @@ impl WaManager {
     pub fn fetch_history_first(&self, chat_id: &str) {
         let chat = lock(&self.store).chat_key(chat_id);
         *lock(&self.backfill_next) = Some(chat);
+        self.backfill_wake.notify_one();
     }
 
     /// Messages the phone sent for `chat` after being asked, or `None` if it
     /// didn't answer in time.
-    async fn wait_for_answer(&self, chat: &str) -> Option<u32> {
-        let deadline = Instant::now() + BACKFILL_TIMEOUT;
+    async fn wait_for_answer(&self, chat: &str, deadline: Instant) -> Option<u32> {
         loop {
             if let Some(count) = lock(&self.on_demand).remove(chat) {
                 return Some(count);
@@ -2034,8 +2703,11 @@ impl WaManager {
         }
     }
 
-    fn set_backfill(&self, state: BackfillState, chat: Option<String>, messages: u32) {
+    /// Shows where fetching all history is; chats left until opened count
+    /// as done, since nothing more happens to them in the background.
+    fn set_backfill_counts(&self, state: BackfillState, chat: Option<String>, messages: u32, waiting: u32) {
         let (done, total) = lock(&self.store).history_counts();
+        let done = (done + waiting).min(total);
         self.set_status(|s| s.backfill = Some(Backfill { state, chat, done, total, messages }));
     }
 }
@@ -2054,16 +2726,61 @@ fn forwarding(context: Option<wa::ContextInfo>, score: u32) -> Option<wa::Contex
 }
 
 /// A group's members as the store keeps them: (id, phone number id, LID).
-fn members_of(metadata: &whatsapp_rust::features::GroupMetadata) -> Vec<(String, Option<String>, Option<String>)> {
+/// The time of the last message a delete or clear from another device
+/// covers: its range says, or else when it was made.
+fn range_end(range: Option<&SyncActionMessageRange>, made_ms: i64) -> i64 {
+    range
+        .and_then(|r| r.last_message_timestamp)
+        .filter(|ts| *ts > 0)
+        .map_or(made_ms, |ts| ts * 1000)
+}
+
+fn members_of(metadata: &whatsapp_rust::features::GroupMetadata) -> Vec<store::GroupMember> {
     metadata
         .participants
         .iter()
-        .map(|p| {
-            (
-                p.jid.to_non_ad_string(),
-                p.phone_number.as_ref().map(|j| j.to_non_ad_string()),
-                p.lid.as_ref().map(|j| j.to_non_ad_string()),
-            )
+        .map(|p| store::GroupMember {
+            id: p.jid.to_non_ad_string(),
+            pn: p.phone_number.as_ref().map(|j| j.to_non_ad_string()),
+            lid: p.lid.as_ref().map(|j| j.to_non_ad_string()),
+            admin: p.is_admin(),
+            super_admin: p.is_super_admin(),
         })
         .collect()
+}
+
+/// What a group lookup says about a group, besides who is in it.
+fn facts_of(metadata: &whatsapp_rust::features::GroupMetadata) -> store::GroupFacts {
+    store::GroupFacts {
+        description: metadata.description.clone(),
+        created_ms: metadata.creation_time.map(|t| t as i64 * 1000),
+        creator: metadata.creator_pn.as_ref().or(metadata.creator.as_ref()).map(|j| j.to_non_ad_string()),
+        locked: metadata.is_locked,
+    }
+}
+
+/// What a group notification changes that the store keeps.
+fn group_change(action: &GroupNotificationAction) -> Option<store::GroupChange> {
+    let ids = |list: &[GroupParticipantInfo]| list.iter().map(|p| p.jid.to_non_ad_string()).collect::<Vec<_>>();
+    Some(match action {
+        GroupNotificationAction::Subject { subject, .. } => store::GroupChange::Subject(subject.clone()),
+        GroupNotificationAction::Description { description, .. } => store::GroupChange::Description(description.clone()),
+        GroupNotificationAction::Add { participants, .. } => store::GroupChange::Added(
+            participants
+                .iter()
+                .map(|p| {
+                    let id = p.jid.to_non_ad_string();
+                    let pn = p.phone_number.as_ref().map(|j| j.to_non_ad_string());
+                    let lid = p.jid.is_lid().then(|| id.clone());
+                    store::GroupMember { id, pn, lid, admin: false, super_admin: false }
+                })
+                .collect(),
+        ),
+        GroupNotificationAction::Remove { participants, .. } => store::GroupChange::Removed(ids(participants)),
+        GroupNotificationAction::Promote { participants } => store::GroupChange::Promoted(ids(participants)),
+        GroupNotificationAction::Demote { participants } => store::GroupChange::Demoted(ids(participants)),
+        GroupNotificationAction::Locked { .. } => store::GroupChange::Locked(true),
+        GroupNotificationAction::Unlocked => store::GroupChange::Locked(false),
+        _ => return None,
+    })
 }
