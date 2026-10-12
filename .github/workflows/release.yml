@@ -23,9 +23,16 @@ jobs:
       - name: System libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf \
-            libssl-dev libdbus-1-dev protobuf-compiler build-essential cmake clang \
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf \
+            libssl-dev libdbus-1-dev build-essential cmake clang \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav
+
+      # Ubuntu's protoc is too old for the proto3 optional fields in the
+      # Signal protocol files.
+      - uses: arduino/setup-protoc@v3
+        with:
+          version: "29.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
@@ -36,6 +43,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-on-failure: true
           workspaces: |
             src-tauri -> target
             signal-sidecar -> target
