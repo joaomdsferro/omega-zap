@@ -53,7 +53,7 @@ const ChatRow = memo(function ChatRow({
   return (
     <li
       ref={row}
-      className={["group/row relative", highlighted ? "chat-highlight" : "", highlighted && fading ? "chat-highlight-out" : ""].join(" ")}
+      className={["chat-row group/row relative", highlighted ? "chat-highlight" : "", highlighted && fading ? "chat-highlight-out" : ""].join(" ")}
     >
       <button
         type="button"

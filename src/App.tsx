@@ -50,6 +50,7 @@ import {
   SIDEBAR_MIN,
   SettingsProvider,
   useSettings,
+  useSidebarWidth,
 } from "./settings/settings";
 import { useZoom } from "./settings/useZoom";
 
@@ -85,6 +86,32 @@ function useWindowWidth() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
   return width;
+}
+
+/**
+ * The chat list's column and the edge that resizes it. They read the width
+ * themselves, so a resize re-renders only them: what is inside is the same
+ * element App last made, which React leaves as it is.
+ */
+function SidebarColumn({ max, label, children }: { max: number; label: string; children: ReactNode }) {
+  const { width: stored, setWidth } = useSidebarWidth();
+  const column = useRef<HTMLElement>(null);
+  const width = Math.min(stored, max);
+  return (
+    <>
+      <aside ref={column} className="h-full shrink-0 overflow-hidden contain-strict" style={{ width }} aria-label={label}>
+        {children}
+      </aside>
+      <ResizeHandle
+        target={column}
+        width={width}
+        min={SIDEBAR_MIN}
+        max={max}
+        onResize={setWidth}
+        onReset={() => setWidth(SIDEBAR_DEFAULT)}
+      />
+    </>
+  );
 }
 
 function Banner({ tone = "info", children }: { tone?: "info" | "warn"; children: ReactNode }) {
@@ -185,7 +212,7 @@ function byRecency(a: Chat, b: Chat) {
 }
 
 function Shell() {
-  const { settings, setSidebarWidth, setActiveAccount } = useSettings();
+  const { settings, setActiveAccount } = useSettings();
   const zoomAnnounce = useZoom();
   const whatsapp = useAccount("whatsapp");
   const signal = useAccount("signal");
@@ -282,11 +309,9 @@ function Shell() {
   /** A chat pointed out in the list, as `account:id`, and whether it is fading out. */
   const [highlight, setHighlight] = useState<string | null>(null);
   const [highlightFading, setHighlightFading] = useState(false);
-  const sidebarRef = useRef<HTMLElement>(null);
 
   const windowWidth = useWindowWidth();
   const maxSidebar = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, windowWidth - RAIL_WIDTH - CHAT_MIN));
-  const sidebarWidth = Math.min(settings.sidebarWidth, maxSidebar);
 
   // Chat ids mean nothing once the lists behind them change, unless the
   // change was made to open one.
@@ -1368,12 +1393,7 @@ function Shell() {
         }}
       />
 
-      <aside
-        ref={sidebarRef}
-        className="h-full shrink-0 overflow-hidden contain-strict"
-        style={{ width: sidebarWidth }}
-        aria-label={view === "chats" ? "Chat list" : "Settings"}
-      >
+      <SidebarColumn max={maxSidebar} label={view === "chats" ? "Chat list" : "Settings"}>
         {view === "chats" && panel === "new-chat" ? (
           <NewChatPanel
             contacts={namedContacts}
@@ -1462,16 +1482,7 @@ function Shell() {
             }
           />
         )}
-      </aside>
-
-      <ResizeHandle
-        target={sidebarRef}
-        width={sidebarWidth}
-        min={SIDEBAR_MIN}
-        max={maxSidebar}
-        onResize={setSidebarWidth}
-        onReset={() => setSidebarWidth(SIDEBAR_DEFAULT)}
-      />
+      </SidebarColumn>
 
       <main className="flex h-full min-w-0 flex-1 contain-strict">{main}</main>
 

@@ -84,7 +84,6 @@ export const CHAT_MIN = 380;
 export interface Settings {
   theme: ThemeId;
   zoom: number;
-  sidebarWidth: number;
   /** The account whose chats are shown while accounts are kept apart. */
   activeAccount: AccountId;
   /** One chat list for every linked account, instead of one per account. */
@@ -110,7 +109,6 @@ export interface Settings {
 const DEFAULTS: Settings = {
   theme: "whatsapp-system",
   zoom: 1,
-  sidebarWidth: SIDEBAR_DEFAULT,
   activeAccount: "whatsapp",
   unifiedInbox: false,
   largeLinkPreviews: true,
@@ -129,35 +127,38 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function load(): Settings {
+/** What was saved: the settings, and the chat list's width beside them. */
+type Stored = Partial<Settings> & { sidebarWidth?: unknown };
+
+function readStored(): Stored {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULTS;
-    const parsed = JSON.parse(raw) as Partial<Settings>;
-    return {
-      theme: THEMES.some((t) => t.id === parsed.theme) ? (parsed.theme as ThemeId) : DEFAULTS.theme,
-      zoom: ZOOM_STEPS.includes(parsed.zoom ?? NaN) ? (parsed.zoom as number) : DEFAULTS.zoom,
-      sidebarWidth: clamp(
-        Number(parsed.sidebarWidth) || SIDEBAR_DEFAULT,
-        SIDEBAR_MIN,
-        SIDEBAR_MAX,
-      ),
-      activeAccount: ACCOUNT_IDS.includes(parsed.activeAccount as AccountId)
-        ? (parsed.activeAccount as AccountId)
-        : DEFAULTS.activeAccount,
-      unifiedInbox: parsed.unifiedInbox === true,
-      largeLinkPreviews: parsed.largeLinkPreviews !== false,
-      inlineVideos: parsed.inlineVideos !== false,
-      fetchLinkPreviews: parsed.fetchLinkPreviews !== false,
-      notifications: parsed.notifications !== false,
-      notificationPreview: parsed.notificationPreview !== false,
-      notificationOpensChat: parsed.notificationOpensChat === true,
-      sendTyping: parsed.sendTyping !== false,
-      trayBadge: TRAY_BADGES.some((b) => b.id === parsed.trayBadge) ? (parsed.trayBadge as TrayBadge) : DEFAULTS.trayBadge,
-    };
+    return (JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as Stored | null) ?? {};
   } catch {
-    return DEFAULTS;
+    return {};
   }
+}
+
+function loadSidebarWidth(parsed: Stored): number {
+  return clamp(Number(parsed.sidebarWidth) || SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_MAX);
+}
+
+function load(parsed: Stored): Settings {
+  return {
+    theme: THEMES.some((t) => t.id === parsed.theme) ? (parsed.theme as ThemeId) : DEFAULTS.theme,
+    zoom: ZOOM_STEPS.includes(parsed.zoom ?? NaN) ? (parsed.zoom as number) : DEFAULTS.zoom,
+    activeAccount: ACCOUNT_IDS.includes(parsed.activeAccount as AccountId)
+      ? (parsed.activeAccount as AccountId)
+      : DEFAULTS.activeAccount,
+    unifiedInbox: parsed.unifiedInbox === true,
+    largeLinkPreviews: parsed.largeLinkPreviews !== false,
+    inlineVideos: parsed.inlineVideos !== false,
+    fetchLinkPreviews: parsed.fetchLinkPreviews !== false,
+    notifications: parsed.notifications !== false,
+    notificationPreview: parsed.notificationPreview !== false,
+    notificationOpensChat: parsed.notificationOpensChat === true,
+    sendTyping: parsed.sendTyping !== false,
+    trayBadge: TRAY_BADGES.some((b) => b.id === parsed.trayBadge) ? (parsed.trayBadge as TrayBadge) : DEFAULTS.trayBadge,
+  };
 }
 
 interface SettingsContextValue {
@@ -168,7 +169,6 @@ interface SettingsContextValue {
   zoomIn: () => void;
   zoomOut: () => void;
   resetZoom: () => void;
-  setSidebarWidth: (width: number) => void;
   setActiveAccount: (account: AccountId) => void;
   setUnifiedInbox: (unified: boolean) => void;
   setLargeLinkPreviews: (large: boolean) => void;
@@ -196,7 +196,12 @@ function useSystemDark() {
 }
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
-  const [settings, setSettings] = useState<Settings>(load);
+  const [stored] = useState(readStored);
+  const [settings, setSettings] = useState<Settings>(() => load(stored));
+  // The chat list's width has its own state and context: it changes at the
+  // end of every drag of the list's edge, and re-rendering everything that
+  // reads the settings for it took 100-200ms on WebKitGTK with many chats.
+  const [sidebarWidth, setSidebarWidth] = useState(() => loadSidebarWidth(stored));
   const systemDark = useSystemDark();
 
   const resolvedTheme: ResolvedTheme =
@@ -212,10 +217,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const id = window.setTimeout(() => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...settings, sidebarWidth }));
     }, 150);
     return () => window.clearTimeout(id);
-  }, [settings]);
+  }, [settings, sidebarWidth]);
 
   const setZoom = useCallback((zoom: number) => {
     setSettings((s) => ({ ...s, zoom: clamp(zoom, ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.length - 1]) }));
@@ -239,8 +244,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       zoomIn: () => stepZoom(1),
       zoomOut: () => stepZoom(-1),
       resetZoom: () => setZoom(1),
-      setSidebarWidth: (width) =>
-        setSettings((s) => ({ ...s, sidebarWidth: clamp(Math.round(width), SIDEBAR_MIN, SIDEBAR_MAX) })),
       setActiveAccount: (activeAccount) => setSettings((s) => ({ ...s, activeAccount })),
       setUnifiedInbox: (unifiedInbox) => setSettings((s) => ({ ...s, unifiedInbox })),
       setLargeLinkPreviews: (largeLinkPreviews) => setSettings((s) => ({ ...s, largeLinkPreviews })),
@@ -255,7 +258,34 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     [settings, resolvedTheme, setZoom, stepZoom],
   );
 
-  return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
+  const width = useMemo<SidebarWidthContextValue>(
+    () => ({
+      width: sidebarWidth,
+      setWidth: (next) => setSidebarWidth(clamp(Math.round(next), SIDEBAR_MIN, SIDEBAR_MAX)),
+    }),
+    [sidebarWidth],
+  );
+
+  return (
+    <SettingsContext.Provider value={value}>
+      <SidebarWidthContext.Provider value={width}>{children}</SidebarWidthContext.Provider>
+    </SettingsContext.Provider>
+  );
+}
+
+interface SidebarWidthContextValue {
+  width: number;
+  setWidth: (width: number) => void;
+}
+
+const SidebarWidthContext = createContext<SidebarWidthContextValue | null>(null);
+
+/** The chat list's width, kept apart from `useSettings` so a resize only
+ * re-renders what shows the width. */
+export function useSidebarWidth() {
+  const value = useContext(SidebarWidthContext);
+  if (!value) throw new Error("useSidebarWidth must be used inside SettingsProvider");
+  return value;
 }
 
 export function useSettings() {

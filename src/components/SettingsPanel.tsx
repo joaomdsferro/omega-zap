@@ -9,6 +9,7 @@ import {
   TRAY_BADGES,
   ZOOM_STEPS,
   useSettings,
+  useSidebarWidth,
 } from "../settings/settings";
 import { AccountBadge } from "./AccountBadge";
 import { BackIcon } from "./Icons";
@@ -325,7 +326,6 @@ export function SettingsPanel({ accounts, onBack, onLink, privacy }: SettingsPan
     zoomIn,
     zoomOut,
     resetZoom,
-    setSidebarWidth,
     setUnifiedInbox,
     setLargeLinkPreviews,
     setFetchLinkPreviews,
@@ -336,6 +336,7 @@ export function SettingsPanel({ accounts, onBack, onLink, privacy }: SettingsPan
     setNotificationOpensChat,
     setSendTyping,
   } = useSettings();
+  const { width: sidebarWidth, setWidth: setSidebarWidth } = useSidebarWidth();
 
   const zoomIndex = ZOOM_STEPS.indexOf(settings.zoom);
 
@@ -533,12 +534,12 @@ export function SettingsPanel({ accounts, onBack, onLink, privacy }: SettingsPan
         <Section title="Chat list">
           <div className="flex items-center justify-between gap-3">
             <p className="text-[14px] text-(--text-primary)">
-              Width <span className="text-(--text-secondary)">{settings.sidebarWidth}px</span>
+              Width <span className="text-(--text-secondary)">{sidebarWidth}px</span>
             </p>
             <button
               type="button"
               onClick={() => setSidebarWidth(SIDEBAR_DEFAULT)}
-              disabled={settings.sidebarWidth === SIDEBAR_DEFAULT}
+              disabled={sidebarWidth === SIDEBAR_DEFAULT}
               className="h-9 rounded-full px-3 text-[14px] text-(--accent-strong) hover:bg-(--hover-bg) disabled:opacity-40"
             >
               Reset width

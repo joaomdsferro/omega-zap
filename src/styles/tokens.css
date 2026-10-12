@@ -297,17 +297,21 @@ textarea {
   display: none;
 }
 
-.resizing,
-.resizing * {
-  cursor: col-resize !important;
-  -webkit-user-select: none !important;
-  user-select: none !important;
+/* Over the whole window while the chat list is being resized (see
+ * ResizeHandle). */
+.resize-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  cursor: col-resize;
 }
 
-/* No hover hit-testing or hover restyles under the cursor mid-drag. */
-.resizing aside,
-.resizing main {
-  pointer-events: none;
+/* Rows off screen skip layout, so resizing the chat list only lays out the
+ * rows in view. Every row is 72px tall, so the scroll height stays exact.
+ * The highlighted row keeps its glow, which paint containment would clip. */
+.chat-row:not(.chat-highlight) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 4.5rem;
 }
 
 @keyframes fade-rise {

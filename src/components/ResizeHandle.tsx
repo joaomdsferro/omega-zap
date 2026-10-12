@@ -26,6 +26,19 @@ export function ResizeHandle({ target, width, min, max, onResize, onReset }: Res
     handle.current?.setAttribute("aria-valuenow", String(value));
   }
 
+  // Mid-drag the handle holds an overlay over the whole window, for the
+  // resize cursor everywhere and no hover restyles under it. Being inside
+  // the handle, it leaves which elements are hovered as it was, and the drag
+  // look hangs off an attribute of the handle, not `:active`: both restyle
+  // only the handle, where a change on the page root (a class, `:active` on
+  // every ancestor of the press) restyled the whole page at each press and
+  // release, a long frame with hundreds of chats.
+  function drag(el: HTMLDivElement, on: boolean) {
+    el.toggleAttribute("data-dragging", on);
+    if (on) el.appendChild(document.createElement("div")).className = "resize-overlay";
+    else el.querySelector(".resize-overlay")?.remove();
+  }
+
   function clamp(value: number) {
     return Math.min(max, Math.max(min, value));
   }
@@ -39,7 +52,7 @@ export function ResizeHandle({ target, width, min, max, onResize, onReset }: Res
     e.currentTarget.focus();
     origin.current = target.current.getBoundingClientRect().left;
     e.currentTarget.setPointerCapture(e.pointerId);
-    document.documentElement.classList.add("resizing");
+    drag(e.currentTarget, true);
   }
 
   function onPointerMove(e: PointerEvent<HTMLDivElement>) {
@@ -54,7 +67,7 @@ export function ResizeHandle({ target, width, min, max, onResize, onReset }: Res
     if (origin.current === null) return;
     origin.current = null;
     e.currentTarget.releasePointerCapture(e.pointerId);
-    document.documentElement.classList.remove("resizing");
+    drag(e.currentTarget, false);
     if (pending.current === null) return;
     onResize(pending.current);
     pending.current = null;
@@ -94,9 +107,9 @@ export function ResizeHandle({ target, width, min, max, onResize, onReset }: Res
       onPointerCancel={endDrag}
       onDoubleClick={onReset}
       onKeyDown={onKeyDown}
-      className="group relative z-10 -mx-0.75 ww-1.5shrink-0 cursor-col-resize focus-visible:outline-none"
+      className="group relative z-10 -mx-0.75 w-1.5 shrink-0 cursor-col-resize focus-visible:outline-none"
     >
-      <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-(--divider) transition-colors duration-100 group-hover:w-0.75 group-hover:bg-(--accent) group-focus-visible:w-0.75 group-focus-visible:bg-(--accent) group-active:w-0.75 group-active:bg-(--accent)" />
+      <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-(--divider) transition-colors duration-100 group-hover:w-0.75 group-hover:bg-(--accent) group-focus-visible:w-0.75 group-focus-visible:bg-(--accent) group-data-dragging:w-0.75 group-data-dragging:bg-(--accent)" />
     </div>
   );
 }
