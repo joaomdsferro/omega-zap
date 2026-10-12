@@ -261,6 +261,24 @@ function useFetchedPreview(url: string | undefined): LinkPreview | null {
 }
 
 /** How long a press on a bubble lasts before it opens the reactions, as on the phone. */
+/** Longer texts show only their start, with "Read more", as in WhatsApp. */
+const SHORT_CHARS = 700;
+const SHORT_LINES = 14;
+
+/** The start of a long text, cut at a space so no word or link is split; undefined when it is short. */
+function shortened(text: string): string | undefined {
+  let end = text.length > SHORT_CHARS ? SHORT_CHARS : text.length;
+  let breaks = 0;
+  for (let at = text.indexOf("\n"); at !== -1 && at < end; at = text.indexOf("\n", at + 1)) {
+    if (++breaks === SHORT_LINES) end = at;
+  }
+  if (end === text.length) return undefined;
+  const space = Math.max(text.lastIndexOf(" ", end), text.lastIndexOf("\n", end));
+  // A single huge word is cut where it is.
+  if (space > end / 2) end = space;
+  return text.slice(0, end).trimEnd();
+}
+
 const LONG_PRESS_MS = 450;
 
 /**
@@ -278,6 +296,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
   const closeDetails = useCallback(() => setDetails(null), []);
   /** The full emoji grid instead of the quick row. */
   const [allEmoji, setAllEmoji] = useState(false);
+  const [readAll, setReadAll] = useState(false);
   /** Where the message's menu is open, in viewport pixels. */
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   /** What the picker opens next to. */
@@ -295,6 +314,11 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
   const bigEmoji = useMemo(
     () => (message.kind === "text" && !message.attachments?.length ? emojiOnlyCount(message.text ?? "") : 0),
     [message.kind, message.attachments, message.text],
+  );
+  // A search hit may lie past the cut, so search results show the whole text.
+  const short = useMemo(
+    () => (readAll || highlight?.length ? undefined : shortened(message.text ?? "")),
+    [readAll, highlight, message.text],
   );
   // A link that came without a card gets one made from the page itself.
   const bareLink = useMemo(
@@ -611,7 +635,16 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
             </p>
           ) : (
             <p className="px-0.5 wrap-break-word whitespace-pre-wrap">
-              <Formatted text={message.text ?? ""} onLink={openLink} highlight={highlight} mentions={message.mentions} onMention={onOpenPerson} />
+              <Formatted text={short ?? message.text ?? ""} onLink={openLink} highlight={highlight} mentions={message.mentions} onMention={onOpenPerson} />
+              {short !== undefined ? (
+                <>
+                  {"… "}
+                  <button type="button" onClick={() => setReadAll(true)} className="cursor-pointer">
+                    {/* Text classes on the inner span: tokens.css resets a button's font and colour. */}
+                    <span className="font-medium text-(--accent) hover:underline">Read more</span>
+                  </button>
+                </>
+              ) : null}
               {metaSpacer}
             </p>
           )
