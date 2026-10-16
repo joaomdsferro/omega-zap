@@ -43,6 +43,13 @@ webp-animation = { version = "0.10.0", default-features = false, features = ["st
 libwebp-sys2 = { version = "0.2.0", features = ["static"] }
 # Voice messages: the microphone (ALSA on Linux, Core Audio on macOS) and
 # Opus, built in (static, with cmake), so nothing is needed on the system.
+# Telegram (MTProto), in pure Rust. The session is kept as JSON and sealed by
+# the vault, not in grammers' own SQLite (libsql), which would be a second
+# SQLite in the binary.
+grammers-client = { version = "=0.10.0", default-features = false, features = ["fs"] }
+grammers-session = { version = "=0.10.0", default-features = false, features = ["serde"] }
+# grammers-crypto 0.10 asks for 2.0.0-rc0; 2.0.0 changed its API and breaks it.
+glass_pumpkin = "=2.0.0-rc0"
 cpal = { version = "0.18", features = ["pulseaudio"] }
 opus = "0.4"
 

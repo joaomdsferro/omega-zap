@@ -13,6 +13,8 @@ pub enum AccountState {
     Starting,
     Qr,
     QrExpired,
+    /// Signed in with the QR code; the account's two-step password is next.
+    Password,
     Connecting,
     Connected,
     LoggedOut,
@@ -36,6 +38,8 @@ pub struct AccountStatus {
     pub linked: bool,
     pub qr_svg: Option<String>,
     pub qr_timeout_secs: Option<u64>,
+    /// The hint the account set for its two-step password (Telegram).
+    pub password_hint: Option<String>,
     pub sync_progress: Option<u32>,
     /// Older history being fetched from the phone, chat by chat.
     pub backfill: Option<Backfill>,
@@ -53,6 +57,7 @@ impl AccountStatus {
             linked,
             qr_svg: None,
             qr_timeout_secs: None,
+            password_hint: None,
             sync_progress: None,
             backfill: None,
             error: None,

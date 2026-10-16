@@ -218,9 +218,10 @@ function Shell() {
   const whatsapp = useAccount("whatsapp");
   const business = useAccount("business");
   const signal = useAccount("signal");
+  const telegram = useAccount("telegram");
   const accounts: Record<AccountId, Account> = useMemo(
-    () => ({ whatsapp, business, signal }),
-    [whatsapp, business, signal],
+    () => ({ whatsapp, business, signal, telegram }),
+    [whatsapp, business, signal, telegram],
   );
 
   const demo = useMemo(() => new MockBackend(), []);
@@ -229,21 +230,24 @@ function Shell() {
       whatsapp: new TauriBackend("whatsapp"),
       business: new TauriBackend("business"),
       signal: new TauriBackend("signal"),
+      telegram: new TauriBackend("telegram"),
     }),
     [],
   );
   const waLinked = whatsapp.status.linked;
   const businessLinked = business.status.linked;
   const signalLinked = signal.status.linked;
-  const anyLinked = waLinked || businessLinked || signalLinked;
+  const telegramLinked = telegram.status.linked;
+  const anyLinked = waLinked || businessLinked || signalLinked || telegramLinked;
   // Every list worth loading: the linked accounts, and the demo chats that
   // stand in for WhatsApp until it is linked.
   const sources = useMemo(() => {
     const list: ChatBackend[] = [waLinked ? real.whatsapp : demo];
     if (businessLinked) list.push(real.business);
     if (signalLinked) list.push(real.signal);
+    if (telegramLinked) list.push(real.telegram);
     return list;
-  }, [demo, real, waLinked, businessLinked, signalLinked]);
+  }, [demo, real, waLinked, businessLinked, signalLinked, telegramLinked]);
 
   const unified = settings.unifiedInbox;
   const active = settings.activeAccount;
@@ -1310,6 +1314,7 @@ function Shell() {
         account={ACCOUNTS[linking]}
         status={accounts[linking].status}
         onRetry={() => reconnect(linking)}
+        onPassword={accounts[linking].submitPassword}
         onClose={closeLinking}
       />
     );

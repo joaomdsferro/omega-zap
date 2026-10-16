@@ -422,7 +422,7 @@ export class TauriBackend implements ChatBackend {
       this.changeMembers = async (id, change, members) =>
         toGroupInfo(await this.invoke<RawGroupInfo>("wa_change_members", { id, change, members }), account);
     } else {
-      this.groupInfo = async (id) => toGroupInfo(await this.invoke<RawGroupInfo>("signal_group_info", { id }), account);
+      this.groupInfo = async (id) => toGroupInfo(await this.invoke<RawGroupInfo>(`${this.prefix}_group_info`, { id }), account);
     }
   }
 

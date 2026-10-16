@@ -5,10 +5,10 @@ import { isTauri } from "../lib/platform";
 import type { AccountId } from "./accounts";
 
 /** Prefix of the Tauri commands that serve each account. Both WhatsApp accounts share theirs. */
-export const COMMAND_PREFIX: Record<AccountId, string> = { whatsapp: "wa", business: "wa", signal: "signal" };
+export const COMMAND_PREFIX: Record<AccountId, string> = { whatsapp: "wa", business: "wa", signal: "signal", telegram: "tg" };
 
 /** Prefix of the events each account sends. */
-export const EVENT_PREFIX: Record<AccountId, string> = { whatsapp: "wa", business: "wab", signal: "signal" };
+export const EVENT_PREFIX: Record<AccountId, string> = { whatsapp: "wa", business: "wab", signal: "signal", telegram: "tg" };
 
 /** Headers that tell a shared WhatsApp command which account it is for. */
 export function accountHeaders(id: AccountId): Record<string, string> {
@@ -21,6 +21,7 @@ export type AccountState =
   | "starting"
   | "qr"
   | "qr_expired"
+  | "password"
   | "connecting"
   | "connected"
   | "logged_out"
@@ -44,6 +45,8 @@ export interface AccountStatus {
   linked: boolean;
   qrSvg: string | null;
   qrTimeoutSecs: number | null;
+  /** The hint for the account's two-step password, while it is asked for (Telegram). */
+  passwordHint: string | null;
   syncProgress: number | null;
   /** Older history being fetched from the phone, chat by chat. */
   backfill: Backfill | null;
@@ -60,6 +63,7 @@ const UNSUPPORTED: AccountStatus = {
   linked: false,
   qrSvg: null,
   qrTimeoutSecs: null,
+  passwordHint: null,
   syncProgress: null,
   backfill: null,
   error: null,
@@ -74,6 +78,8 @@ export interface Account {
   cancelLinking(): Promise<void>;
   reconnect(): Promise<void>;
   logout(): Promise<void>;
+  /** Answers the two-step password Telegram asks for after the QR code. */
+  submitPassword(password: string): Promise<void>;
 }
 
 export function useAccount(id: AccountId): Account {
@@ -110,7 +116,11 @@ export function useAccount(id: AccountId): Account {
       cancelLinking: () => call("cancel_linking"),
       reconnect: () => call("reconnect"),
       logout: () => call("logout"),
+      submitPassword: async (password: string) => {
+        if (!isTauri) return;
+        await invoke(`${prefix}_submit_password`, { password }, { headers: accountHeaders(id) });
+      },
     }),
-    [id, status, call],
+    [id, prefix, status, call],
   );
 }

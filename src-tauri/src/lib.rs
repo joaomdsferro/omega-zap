@@ -5,6 +5,7 @@ mod dropped;
 mod devfiles;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod emoji;
+mod keys;
 mod link_preview;
 mod klipy;
 mod links;
@@ -13,6 +14,7 @@ mod notify;
 #[cfg(target_os = "linux")]
 mod players;
 mod signal;
+mod telegram;
 mod sqlcipher;
 mod sticker_image;
 mod store;
@@ -135,6 +137,7 @@ fn find_file(dir: &std::path::Path, scheme: Scheme, name: &str) -> Option<std::p
             dir.join(wa::AVATAR_DIR).join(name),
             wa::Kind::Business.dir(dir).join(wa::AVATAR_DIR).join(name),
             dir.join("signal").join(signal::AVATAR_DIR).join(name),
+            dir.join("telegram").join(telegram::AVATAR_DIR).join(name),
         ],
         Scheme::Media => vec![
             dir.join("signal").join(signal::MEDIA_DIR).join(name),
@@ -323,6 +326,9 @@ pub fn run() {
             app.manage(accounts);
             signal.start();
             app.manage(signal);
+            let telegram = telegram::TgManager::new(app.handle().clone(), dir.join("telegram"))?;
+            telegram.start();
+            app.manage(telegram);
             #[cfg(all(unix, not(target_os = "macos")))]
             if let Err(e) = notify::register_desktop_entry() {
                 log::warn!("could not register with the desktop: {e}");
@@ -459,6 +465,40 @@ pub fn run() {
             signal::commands::signal_set_pinned,
             signal::commands::signal_delete_chat,
             signal::commands::signal_clear_chat,
+            telegram::commands::tg_status,
+            telegram::commands::tg_start_linking,
+            telegram::commands::tg_cancel_linking,
+            telegram::commands::tg_submit_password,
+            telegram::commands::tg_reconnect,
+            telegram::commands::tg_logout,
+            telegram::commands::tg_list_chats,
+            telegram::commands::tg_get_messages,
+            telegram::commands::tg_older_messages,
+            telegram::commands::tg_mark_read,
+            telegram::commands::tg_send_text,
+            telegram::commands::tg_send_file,
+            telegram::commands::tg_edit_message,
+            telegram::commands::tg_delete_message,
+            telegram::commands::tg_react,
+            telegram::commands::tg_fetch_media,
+            telegram::commands::tg_open_media,
+            telegram::commands::tg_lists,
+            telegram::commands::tg_set_favorite,
+            telegram::commands::tg_save_list,
+            telegram::commands::tg_delete_list,
+            telegram::commands::tg_set_starred,
+            telegram::commands::tg_starred,
+            telegram::commands::tg_search,
+            telegram::commands::tg_contacts,
+            telegram::commands::tg_person,
+            telegram::commands::tg_person_details,
+            telegram::commands::tg_group_info,
+            telegram::commands::tg_set_unread,
+            telegram::commands::tg_set_muted,
+            telegram::commands::tg_set_archived,
+            telegram::commands::tg_set_pinned,
+            telegram::commands::tg_delete_chat,
+            telegram::commands::tg_clear_chat,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -475,6 +515,9 @@ pub fn run() {
                     }
                 }
                 if let Some(manager) = app.try_state::<Arc<signal::SignalManager>>() {
+                    manager.save_now();
+                }
+                if let Some(manager) = app.try_state::<Arc<telegram::TgManager>>() {
                     manager.save_now();
                 }
                 vault::clear_runtime_dir();

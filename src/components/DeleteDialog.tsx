@@ -7,6 +7,8 @@ const DELETE_FOR_EVERYONE_MS: Record<AccountId, number> = {
   whatsapp: 60 * 60 * 60 * 1000,
   business: 60 * 60 * 60 * 1000,
   signal: 24 * 60 * 60 * 1000,
+  // Telegram has no limit on deleting your own messages.
+  telegram: Number.POSITIVE_INFINITY,
 };
 
 interface DeleteDialogProps {

@@ -621,6 +621,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "cfg_aliases"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
+
+[[package]]
 name = "chacha20"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -638,8 +644,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
+ "js-sys",
  "num-traits",
  "serde",
+ "wasm-bindgen",
  "windows-link",
 ]
 
@@ -1828,6 +1836,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "glass_pumpkin"
+version = "2.0.0-rc0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec260059e5d59a4899d78dff8bf59abf81f8f5b3b44e9d3ba25c9dade1390a36"
+dependencies = [
+ "getrandom 0.4.3",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "once_cell",
+ "rand_core",
+]
+
+[[package]]
 name = "glib"
 version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1901,6 +1923,118 @@ dependencies = [
  "glib-sys",
  "libc",
  "system-deps",
+]
+
+[[package]]
+name = "grammers-client"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f330139772e71b5e104f5a7bbf43bbda92fd8a734b4cf9c57839e04e949cf9b"
+dependencies = [
+ "chrono",
+ "futures-util",
+ "grammers-crypto",
+ "grammers-mtsender",
+ "grammers-session",
+ "grammers-tl-types",
+ "log",
+ "md5",
+ "mime_guess",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
+name = "grammers-crypto"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23fe0fbd93bce6965d08248abdfec2d2544e11cb8d5c91dba3369c0a4295fd85"
+dependencies = [
+ "aes",
+ "ctr",
+ "getrandom 0.4.3",
+ "glass_pumpkin",
+ "hmac",
+ "num-bigint",
+ "num-traits",
+ "pbkdf2",
+ "sha1",
+ "sha2 0.11.1",
+]
+
+[[package]]
+name = "grammers-mtproto"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a8d68ffa402c5f0707e22c29d44229eb01e968017dd0fb27e1adab953d49fc3"
+dependencies = [
+ "bytes",
+ "crc32fast",
+ "flate2",
+ "getrandom 0.4.3",
+ "grammers-crypto",
+ "grammers-tl-types",
+ "log",
+ "num-bigint",
+ "sha1",
+]
+
+[[package]]
+name = "grammers-mtsender"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f39b8556ddc94f7ec935135dcfbf84ca8628538e103779cdc701423b759b078e"
+dependencies = [
+ "bytes",
+ "grammers-crypto",
+ "grammers-mtproto",
+ "grammers-session",
+ "grammers-tl-types",
+ "locate-locale",
+ "log",
+ "os_info",
+ "tokio",
+]
+
+[[package]]
+name = "grammers-session"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e4d5b9e434c6b9fc1e091fe82d1f201d8e19df5005d2c19e218b4977b4df506"
+dependencies = [
+ "grammers-tl-types",
+ "log",
+ "serde",
+ "serde_with",
+ "tokio",
+]
+
+[[package]]
+name = "grammers-tl-gen"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a37dda68c9e775dfbffb85b99826b5ac8144e9da40be3327e77cbcd8618fc30"
+dependencies = [
+ "grammers-tl-parser",
+]
+
+[[package]]
+name = "grammers-tl-parser"
+version = "1.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "646fc5eeb27461ffcc94fcf9fda3ffd9b402a20250447ae4a65c39c1a905e381"
+dependencies = [
+ "crc32fast",
+]
+
+[[package]]
+name = "grammers-tl-types"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67d450e2f2588af535fe85a17b9a6df8338794ee8ad6bcb1b97d61a14d472fc5"
+dependencies = [
+ "grammers-tl-gen",
+ "grammers-tl-parser",
 ]
 
 [[package]]
@@ -2695,6 +2829,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
+name = "locate-locale"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2835eaaed39a92511442aff277d4dca3d7674ca058df3bc45170661c2ccb4619"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2741,6 +2884,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "md5"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2782,6 +2931,16 @@ name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
+name = "mime_guess"
+version = "2.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
+dependencies = [
+ "mime",
+ "unicase",
+]
 
 [[package]]
 name = "miniz_oxide"
@@ -2881,6 +3040,18 @@ name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
 
 [[package]]
 name = "notify-rust"
@@ -3262,6 +3433,9 @@ dependencies = [
  "base64 0.23.1",
  "cpal",
  "diesel",
+ "glass_pumpkin",
+ "grammers-client",
+ "grammers-session",
  "gtk",
  "image",
  "libsqlite3-sys",
@@ -3340,6 +3514,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "os_info"
+version = "3.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cf20a545b305cf1da722b236b5155c9bb35f1d5ceb28c048bd96ca842f41b5b"
+dependencies = [
+ "android_system_properties",
+ "log",
+ "nix",
+ "objc2",
+ "objc2-foundation",
+ "objc2-ui-kit",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "pango"
 version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3398,6 +3587,16 @@ name = "pastey"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
+
+[[package]]
+name = "pbkdf2"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "112d82ceb8c5bf524d9af484d4e4970c9fd5a0cc15ba14ad93dccd28873b0629"
+dependencies = [
+ "digest 0.11.3",
+ "hmac",
+]
 
 [[package]]
 name = "percent-encoding"
@@ -5329,6 +5528,12 @@ dependencies = [
  "tempfile",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "unicase"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357cc3acc6a036009fd6c973ed009037c732d60d0b4f6c673e9041497482a28f"
 
 [[package]]
 name = "unicode-ident"

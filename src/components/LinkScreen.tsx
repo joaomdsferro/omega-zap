@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import type { AccountInfo } from "../accounts/accounts";
 import type { AccountStatus } from "../accounts/useAccount";
 import { formatVoiceDuration } from "../lib/format";
@@ -8,6 +8,8 @@ interface LinkScreenProps {
   account: AccountInfo;
   status: AccountStatus;
   onRetry: () => void;
+  /** Answers a two-step password the network asks for after the QR code. */
+  onPassword: (password: string) => Promise<void>;
   onClose: () => void;
 }
 
@@ -37,7 +39,54 @@ function useCountdown(seconds: number | null, code: string | null) {
   return left;
 }
 
-export function LinkScreen({ account, status, onRetry, onClose }: LinkScreenProps) {
+/** The two-step password, asked for after the QR code was scanned. */
+function PasswordForm({ hint, onSubmit }: { hint: string | null; onSubmit: (password: string) => Promise<void> }) {
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!password || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSubmit(password);
+    } catch (err) {
+      setError(String(err instanceof Error ? err.message : err));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="flex w-full flex-col gap-3 px-2">
+      <p className="text-[14px] leading-5 text-(--text-secondary)">
+        Your account has two-step verification. Enter your password to finish.
+      </p>
+      <input
+        type="password"
+        autoFocus
+        autoComplete="current-password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        placeholder={hint ? `Hint: ${hint}` : "Password"}
+        aria-label="Two-step verification password"
+        aria-invalid={error !== null}
+        className="h-10 rounded-lg bg-(--search-bg) px-3 text-[15px] text-(--text-primary) outline-none placeholder:text-(--text-secondary) focus-visible:ring-2 focus-visible:ring-(--accent)"
+      />
+      {error ? <p className="text-[13px] text-(--danger)">{error}</p> : null}
+      <button
+        type="submit"
+        disabled={!password || busy}
+        className="h-10 rounded-full bg-(--accent) px-5 text-[14px] font-medium text-(--on-accent) hover:brightness-110 disabled:opacity-50"
+      >
+        {busy ? "Checking…" : "Continue"}
+      </button>
+    </form>
+  );
+}
+
+export function LinkScreen({ account, status, onRetry, onPassword, onClose }: LinkScreenProps) {
   const { state } = status;
   const showingQr = state === "qr" && status.qrSvg !== null;
   const secondsLeft = useCountdown(showingQr ? status.qrTimeoutSecs : null, status.qrSvg);
@@ -59,6 +108,8 @@ export function LinkScreen({ account, status, onRetry, onClose }: LinkScreenProp
         dangerouslySetInnerHTML={{ __html: status.qrSvg }}
       />
     );
+  } else if (state === "password") {
+    qrArea = <PasswordForm hint={status.passwordHint} onSubmit={onPassword} />;
   } else if (state === "qr_expired" || state === "error") {
     qrArea = (
       <div className="flex flex-col items-center gap-4 px-6 text-center">

@@ -173,6 +173,7 @@ const STATE_LABEL: Record<string, string> = {
   starting: "Preparing…",
   qr: "Waiting for the QR scan",
   qr_expired: "QR code expired",
+  password: "Waiting for your password",
   connecting: "Connecting…",
   connected: "Connected",
   logged_out: "Unlinked from your phone",
@@ -428,9 +429,11 @@ export function SettingsPanel({ accounts, onBack, onLink, privacy, microphones }
               <AccountCard key={account.id} account={account} onLink={() => onLink(account.id)} />
             ))}
           </div>
-          <p className="mt-5 text-[13px] text-(--text-secondary)">
-            Coming later: {PLANNED_ACCOUNTS.join(", ")}.
-          </p>
+          {PLANNED_ACCOUNTS.length > 0 && (
+            <p className="mt-5 text-[13px] text-(--text-secondary)">
+              Coming later: {PLANNED_ACCOUNTS.join(", ")}.
+            </p>
+          )}
 
           <div className="mt-5">
             <Switch
@@ -660,8 +663,8 @@ export function SettingsPanel({ accounts, onBack, onLink, privacy, microphones }
         <Section title="About">
           <p className="text-[14px] text-(--text-primary)">Omega Zap {version}</p>
           <p className="mt-1 text-[13px] leading-5 text-(--text-secondary)">
-            An unofficial WhatsApp and Signal client. Not affiliated with WhatsApp,
-            Meta or Signal.
+            An unofficial WhatsApp, Signal and Telegram client. Not affiliated with
+            WhatsApp, Meta, Signal or Telegram.
           </p>
         </Section>
       </div>

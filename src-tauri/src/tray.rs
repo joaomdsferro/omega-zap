@@ -277,6 +277,9 @@ pub fn refresh(app: &AppHandle) {
     if let Some(manager) = app.try_state::<std::sync::Arc<signal::SignalManager>>() {
         total = total.saturating_add(manager.unread_total());
     }
+    if let Some(manager) = app.try_state::<std::sync::Arc<crate::telegram::TgManager>>() {
+        total = total.saturating_add(manager.unread_total());
+    }
     if background.shown.swap(total, Ordering::AcqRel) == total {
         return;
     }

@@ -33,6 +33,17 @@ KLIPY_API_KEY=your-key
 A debug build reads it when you open the GIFs tab, so no rebuild is needed; a release build takes it
 in at compile time. Without one, everything else works and the search boxes say search is off.
 
+Telegram needs the app's API id and hash from [my.telegram.org](https://my.telegram.org) (API
+development tools), in the same `.env`:
+
+```sh
+TELEGRAM_API_ID=12345
+TELEGRAM_API_HASH=your-hash
+```
+
+As with KLIPY, a debug build reads them when Telegram connects and a release build takes them in at
+compile time. Without them, Telegram's link screen says the key is missing.
+
 A debug build is called "Omega Zap (Dev)" and has its own icon. It uses the same data folder as an
 installed copy, so quit one before starting the other.
 

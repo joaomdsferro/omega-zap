@@ -31,6 +31,7 @@ const QUICK_REACTIONS: Record<AccountId, string[]> = {
   whatsapp: ["👍", "❤️", "😂", "😮", "😢", "🙏"],
   business: ["👍", "❤️", "😂", "😮", "😢", "🙏"],
   signal: ["❤️", "👍", "👎", "😂", "😮", "😢"],
+  telegram: ["👍", "❤️", "🔥", "🥰", "👏", "😁"],
 };
 
 
@@ -39,6 +40,7 @@ const SECTION_ORDER: Record<AccountId, string[]> = {
   whatsapp: ["Smileys & People", "Animals & Nature", "Food & Drink", "Activity", "Travel & Places", "Objects", "Symbols", "Flags", "Characters"],
   business: ["Smileys & People", "Animals & Nature", "Food & Drink", "Activity", "Travel & Places", "Objects", "Symbols", "Flags", "Characters"],
   signal: ["Smileys & People", "Animals & Nature", "Food & Drink", "Travel & Places", "Activity", "Objects", "Symbols", "Flags", "Characters"],
+  telegram: ["Smileys & People", "Animals & Nature", "Food & Drink", "Activity", "Travel & Places", "Objects", "Symbols", "Flags", "Characters"],
 };
 
 const SECTIONS_BY_ACCOUNT = Object.fromEntries(

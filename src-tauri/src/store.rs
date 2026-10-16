@@ -2881,6 +2881,28 @@ impl ChatStore {
             .map(|(chat_id, _)| chat_id.clone())
     }
 
+    /// Our messages in a chat numbered up to `max_id` and not yet shown read,
+    /// on networks that number a chat's messages in order (Telegram).
+    pub fn own_read_up_to(&self, chat: &str, max_id: i32) -> Vec<String> {
+        let Some(chat) = self.chats.get(&self.canonical(chat)) else { return Vec::new() };
+        chat.messages
+            .iter()
+            .filter(|m| m.from_me && m.status < Some(Delivery::Read))
+            .filter(|m| m.id.parse::<i32>().is_ok_and(|id| id <= max_id))
+            .map(|m| m.id.clone())
+            .collect()
+    }
+
+    /// Every chat with a message of this id, for networks where ids are only
+    /// unique within some chats (Telegram's channels number their own).
+    pub fn chats_with(&self, id: &str) -> Vec<String> {
+        self.chats
+            .iter()
+            .filter(|(_, chat)| chat.messages.iter().any(|m| m.id == id))
+            .map(|(chat_id, _)| chat_id.clone())
+            .collect()
+    }
+
     /// Unread messages in the chats the list shows, muted ones left out.
     pub fn unread_total(&self) -> u32 {
         let now = now_ms();

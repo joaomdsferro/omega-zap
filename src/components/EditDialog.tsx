@@ -10,6 +10,7 @@ export const EDIT_WINDOW_MS: Record<AccountId, number> = {
   whatsapp: 15 * 60 * 1000,
   business: 15 * 60 * 1000,
   signal: 24 * 60 * 60 * 1000,
+  telegram: 48 * 60 * 60 * 1000,
 };
 
 /** Whether one of our messages can still be edited: a text, inside its network's window. */

@@ -1,7 +1,7 @@
 import { ACCOUNTS, type AccountId } from "../accounts/accounts";
-import { SignalIcon, WhatsAppBusinessIcon, WhatsAppIcon } from "./Icons";
+import { SignalIcon, TelegramIcon, WhatsAppBusinessIcon, WhatsAppIcon } from "./Icons";
 
-export const ACCOUNT_ICONS = { whatsapp: WhatsAppIcon, business: WhatsAppBusinessIcon, signal: SignalIcon } as const;
+export const ACCOUNT_ICONS = { whatsapp: WhatsAppIcon, business: WhatsAppBusinessIcon, signal: SignalIcon, telegram: TelegramIcon } as const;
 
 /** The network's mark on its colour, for places where accounts are mixed. */
 export function AccountBadge({ account, size = 18 }: { account: AccountId; size?: number }) {

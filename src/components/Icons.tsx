@@ -63,6 +63,13 @@ export const SignalIcon = (p: IconProps) => (
   </Svg>
 );
 
+/** Telegram's paper plane. */
+export const TelegramIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M21 4 3 11.2l6.3 2.3L19 7l-7.7 8.1v5.1l3.3-3.6L18.6 20z" />
+  </Svg>
+);
+
 export const SettingsIcon = (p: IconProps) => (
   <Svg {...p}>
     <circle cx="12" cy="12" r="3" />

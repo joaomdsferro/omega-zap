@@ -79,6 +79,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Built into the app for GIF search; without it the app has no search.
           KLIPY_API_KEY: ${{ secrets.KLIPY_API_KEY }}
+          # Built in for Telegram, from my.telegram.org; without them Telegram can't connect.
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
         with:
           tagName: ${{ needs.version.outputs.tag }}
           releaseName: Omega Zap ${{ needs.version.outputs.tag }}

@@ -1,4 +1,4 @@
-export type AccountId = "whatsapp" | "business" | "signal";
+export type AccountId = "whatsapp" | "business" | "signal" | "telegram";
 
 export interface AccountInfo {
   id: AccountId;
@@ -63,6 +63,22 @@ export const ACCOUNTS: Record<AccountId, AccountInfo> = {
     emptyText:
       "No chats yet. Older messages only come over when you choose Transfer message history while linking; new ones appear as they arrive.",
   },
+  telegram: {
+    id: "telegram",
+    label: "Telegram",
+    color: "var(--brand-telegram)",
+    linkSteps: [
+      "Open Telegram on your phone",
+      "Go to Settings, then Devices",
+      "Tap Link Desktop Device",
+      "Point your phone at this screen to scan the QR code",
+    ],
+    linkNote:
+      "Omega Zap is an unofficial Telegram client. Your chats come from Telegram's servers, so older messages load as you scroll.",
+    logoutConfirm:
+      "Log out of Telegram on this computer? Telegram ends this session, and chats saved here are deleted.",
+    emptyText: "Your chats will appear here once they load.",
+  },
 };
 
 export const ACCOUNT_IDS = Object.keys(ACCOUNTS) as AccountId[];
@@ -73,4 +89,4 @@ export function isWhatsApp(id: AccountId): boolean {
 }
 
 /** Networks planned next; listed in Settings so the roadmap is visible. */
-export const PLANNED_ACCOUNTS = ["Telegram"];
+export const PLANNED_ACCOUNTS: string[] = [];
