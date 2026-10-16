@@ -530,7 +530,8 @@ function Shell() {
       setView("chats");
       setSelected(null);
       if (!unified) setActiveAccount(account);
-      accounts[account].startLinking().catch((e) => setError(String(e)));
+      // The link screen shows why it failed; a toast would say it twice.
+      accounts[account].startLinking().catch(console.error);
     },
     [accounts, unified, setActiveAccount],
   );
@@ -1313,7 +1314,7 @@ function Shell() {
       <LinkScreen
         account={ACCOUNTS[linking]}
         status={accounts[linking].status}
-        onRetry={() => reconnect(linking)}
+        onRetry={() => void accounts[linking].reconnect().catch(console.error)}
         onPassword={accounts[linking].submitPassword}
         onClose={closeLinking}
       />
