@@ -3,6 +3,7 @@ import type { CSSProperties, RefObject } from "react";
 import type { Attachment, Message } from "../backend";
 import { streamUrl } from "../lib/files";
 import { formatFileSize } from "../lib/format";
+import { useSettings } from "../settings/settings";
 import { AudioPlayer } from "./AudioPlayer";
 import { FileIcon, PlayIcon } from "./Icons";
 import { VideoPlayer } from "./VideoPlayer";
@@ -14,6 +15,9 @@ const VIDEO_PRELOAD_BYTES = 8 * 1024 * 1024;
 /** The largest a single photo or video is drawn, in pixels. */
 const SINGLE_MAX_WIDTH = 330;
 const SINGLE_MAX_HEIGHT = 340;
+/** A sticker's box, as WhatsApp draws it and with the compact-media setting. */
+const STICKER_PX = 190;
+const COMPACT_STICKER_PX = 144;
 /** An album grid shows this many tiles; the last one counts the rest. */
 const GRID_TILES = 4;
 
@@ -191,11 +195,14 @@ function Tile({ message, index, attachment, loadMedia, onOpen, single, more }: T
   const [broken, setBroken] = useState(false);
   const ready = url && url !== "failed" && !broken;
   const name = label(attachment);
+  const { settings } = useSettings();
 
   const { width: w, height: h } = attachment;
+  // A GIF grows to the full size, as on WhatsApp, unless media is kept compact.
+  const grows = attachment.kind === "gif" && !settings.compactMedia;
   const sized =
     single && w && h
-      ? { width: Math.round(w * Math.min(SINGLE_MAX_WIDTH / w, SINGLE_MAX_HEIGHT / h, 1)), aspectRatio: `${w} / ${h}` }
+      ? { width: Math.round(w * Math.min(SINGLE_MAX_WIDTH / w, SINGLE_MAX_HEIGHT / h, grows ? Infinity : 1)), aspectRatio: `${w} / ${h}` }
       : undefined;
 
   let body;
@@ -333,8 +340,10 @@ function Album({ message, items, loadMedia, onOpen }: {
 function Sticker({ message, index, loadMedia }: { message: Message; index: number; loadMedia?: LoadMedia }) {
   const box = useRef<HTMLDivElement>(null);
   const url = useMediaUrl(message, index, loadMedia, useNear(box));
+  const { settings } = useSettings();
+  const size = settings.compactMedia ? COMPACT_STICKER_PX : STICKER_PX;
   return (
-    <div ref={box} className="mb-1 flex h-36 w-36 items-center justify-center">
+    <div ref={box} className="mb-1 flex items-center justify-center" style={{ width: size, height: size }}>
       {url && url !== "failed" ? (
         <img src={url} alt="Sticker" draggable={false} className="max-h-full max-w-full object-contain" />
       ) : (

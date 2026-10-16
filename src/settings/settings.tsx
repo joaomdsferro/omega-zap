@@ -97,6 +97,8 @@ export interface Settings {
   inlineVideos: boolean;
   /** Make a card for a link that came without one, from the page itself. */
   fetchLinkPreviews: boolean;
+  /** GIFs at the size they were sent and smaller stickers, instead of WhatsApp's sizes. */
+  compactMedia: boolean;
   /** Desktop notifications for new messages and reactions. */
   notifications: boolean;
   /** Show what a message says in its notification. */
@@ -119,6 +121,7 @@ const DEFAULTS: Settings = {
   largeLinkPreviews: true,
   inlineVideos: true,
   fetchLinkPreviews: true,
+  compactMedia: false,
   notifications: true,
   notificationPreview: true,
   trayBadge: "red",
@@ -161,6 +164,7 @@ function load(parsed: Stored): Settings {
     largeLinkPreviews: parsed.largeLinkPreviews !== false,
     inlineVideos: parsed.inlineVideos !== false,
     fetchLinkPreviews: parsed.fetchLinkPreviews !== false,
+    compactMedia: parsed.compactMedia === true,
     notifications: parsed.notifications !== false,
     notificationPreview: parsed.notificationPreview !== false,
     notificationOpensChat: parsed.notificationOpensChat === true,
@@ -182,6 +186,7 @@ interface SettingsContextValue {
   setUnifiedInbox: (unified: boolean) => void;
   setLargeLinkPreviews: (large: boolean) => void;
   setInlineVideos: (inline: boolean) => void;
+  setCompactMedia: (compact: boolean) => void;
   setFetchLinkPreviews: (on: boolean) => void;
   setNotifications: (on: boolean) => void;
   setNotificationPreview: (on: boolean) => void;
@@ -259,6 +264,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       setLargeLinkPreviews: (largeLinkPreviews) => setSettings((s) => ({ ...s, largeLinkPreviews })),
       setInlineVideos: (inlineVideos) => setSettings((s) => ({ ...s, inlineVideos })),
       setFetchLinkPreviews: (fetchLinkPreviews) => setSettings((s) => ({ ...s, fetchLinkPreviews })),
+      setCompactMedia: (compactMedia) => setSettings((s) => ({ ...s, compactMedia })),
       setNotifications: (notifications) => setSettings((s) => ({ ...s, notifications })),
       setNotificationPreview: (notificationPreview) => setSettings((s) => ({ ...s, notificationPreview })),
       setTrayBadge: (trayBadge) => setSettings((s) => ({ ...s, trayBadge })),

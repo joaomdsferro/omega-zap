@@ -366,6 +366,7 @@ export function SettingsPanel({ accounts, onBack, onLink, privacy, microphones }
     setLargeLinkPreviews,
     setFetchLinkPreviews,
     setInlineVideos,
+    setCompactMedia,
     setNotifications,
     setNotificationPreview,
     setTrayBadge,
@@ -476,6 +477,15 @@ export function SettingsPanel({ accounts, onBack, onLink, privacy, microphones }
               })}
             </div>
           </div>
+        </Section>
+
+        <Section title="Media">
+          <Switch
+            checked={settings.compactMedia}
+            onChange={setCompactMedia}
+            label="Smaller GIFs and stickers"
+            description="GIFs at the size they were sent and stickers at 144 px. When off, they are as large as on WhatsApp: GIFs fill the width of a message, stickers are 190 px."
+          />
         </Section>
 
         <Section title="Links">
