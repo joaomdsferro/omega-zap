@@ -1,6 +1,5 @@
-//! GIF and sticker search through KLIPY. The app's key is built in (`KLIPY_API_KEY` at
-//! build time; the same variable at run time overrides it for development),
-//! so nobody installing the app needs one. Without a key there is no search.
+//! GIF and sticker search through KLIPY. The app's key is built in
+//! (`KLIPY_API_KEY`, see `keys`). Without a key there is no search.
 //! What is searched goes to KLIPY with an anonymous id for this install.
 
 use std::path::Path;
@@ -17,25 +16,7 @@ const ID_FILE: &str = "klipy-id";
 const STICKER_AS_IS_BYTES: u64 = 500 * 1024;
 
 pub fn key() -> Option<String> {
-    std::env::var("KLIPY_API_KEY")
-        .ok()
-        .or_else(|| option_env!("KLIPY_API_KEY").map(str::to_string))
-        .or_else(dev_key)
-        .map(|k| k.trim().to_string())
-        .filter(|k| !k.is_empty())
-}
-
-/// In a development build, the key in the repository's gitignored `.env`,
-/// read when asked, so adding it needs no rebuild.
-fn dev_key() -> Option<String> {
-    if !cfg!(debug_assertions) {
-        return None;
-    }
-    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../.env")).ok()?;
-    text.lines().find_map(|line| {
-        let value = line.trim().strip_prefix("KLIPY_API_KEY=")?.trim().trim_matches(['"', '\'']);
-        (!value.is_empty()).then(|| value.to_string())
-    })
+    crate::keys::built_in!("KLIPY_API_KEY")
 }
 
 /// One result: what the picker shows, and what is sent.
