@@ -1267,7 +1267,8 @@ impl WaManager {
 
     pub fn search(&self, query: &str, chat: Option<&str>) -> Vec<StarredDto> {
         let limit = if chat.is_some() { crate::store::CHAT_SEARCH_LIMIT } else { crate::store::SEARCH_LIMIT };
-        let saved = self.history.search(query, chat, limit);
+        let terms = lock(&self.store).search_terms(query);
+        let saved = self.history.search(&terms, chat, limit);
         lock(&self.store).search(query, chat, limit, saved)
     }
 

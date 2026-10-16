@@ -265,6 +265,10 @@ fn search_text(m: &StoredMessage) -> Option<String> {
     }
 }
 
+/// The most people one search word stands for as a mention: a word in
+/// many names is short and finds plenty on its own.
+const MENTION_TERMS_PER_WORD: usize = 32;
+
 /// The words of a search, folded.
 pub fn search_words(query: &str) -> Vec<String> {
     fold(query).split_whitespace().map(str::to_string).collect()
@@ -1946,9 +1950,43 @@ impl ChatStore {
         out.into_iter().map(|(_, dto)| dto).collect()
     }
 
+    /// What the history database looks for, for each word of `query`: the
+    /// word, or a mention of someone whose name has it, since a mention is
+    /// saved as "@<number>" (or "@<ACI>") and shown with the name only now.
+    pub fn search_terms(&self, query: &str) -> Vec<Vec<String>> {
+        search_words(query)
+            .into_iter()
+            .map(|word| {
+                let mut terms = vec![word.clone()];
+                if word.chars().count() < 2 {
+                    return terms;
+                }
+                let named = self.contact_names.iter().chain(&self.push_names).map(|(id, name)| (id.as_str(), name.as_str()));
+                let me = self.own_ids.iter().map(|id| (id.as_str(), "You"));
+                let mut people: Vec<&str> = named.chain(me).filter(|(_, name)| fold(name).contains(&word)).map(|(id, _)| id).collect();
+                people.sort_unstable();
+                people.dedup();
+                let lids = people.iter().flat_map(|pn| self.lid_to_pn.iter().filter(move |(_, to)| to == pn).map(|(lid, _)| lid.as_str()));
+                let numbers: Vec<String> = people.iter().copied().chain(lids).map(|id| format!("@{}", id.split('@').next().unwrap_or(id))).collect();
+                terms.extend(numbers.into_iter().take(MENTION_TERMS_PER_WORD));
+                terms
+            })
+            .collect()
+    }
+
+    /// Whether `m` has every one of `words`, either as saved or with its
+    /// mentions named.
+    fn has_words(&self, m: &StoredMessage, words: &[String]) -> bool {
+        let Some(text) = search_text(m) else { return false };
+        let saved = fold(&text);
+        let named = text.contains('@').then(|| fold(&self.with_mentions(&text).0));
+        words.iter().all(|word| saved.contains(word.as_str()) || named.as_ref().is_some_and(|named| named.contains(word.as_str())))
+    }
+
     /// Messages with every word of `query` in them, newest first, at most
-    /// `limit`. Case and accents are ignored: "nao" finds "Não". `saved` is
-    /// what the history database found, which memory may have newer copies of.
+    /// `limit`. Case and accents are ignored: "nao" finds "Não", and a name
+    /// finds its mentions. `saved` is what the history database found (with
+    /// `search_terms`), which memory may have newer copies of.
     pub fn search(&self, query: &str, only: Option<&str>, limit: usize, saved: Vec<(String, StoredMessage)>) -> Vec<StarredDto> {
         let words = search_words(query);
         if words.is_empty() {
@@ -1960,9 +1998,7 @@ impl ChatStore {
         let chats = self.chats.iter().filter(|(id, _)| !is_hidden_chat(id) && only.as_ref().is_none_or(|only| only == *id));
         for (id, chat) in chats {
             for m in chat.messages.iter().filter(|m| m.deleted.is_none()) {
-                let Some(text) = search_text(m) else { continue };
-                let text = fold(&text);
-                if words.iter().all(|word| text.contains(word.as_str())) {
+                if self.has_words(m, &words) {
                     seen.insert((id.clone(), m.id.clone()));
                     out.push((id.clone(), m.clone()));
                 }
@@ -1971,7 +2007,9 @@ impl ChatStore {
         for (chat, m) in saved {
             let chat = self.canonical(&chat);
             let in_memory = self.chats.get(&chat).is_some_and(|c| c.messages.iter().any(|known| known.id == m.id));
-            if is_hidden_chat(&chat) || in_memory || !seen.insert((chat.clone(), m.id.clone())) {
+            // The database matches mentions by number, which may be the
+            // start of a longer one.
+            if is_hidden_chat(&chat) || in_memory || !self.has_words(&m, &words) || !seen.insert((chat.clone(), m.id.clone())) {
                 continue;
             }
             out.push((chat, m));
@@ -3189,6 +3227,28 @@ mod tests {
         assert_eq!(ids("nao amanha"), ["a"]);
         assert!(ids("  ").is_empty());
         assert!(ids("ninguém").is_empty());
+    }
+
+    #[test]
+    fn search_finds_a_mention_by_name() {
+        let mut store = ChatStore::default();
+        store.learn_mapping("68689445540020@lid", "351900000000@s.whatsapp.net");
+        store.set_contact_name("351900000000@s.whatsapp.net", "Rui Silva");
+        for (id, ts, text) in [("a", 1, "falei com @68689445540020 hoje"), ("b", 2, "@351900000000 vens?"), ("c", 3, "@3519000000001 não")] {
+            let mut message = incoming("120363000000000000@g.us", id, ts, false);
+            message.message.content = Content::text(text, None);
+            store.ingest(message, false);
+        }
+        let ids = |query: &str| store.search(query, None, 10, Vec::new()).into_iter().map(|f| f.message.id).collect::<Vec<_>>();
+        assert_eq!(ids("rui"), ["b", "a"]);
+        assert_eq!(ids("silva hoje"), ["a"]);
+        assert_eq!(ids("351900000000"), ["c", "b"]);
+
+        let terms = store.search_terms("Rui");
+        assert_eq!(terms.len(), 1);
+        let mut rui = terms[0].clone();
+        rui.sort();
+        assert_eq!(rui, ["@351900000000", "@68689445540020", "rui"]);
     }
 
     #[test]

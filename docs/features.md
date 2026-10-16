@@ -65,7 +65,8 @@ Everything Omega Zap does today, network by network. For what is still missing, 
 - **Search.** The sidebar search finds chats and then messages across every chat; **Ctrl+F** searches
   inside a chat and marks the words, through all of its history on this computer, not only what is
   loaded. On WhatsApp, a chat whose older messages are still on the phone is fetched first, and the
-  bar says more may be found as they arrive. Case and accents are ignored.
+  bar says more may be found as they arrive. Case and accents are ignored, and a
+  name finds the messages that mention that person.
 - **New chat.** Your contacts A to Z, and yourself. On WhatsApp you can also type a full phone number.
 - **Starred messages** from every chat under **⋮ → Starred messages**. WhatsApp stars sync with the
   phone; Signal's stay on this computer.

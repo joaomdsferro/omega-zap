@@ -13,7 +13,7 @@ use diesel::connection::SimpleConnection;
 use diesel::prelude::*;
 use diesel::sql_types::{BigInt, Integer, Text};
 
-use super::{ChatStore, MAX_MESSAGES_PER_CHAT, Purge, STORE_VERSION, StoredChat, StoredMessage, fold, search_text, search_words};
+use super::{ChatStore, MAX_MESSAGES_PER_CHAT, Purge, STORE_VERSION, StoredChat, StoredMessage, fold, search_text};
 use crate::account::lock;
 
 /// The database's file name in an account's folder.
@@ -351,26 +351,27 @@ impl HistoryDb {
         Ok(rows.into_iter().next().and_then(|Data { data }| serde_json::from_str(&data).ok()))
     }
 
-    /// Messages with every one of `words` (folded) in them, newest first.
+    /// Messages with one of each of `terms` (folded) in them, newest first.
     /// Only `chat`'s, when given.
-    pub fn search(&mut self, words: &[String], chat: Option<&str>, limit: usize) -> Result<Vec<(String, StoredMessage)>, String> {
-        if words.is_empty() {
+    pub fn search(&mut self, terms: &[Vec<String>], chat: Option<&str>, limit: usize) -> Result<Vec<(String, StoredMessage)>, String> {
+        if terms.is_empty() {
             return Ok(Vec::new());
         }
         let mut sql = String::from("SELECT chat AS key, data FROM messages WHERE deleted = 0");
         if chat.is_some() {
             sql.push_str(" AND chat = ?");
         }
-        for _ in words {
-            sql.push_str(" AND folded LIKE ? ESCAPE '\\'");
+        for any in terms {
+            let any = vec!["folded LIKE ? ESCAPE '\\'"; any.len()].join(" OR ");
+            sql.push_str(&format!(" AND ({any})"));
         }
         sql.push_str(" ORDER BY ts_ms DESC LIMIT ?");
         let mut query = diesel::sql_query(sql).into_boxed();
         if let Some(chat) = chat {
             query = query.bind::<Text, _>(chat.to_string());
         }
-        for word in words {
-            query = query.bind::<Text, _>(like(word));
+        for term in terms.iter().flatten() {
+            query = query.bind::<Text, _>(like(term));
         }
         let rows = query
             .bind::<BigInt, _>(limit as i64)
@@ -509,11 +510,10 @@ impl History {
             .flatten()
     }
 
-    /// Saved messages with every word of `query` in them, newest first;
-    /// only `chat`'s when given.
-    pub fn search(&self, query: &str, chat: Option<&str>, limit: usize) -> Vec<(String, StoredMessage)> {
-        let words = search_words(query);
-        self.with_db(|db| db.search(&words, chat, limit))
+    /// Saved messages with one of each of `terms` (`ChatStore::search_terms`)
+    /// in them, newest first; only `chat`'s when given.
+    pub fn search(&self, terms: &[Vec<String>], chat: Option<&str>, limit: usize) -> Vec<(String, StoredMessage)> {
+        self.with_db(|db| db.search(terms, chat, limit))
             .and_then(|found| found)
             .inspect_err(|e| log::warn!("{e}"))
             .unwrap_or_default()
@@ -587,7 +587,7 @@ mod tests {
         let older = db.older(chat, 50, 1000).unwrap();
         assert_eq!(older.len(), 50);
         assert_eq!(older[0].id, "m0000");
-        let found = db.search(&["message".into(), "7".into()], Some(chat), 1000).unwrap();
+        let found = db.search(&[vec!["message".into()], vec!["7".into()]], Some(chat), 1000).unwrap();
         assert!(found.iter().any(|(_, m)| m.id == "m0007"));
         assert!(found.iter().all(|(_, m)| m.content.text.as_deref().unwrap().contains('7')));
         let _ = std::fs::remove_dir_all(&dir);
