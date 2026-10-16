@@ -160,6 +160,12 @@ pub fn content(message: &wa::Message) -> Option<Content> {
         let mut c = Content::media(MsgKind::Media, if gif { "GIF" } else { "Video" }, non_empty(&video.caption));
         with_context(&mut c, &video.context_info);
         c.wa_media = video_ref(video, if gif { "gif" } else { "video" });
+        if c.wa_media.is_none() {
+            log::info!(
+                "whatsapp: video fields: url {:?}, static url {:?}, dash {:?}, thumbnail {}, mime {:?}, size {:?}",
+                video.url, video.static_url, video.dash_manifest_url, video.thumbnail_direct_path.is_some(), video.mimetype, video.file_length,
+            );
+        }
         return Some(c);
     }
     if let Some(video) = base.ptv_message.as_option() {
