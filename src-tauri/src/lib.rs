@@ -8,6 +8,7 @@ mod emoji;
 mod link_preview;
 mod klipy;
 mod links;
+mod loopback;
 mod notify;
 #[cfg(target_os = "linux")]
 mod players;
@@ -74,8 +75,32 @@ fn media_response(
     let Ok(len) = body.len() else {
         return tauri::http::Response::builder().status(404).body(Vec::new());
     };
-    let wanted = range
-        .and_then(|r| r.to_str().ok())
+    let part = |start: usize, end: usize| body.read(start, end);
+    match byte_range(range, len) {
+        Ok(None) => match part(0, len.saturating_sub(1)) {
+            Ok(bytes) => builder.body(bytes),
+            Err(_) => tauri::http::Response::builder().status(500).body(Vec::new()),
+        },
+        Ok(Some((start, end))) => match part(start, end) {
+            Ok(bytes) => builder
+                .status(206)
+                .header("Content-Range", format!("bytes {start}-{end}/{len}"))
+                .body(bytes),
+            Err(_) => tauri::http::Response::builder().status(500).body(Vec::new()),
+        },
+        Err(()) => builder.status(416).header("Content-Range", format!("bytes */{len}")).body(Vec::new()),
+    }
+}
+
+/// The first and last byte a `Range` header asks for, of `len` bytes: `None`
+/// without the header, an error when the part cannot be given.
+fn byte_range(range: Option<&tauri::http::HeaderValue>, len: usize) -> Result<Option<(usize, usize)>, ()> {
+    let Some(range) = range else {
+        return Ok(None);
+    };
+    range
+        .to_str()
+        .ok()
         .and_then(|r| r.strip_prefix("bytes="))
         .and_then(|r| r.split_once('-'))
         .and_then(|(start, end)| {
@@ -86,22 +111,9 @@ fn media_response(
                 (start, end) => (start.parse().ok()?, end.parse::<usize>().ok()?.min(len.checked_sub(1)?)),
             };
             (start <= end).then_some((start, end))
-        });
-    let part = |start: usize, end: usize| body.read(start, end);
-    match (range, wanted) {
-        (None, _) => match part(0, len.saturating_sub(1)) {
-            Ok(bytes) => builder.body(bytes),
-            Err(_) => tauri::http::Response::builder().status(500).body(Vec::new()),
-        },
-        (Some(_), Some((start, end))) => match part(start, end) {
-            Ok(bytes) => builder
-                .status(206)
-                .header("Content-Range", format!("bytes {start}-{end}/{len}"))
-                .body(bytes),
-            Err(_) => tauri::http::Response::builder().status(500).body(Vec::new()),
-        },
-        (Some(_), None) => builder.status(416).header("Content-Range", format!("bytes */{len}")).body(Vec::new()),
-    }
+        })
+        .map(Some)
+        .ok_or(())
 }
 
 #[derive(Clone, Copy)]
@@ -291,6 +303,8 @@ pub fn run() {
             );
             #[cfg(debug_assertions)]
             devfiles::start(dir.clone());
+            #[cfg(target_os = "linux")]
+            loopback::start(dir.clone());
             app.manage(tray::Background::new(dir.clone()));
             let signal = signal::SignalManager::new(app.handle().clone(), dir.join("signal"))?;
             let manager = wa::WaManager::new(app.handle().clone(), dir)?;
@@ -315,6 +329,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             dropped::read_dropped_file,
+            loopback::media_server,
             wa::commands::wa_status,
             wa::commands::wa_start_linking,
             wa::commands::wa_cancel_linking,

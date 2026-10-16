@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, PointerEvent, RefObject } from "react";
 import type { Attachment, Message } from "../backend";
+import { streamUrl } from "../lib/files";
 import { formatFileSize, formatVoiceDuration } from "../lib/format";
 import { AudioPlayer } from "./AudioPlayer";
 import { ExpandIcon, FileIcon, MuteIcon, PauseIcon, PlayIcon, VolumeIcon } from "./Icons";
@@ -275,8 +276,9 @@ export function useNear(el: RefObject<Element | null>, margin = "600px 0px") {
 
 /**
  * Fetches an attachment once `wanted`; null while it loads, "failed" when it can't.
- * With `blob`, the file is read into memory first: WebKitGTK's video and audio
- * players refuse the app's own `media://` scheme but play a `blob:` URL.
+ * With `blob`, the file is for a video or audio player, which refuses the
+ * app's own `media://` scheme: it is streamed where the app serves files over
+ * http, and otherwise read into memory for a `blob:` URL.
  */
 export function useMediaUrl(message: Message, index: number, loadMedia: LoadMedia | undefined, wanted: boolean, blob = false) {
   const [url, setUrl] = useState<string | null>(null);
@@ -288,6 +290,8 @@ export function useMediaUrl(message: Message, index: number, loadMedia: LoadMedi
     loadMedia(message, index)
       .then(async (loaded) => {
         if (!blob) return loaded;
+        const streamed = await streamUrl(loaded);
+        if (streamed) return streamed;
         const response = await fetch(loaded);
         if (!response.ok) throw new Error(`media answered ${response.status}`);
         objectUrl = URL.createObjectURL(await response.blob());
