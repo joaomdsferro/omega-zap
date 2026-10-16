@@ -90,3 +90,64 @@ export function searchEmoji(query: string, limit: number): EmojiMatch[] {
     .slice(0, limit)
     .map(([, entry]) => entry);
 }
+
+/** Emoticons and the emoji offered for them, the likeliest first. */
+const EMOTICONS: Record<string, string[]> = {
+  ":)": ["🙂", "😊", "😀"],
+  ":-)": ["🙂", "😊", "😀"],
+  ":D": ["😀", "😃", "😁"],
+  ":-D": ["😀", "😃", "😁"],
+  xD: ["😆", "🤣", "😂"],
+  XD: ["😆", "🤣", "😂"],
+  ":'D": ["😂", "🤣"],
+  ":(": ["🙁", "😞", "☹️"],
+  ":-(": ["🙁", "😞", "☹️"],
+  ":'(": ["😢", "😭"],
+  ";)": ["😉", "😜"],
+  ";-)": ["😉", "😜"],
+  ":P": ["😛", "😜", "😝"],
+  ":p": ["😛", "😜", "😝"],
+  ":-P": ["😛", "😜", "😝"],
+  ";P": ["😜", "😛"],
+  ";p": ["😜", "😛"],
+  ":O": ["😮", "😲", "😯"],
+  ":o": ["😮", "😲", "😯"],
+  ":*": ["😘", "😗", "😚"],
+  ":-*": ["😘", "😗", "😚"],
+  "<3": ["❤️", "😍", "🥰"],
+  "</3": ["💔"],
+  ":|": ["😐", "😑"],
+  ":/": ["😕", "🫤"],
+  ":-/": ["😕", "🫤"],
+  ":S": ["😖", "😕"],
+  ":s": ["😖", "😕"],
+  "B)": ["😎"],
+  "8)": ["😎"],
+  ">:(": ["😠", "😡"],
+  "O:)": ["😇"],
+  "o:)": ["😇"],
+  ":')": ["🥲", "😂"],
+  "^^": ["😊", "😄"],
+  "^_^": ["😊", "😄"],
+  "-_-": ["😑", "😒"],
+  "(y)": ["👍"],
+  "(Y)": ["👍"],
+};
+
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** An emoticon right before the cursor, at the start or after a space. */
+const EMOTICON = new RegExp(
+  `(?:^|\\s)(${Object.keys(EMOTICONS).sort((a, b) => b.length - a.length).map(escape).join("|")})$`,
+);
+
+/** The emoticon the text ends with, and the emoji to offer for it. */
+export function emoticonAtEnd(text: string): { typed: string; matches: EmojiMatch[] } | null {
+  const typed = EMOTICON.exec(text)?.[1];
+  if (!typed) return null;
+  const known = new Map(entries().map((entry) => [bare(entry.emoji), entry]));
+  const matches = EMOTICONS[typed].flatMap((emoji) => {
+    const entry = known.get(bare(emoji));
+    return entry ? [{ ...entry, code: undefined }] : [];
+  });
+  return matches.length ? { typed, matches } : null;
+}

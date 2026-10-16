@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import type { AccountId } from "../accounts/accounts";
 import type { LinkPreview, OutgoingLink, OutgoingMedia, ReplyQuote, StickerShelf, TypingState, VoiceRecorder } from "../backend";
 import { Emoji } from "../lib/emoji";
-import { emojiForShortcode, searchEmoji } from "../lib/emojiSearch";
+import { emojiForShortcode, emoticonAtEnd, searchEmoji } from "../lib/emojiSearch";
 import { SHORTCUTS, matches } from "../lib/shortcuts";
 import { formatFileSize, formatVoiceDuration } from "../lib/format";
 import { URL_PATTERN, fetchLinkPreview } from "../lib/links";
@@ -505,17 +505,26 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [disabled]);
 
-  // ":joy" offers 😂 and its neighbours.
-  const shortcode = SHORTCODE.exec(text.slice(0, caret));
+  // ":joy" offers 😂 and its neighbours, and ":)" offers 🙂, which Esc or
+  // typing on turn down to keep the text.
+  const before = text.slice(0, caret);
+  const trigger = useMemo(() => {
+    const shortcode = SHORTCODE.exec(before);
+    const found = shortcode ? searchEmoji(shortcode[1], SUGGESTIONS) : [];
+    if (shortcode && found.length) return { typed: `:${shortcode[1]}`, list: found, emoticon: false };
+    const emoticon = emoticonAtEnd(before);
+    return emoticon ? { typed: emoticon.typed, list: emoticon.matches, emoticon: true } : null;
+  }, [before]);
+  /** The suggestion turned down, by where it was typed. */
   const [dismissed, setDismissed] = useState<string | null>(null);
-  const query = shortcode && shortcode[1] !== dismissed ? shortcode[1] : null;
-  const suggestions = useMemo(() => (query ? searchEmoji(query, SUGGESTIONS) : []), [query]);
+  const triggerKey = trigger ? `${caret}:${trigger.typed}` : null;
+  const suggestions = trigger && triggerKey !== dismissed ? trigger.list : [];
   const [chosen, setChosen] = useState(0);
-  useEffect(() => setChosen(0), [query]);
+  useEffect(() => setChosen(0), [triggerKey]);
 
   function suggest(emoji: string) {
-    if (!query) return;
-    input.current?.replaceBefore(caret - query.length - 1, emoji);
+    if (!trigger) return;
+    input.current?.replaceBefore(caret - trigger.typed.length, emoji);
   }
 
   // Closing the shortcode with a colon puts its emoji in at once.
@@ -568,7 +577,7 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
       }
       if (e.key === "Escape") {
         e.preventDefault();
-        setDismissed(query);
+        setDismissed(triggerKey);
         return;
       }
     }
@@ -642,6 +651,11 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
               {entry.code ? <span className="shrink-0 text-[12.5px] text-(--text-secondary)">:{entry.code}:</span> : null}
             </li>
           ))}
+          {trigger?.emoticon ? (
+            <li role="presentation" className="mt-1 border-t border-(--divider) px-3 pt-1.5 pb-1 text-[12.5px] text-(--text-secondary)">
+              Enter or Tab for the emoji · Esc keeps “{trigger.typed}”
+            </li>
+          ) : null}
         </ul>
       ) : null}
       {replyTo ? (
