@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import type { AccountId } from "../accounts/accounts";
 import type { DeliveryStatus, LinkPreview, Message, ReplyQuote } from "../backend";
 import { authorColor } from "../lib/avatar";
@@ -644,7 +644,8 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
                 {shortText === undefined ? metaSpacer : null}
               </p>
               {shortText !== undefined ? (
-                <p className="mt-1 px-0.5">
+                // Open, "Show less" stays at the bottom of the chat while the message runs past it.
+                <p className={["mt-1 px-0.5", expanded ? "pointer-events-none sticky bottom-3 z-1" : ""].join(" ")}>
                   <button
                     type="button"
                     aria-expanded={expanded}
@@ -652,7 +653,11 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
                       collapsed.current = expanded;
                       setExpanded(!expanded);
                     }}
-                    className="inline-flex items-center gap-0.5 rounded-full bg-(--accent)/20 py-0.75 pr-2 pl-3 text-[13.5px] font-semibold text-(--accent-strong) hover:bg-(--accent)/30"
+                    className={[
+                      "read-more-pill pointer-events-auto inline-flex items-center gap-0.5 rounded-full py-0.75 pr-2 pl-3 text-[13.5px] font-semibold text-(--accent-strong)",
+                      expanded ? "shadow-[0_1px_4px_rgba(11,20,26,.3)]" : "",
+                    ].join(" ")}
+                    style={{ "--pill-base": mine ? "var(--bubble-out)" : "var(--bubble-in)" } as CSSProperties}
                   >
                     {expanded ? "Show less" : "Read more"}
                     <ChevronDownIcon size={18} className={expanded ? "rotate-180" : undefined} />

@@ -568,3 +568,12 @@ button.mention:hover {
 .read-more-fade {
   mask-image: linear-gradient(to bottom, #000 calc(100% - 2.75em), transparent);
 }
+
+/* "Read more" and "Show less": opaque, so it reads over the text it stays on. */
+.read-more-pill {
+  background: color-mix(in oklab, var(--accent) 20%, var(--pill-base));
+}
+
+.read-more-pill:hover {
+  background: color-mix(in oklab, var(--accent) 30%, var(--pill-base));
+}
