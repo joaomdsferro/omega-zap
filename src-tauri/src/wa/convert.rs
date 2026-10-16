@@ -55,6 +55,9 @@ fn large_thumbnail(ext: &wa::message::ExtendedTextMessage) -> Option<CdnRef> {
 struct Fields<'a> {
     direct_path: &'a Option<String>,
     url: &'a Option<String>,
+    /// A full URL on WhatsApp's static host, for files of WhatsApp's own
+    /// messages, like the welcome video: there is no CDN path then.
+    static_url: Option<&'a String>,
     media_key: &'a Option<Vec<u8>>,
     file_sha256: &'a Option<Vec<u8>>,
     file_enc_sha256: &'a Option<Vec<u8>>,
@@ -64,7 +67,9 @@ struct Fields<'a> {
 
 /// Where a file is on the CDN. `kind` is `None` for a photo.
 fn file_ref(f: Fields<'_>, kind: Option<&str>, width: Option<u32>, height: Option<u32>) -> Option<CdnRef> {
-    let path = non_empty(f.direct_path).or_else(|| path_of_url(f.url));
+    let path = non_empty(f.direct_path)
+        .or_else(|| path_of_url(f.url))
+        .or_else(|| f.static_url.filter(|u| u.starts_with("https://")).cloned());
     if path.is_none() || f.media_key.is_none() {
         log::info!("whatsapp: {} with no file to fetch (path: {}, key: {})", kind.unwrap_or("photo"), path.is_some(), f.media_key.is_some());
     }
@@ -96,6 +101,7 @@ macro_rules! fields {
         Fields {
             direct_path: &$m.direct_path,
             url: &$m.url,
+            static_url: None,
             media_key: &$m.media_key,
             file_sha256: &$m.file_sha256,
             file_enc_sha256: &$m.file_enc_sha256,
@@ -106,11 +112,11 @@ macro_rules! fields {
 }
 
 fn image_ref(image: &wa::message::ImageMessage) -> Option<CdnRef> {
-    file_ref(fields!(image), None, image.width, image.height)
+    file_ref(Fields { static_url: image.static_url.as_ref(), ..fields!(image) }, None, image.width, image.height)
 }
 
 fn video_ref(video: &wa::message::VideoMessage, kind: &str) -> Option<CdnRef> {
-    file_ref(fields!(video), Some(kind), video.width, video.height)
+    file_ref(Fields { static_url: video.static_url.as_ref(), ..fields!(video) }, Some(kind), video.width, video.height)
 }
 
 /// The link card of a text message, when the sender's phone made one.
@@ -160,12 +166,6 @@ pub fn content(message: &wa::Message) -> Option<Content> {
         let mut c = Content::media(MsgKind::Media, if gif { "GIF" } else { "Video" }, non_empty(&video.caption));
         with_context(&mut c, &video.context_info);
         c.wa_media = video_ref(video, if gif { "gif" } else { "video" });
-        if c.wa_media.is_none() {
-            log::info!(
-                "whatsapp: video fields: url {:?}, static url {:?}, dash {:?}, thumbnail {}, mime {:?}, size {:?}",
-                video.url, video.static_url, video.dash_manifest_url, video.thumbnail_direct_path.is_some(), video.mimetype, video.file_length,
-            );
-        }
         return Some(c);
     }
     if let Some(video) = base.ptv_message.as_option() {

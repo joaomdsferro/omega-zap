@@ -178,6 +178,37 @@ impl WaAccounts {
 
 pub const ACCOUNT_HEADER: &str = "x-wa-account";
 
+/// A file's download parameters, with the full URL of WhatsApp's static host
+/// when the file is there rather than on the CDN.
+struct StaticUrl {
+    params: DownloadParams,
+    url: Option<String>,
+}
+
+impl whatsapp_rust::download::Downloadable for StaticUrl {
+    fn direct_path(&self) -> Option<&str> {
+        self.params.direct_path()
+    }
+    fn media_key(&self) -> Option<&[u8]> {
+        self.params.media_key()
+    }
+    fn file_enc_sha256(&self) -> Option<&[u8]> {
+        self.params.file_enc_sha256()
+    }
+    fn file_sha256(&self) -> Option<&[u8]> {
+        self.params.file_sha256()
+    }
+    fn file_length(&self) -> Option<u64> {
+        self.params.file_length()
+    }
+    fn app_info(&self) -> MediaType {
+        self.params.app_info()
+    }
+    fn static_url(&self) -> Option<&str> {
+        self.url.as_deref()
+    }
+}
+
 pub struct WaManager {
     app: AppHandle,
     kind: Kind,
@@ -1042,6 +1073,7 @@ impl WaManager {
             .client()
             .await
             .ok_or("WhatsApp is not connected.")?;
+        let static_url = file.path.starts_with("https://").then(|| file.path.clone());
         let params = DownloadParams::encrypted(
             file.path,
             &decode(&file.key)?,
@@ -1051,6 +1083,9 @@ impl WaManager {
             media_type,
         )
         .map_err(|e| format!("Bad file reference: {e}"))?;
+        // WhatsApp's own messages keep their file on its static host, at a
+        // full URL, encrypted as any other.
+        let params = StaticUrl { params, url: static_url };
         // The folder first, so a document's own folder is not what creates it
         // with the default permissions.
         for dir in [self.dir.join(dir_name), path.parent().unwrap_or(&self.dir).to_path_buf()] {
