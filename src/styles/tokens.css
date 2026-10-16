@@ -225,15 +225,16 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-button,
-input,
-textarea {
-  font: inherit;
-  color: inherit;
-}
-
 /* Tailwind's preflight leaves buttons on the default arrow; anything clickable gets the hand. */
 @layer base {
+  /* In the layer, so a control's own colour class still wins. */
+  button,
+  input,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+
   button,
   a[href],
   select,
@@ -571,7 +572,6 @@ button.mention:hover {
 
 /* "Read more" and "Show less": opaque, so it reads over the text it stays on. */
 .read-more-pill {
-  color: var(--accent-strong);
   background: color-mix(in oklab, var(--accent) 20%, var(--pill-base));
   box-shadow: inset 0 0 0 1.5px var(--accent);
 }
