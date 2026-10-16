@@ -176,6 +176,20 @@ function toGroupRef(g: RawGroupRef): GroupRef {
   };
 }
 
+/** WhatsApp's own chat, which sends tips and security notices. */
+const OFFICIAL_CHAT = "0@s.whatsapp.net";
+
+/** The app's mark on its green, for WhatsApp's own chat when it has no picture here. */
+function officialAvatar(account: AccountId): string {
+  const bubble = "M20 11.5a8 8 0 0 1-11.7 7.1L4 20l1.4-4.2A8 8 0 1 1 20 11.5z";
+  const mark =
+    account === "business"
+      ? '<path d="M10.2 15V8h2.1a1.7 1.7 0 0 1 0 3.4h-2.1m0 0h2.5a1.8 1.8 0 0 1 0 3.6h-2.5" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'
+      : '<path d="M9.4 8.3c-.5 1.3.3 3 1.6 4.3s3 2.1 4.3 1.6l.5-1.3-1.7-.9-.8.7c-.8-.4-1.5-1.1-1.9-1.9l.7-.8-.9-1.7z" fill="#fff"/>';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-4 -4 32 32"><rect x="-4" y="-4" width="32" height="32" fill="${account === "business" ? "#128c7e" : "#25d366"}"/><path d="${bubble}" fill="none" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/>${mark}</svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
 function toChat(raw: RawChat, account: AccountId): Chat {
   return {
     id: raw.id,
@@ -183,7 +197,11 @@ function toChat(raw: RawChat, account: AccountId): Chat {
     name: raw.name,
     initials: initialsFor(raw.name),
     avatarHue: hueFor(raw.id),
-    avatarUrl: raw.avatar ? fileUrl(raw.avatar, "avatar") : undefined,
+    avatarUrl: raw.avatar
+      ? fileUrl(raw.avatar, "avatar")
+      : raw.id === OFFICIAL_CHAT && isWhatsApp(account)
+        ? officialAvatar(account)
+        : undefined,
     lastMessage: raw.lastMessage,
     lastAt: new Date(raw.lastAt).toISOString(),
     lastFromMe: raw.lastFromMe,

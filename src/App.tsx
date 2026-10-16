@@ -1187,7 +1187,7 @@ function Shell() {
   }
 
   function subtitleFor(chat: Chat) {
-    const phone = chat.id.match(/^(\d+)@s\.whatsapp\.net$/)?.[1];
+    const phone = chat.id.match(/^([1-9]\d*)@s\.whatsapp\.net$/)?.[1];
     const detail = chat.typing
       ? chat.typing
       : chat.isGroup

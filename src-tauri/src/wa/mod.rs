@@ -137,6 +137,14 @@ impl Kind {
         }
     }
 
+    /// What the phone calls WhatsApp's own chat in this app.
+    fn official_name(self) -> &'static str {
+        match self {
+            Kind::Personal => "WhatsApp",
+            Kind::Business => "WhatsApp Business",
+        }
+    }
+
     /// The account's folder, under the app's data folder.
     pub fn dir(self, data: &std::path::Path) -> PathBuf {
         match self {
@@ -248,7 +256,7 @@ impl WaManager {
         secure_dir(&dir)?;
         let linked = dir.join(LINKED_MARKER).exists();
         let history = History::new(&dir, "whatsapp history", CACHE_FILE);
-        let store = if linked {
+        let mut store = if linked {
             history
                 .load()
                 .unwrap_or_else(|| {
@@ -261,6 +269,7 @@ impl WaManager {
         } else {
             ChatStore::default()
         };
+        store.set_official_name(kind.official_name());
         Ok(Arc::new(Self {
             app,
             kind,
@@ -490,6 +499,7 @@ impl WaManager {
         let mut store = ChatStore::default();
         store.set_chat_state_synced(false);
         store.set_lists_synced(false);
+        store.set_official_name(self.kind.official_name());
         *lock(&self.store) = store;
         self.save_dirty.store(false, Ordering::Release);
         self.chats_dirty.store(true, Ordering::Release);

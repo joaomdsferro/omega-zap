@@ -989,7 +989,13 @@ pub struct ChatStore {
     /// People we blocked, as the server last listed them.
     #[serde(default)]
     blocked: HashSet<String>,
+    /// What WhatsApp's own chat is called here: the app it belongs to.
+    #[serde(skip)]
+    official_name: &'static str,
 }
+
+/// WhatsApp's own account, which sends tips and security notices.
+const OFFICIAL_CHAT: &str = "0@s.whatsapp.net";
 
 /// Messages of a chat to delete from the history database: all up to
 /// `before_ms`, starred ones left when `keep_starred`.
@@ -1026,6 +1032,7 @@ impl Default for ChatStore {
             cleared: HashMap::new(),
             purged: Vec::new(),
             blocked: HashSet::new(),
+            official_name: "",
         }
     }
 }
@@ -1270,6 +1277,9 @@ impl ChatStore {
         let jid = self.canonical(jid);
         if self.own_ids.contains(&jid) {
             return "You".into();
+        }
+        if jid == OFFICIAL_CHAT {
+            return self.official_name().into();
         }
         self.contact_names
             .get(&jid)
@@ -1631,12 +1641,25 @@ impl ChatStore {
         out.into_iter().map(|(_, group)| group).collect()
     }
 
+    /// Names WhatsApp's own chat after the app the session belongs to, as
+    /// the phone does: "WhatsApp", or "WhatsApp Business".
+    pub fn set_official_name(&mut self, name: &'static str) {
+        self.official_name = name;
+    }
+
+    fn official_name(&self) -> &'static str {
+        if self.official_name.is_empty() { "WhatsApp" } else { self.official_name }
+    }
+
     fn chat_name(&self, id: &str, chat: &StoredChat) -> String {
         if chat.is_group {
             return chat.name.clone().unwrap_or_else(|| "Group".into());
         }
         if self.own_ids.contains(&id.to_string()) {
             return "You".into();
+        }
+        if id == OFFICIAL_CHAT {
+            return self.official_name().into();
         }
         self.contact_names
             .get(id)

@@ -54,6 +54,7 @@ fn large_thumbnail(ext: &wa::message::ExtendedTextMessage) -> Option<CdnRef> {
 /// The fields every WhatsApp media message carries, whatever its type.
 struct Fields<'a> {
     direct_path: &'a Option<String>,
+    url: &'a Option<String>,
     media_key: &'a Option<Vec<u8>>,
     file_sha256: &'a Option<Vec<u8>>,
     file_enc_sha256: &'a Option<Vec<u8>>,
@@ -63,8 +64,12 @@ struct Fields<'a> {
 
 /// Where a file is on the CDN. `kind` is `None` for a photo.
 fn file_ref(f: Fields<'_>, kind: Option<&str>, width: Option<u32>, height: Option<u32>) -> Option<CdnRef> {
+    let path = non_empty(f.direct_path).or_else(|| path_of_url(f.url));
+    if path.is_none() || f.media_key.is_none() {
+        log::info!("whatsapp: {} with no file to fetch (path: {}, key: {})", kind.unwrap_or("photo"), path.is_some(), f.media_key.is_some());
+    }
     Some(CdnRef {
-        path: non_empty(f.direct_path)?,
+        path: path?,
         key: encoded(f.media_key)?,
         sha256: encoded(f.file_sha256)?,
         enc_sha256: encoded(f.file_enc_sha256)?,
@@ -77,10 +82,20 @@ fn file_ref(f: Fields<'_>, kind: Option<&str>, width: Option<u32>, height: Optio
     })
 }
 
+/// The CDN path in a full media URL. Some messages, like WhatsApp's own
+/// welcome video, carry only the URL.
+fn path_of_url(url: &Option<String>) -> Option<String> {
+    let rest = non_empty(url)?;
+    let rest = rest.split_once("://").map_or(rest.as_str(), |(_, r)| r);
+    let path = &rest[rest.find('/')?..];
+    Some(path.to_string())
+}
+
 macro_rules! fields {
     ($m:expr) => {
         Fields {
             direct_path: &$m.direct_path,
+            url: &$m.url,
             media_key: &$m.media_key,
             file_sha256: &$m.file_sha256,
             file_enc_sha256: &$m.file_enc_sha256,
