@@ -1285,6 +1285,10 @@ impl WaManager {
         let Some(client) = self.client().await else {
             return;
         };
+        // Offline meanwhile: the next connection announces it.
+        if !client.is_connected() {
+            return;
+        }
         let active = self.active.load(Ordering::Acquire);
         if self.announced.swap(if active { 2 } else { 1 }, Ordering::AcqRel) == if active { 2 } else { 1 } {
             return;
