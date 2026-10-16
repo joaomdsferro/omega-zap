@@ -571,9 +571,18 @@ button.mention:hover {
 
 /* "Read more" and "Show less": opaque, so it reads over the text it stays on. */
 .read-more-pill {
+  color: var(--accent-strong);
   background: color-mix(in oklab, var(--accent) 20%, var(--pill-base));
+  box-shadow: inset 0 0 0 1.5px var(--accent);
 }
 
 .read-more-pill:hover {
   background: color-mix(in oklab, var(--accent) 30%, var(--pill-base));
+}
+
+/* "Show less" kept at the bottom of the chat: lifted off the text under it. */
+.read-more-pill-stuck {
+  box-shadow:
+    inset 0 0 0 1.5px var(--accent),
+    0 1px 4px rgba(11, 20, 26, 0.3);
 }

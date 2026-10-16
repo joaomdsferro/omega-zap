@@ -655,7 +655,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
                     }}
                     className={[
                       "read-more-pill pointer-events-auto inline-flex items-center gap-0.5 rounded-full py-0.75 pr-2 pl-3 text-[13.5px] font-semibold text-(--accent-strong)",
-                      expanded ? "shadow-[0_1px_4px_rgba(11,20,26,.3)]" : "",
+                      expanded ? "read-more-pill-stuck" : "",
                     ].join(" ")}
                     style={{ "--pill-base": mine ? "var(--bubble-out)" : "var(--bubble-in)" } as CSSProperties}
                   >
