@@ -32,6 +32,8 @@ interface MessageInputProps {
   placeholder: string;
   disabled?: boolean;
   label: string;
+  /** People picked to mention, "@Name", marked where they are in the text. */
+  mentions?: string[];
 }
 
 interface Snapshot {
@@ -93,7 +95,7 @@ function pointAt(root: HTMLElement, offset: number): [Node, number] {
 }
 
 export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(function MessageInput(
-  { onChange, onCaret, onKeyDown, onPasteFiles, placeholder, disabled, label },
+  { onChange, onCaret, onKeyDown, onPasteFiles, placeholder, disabled, label, mentions },
   ref,
 ) {
   const box = useRef<HTMLDivElement>(null);
@@ -108,6 +110,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   report.current = onChange;
   const reportCaret = useRef(onCaret);
   reportCaret.current = onCaret;
+  const marked = useRef(mentions);
+  marked.current = mentions;
 
   function readSelection(): { start: number; end: number } | null {
     const root = box.current;
@@ -138,7 +142,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   function draw(value: string, start: number, end = start) {
     const root = box.current;
     if (!root) return;
-    const html = editorHtml(value);
+    const html = editorHtml(value, 20, marked.current);
     if (root.innerHTML !== html) root.innerHTML = html;
     placeSelection(start, end);
   }
@@ -229,6 +233,13 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       report.current(value, value.length);
     },
   }));
+
+  // A mention just picked is marked once the text with it has been drawn.
+  const mentionKey = mentions?.join("\n") ?? "";
+  useLayoutEffect(() => {
+    const at = readSelection() ?? selection.current;
+    draw(text.current, at.start, at.end);
+  }, [mentionKey]);
 
   // React's onBeforeInput is a different event, without `inputType`.
   const beforeInput = useRef<(event: InputEvent) => void>(() => {});

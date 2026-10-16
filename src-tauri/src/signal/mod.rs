@@ -56,7 +56,8 @@ struct Quote {
 pub struct Styled {
     /// The text with its markers taken out.
     pub body: String,
-    /// `{ start, length, style }` over `body`, passed on to the bridge.
+    /// `{ start, length, style }` or `{ start, length, mention }` over `body`,
+    /// passed on to the bridge.
     pub ranges: Vec<serde_json::Value>,
 }
 
@@ -74,7 +75,13 @@ enum BridgeEvent {
     Qr { url: String, ttl_secs: u64 },
     Me { id: String, phone: String, name: Option<String> },
     Contact { id: String, name: String, saved: bool },
-    Group { id: String, name: String },
+    Group {
+        id: String,
+        name: String,
+        /// ACIs; older bridges leave them out.
+        #[serde(default)]
+        members: Vec<String>,
+    },
     Message {
         chat: String,
         is_group: bool,
@@ -550,6 +557,11 @@ impl SignalManager {
 
     pub fn person(&self, id: &str) -> crate::store::PersonDto {
         lock(&self.store).person(id)
+    }
+
+    /// A group's info from what is known here: Signal's bridge names its members.
+    pub fn group_info(&self, id: &str) -> crate::store::GroupInfoDto {
+        lock(&self.store).group_info(id)
     }
 
     // Signal has no favorites, lists or stars of its own, so these stay on
@@ -1229,8 +1241,17 @@ impl SignalManager {
                 drop(store);
                 self.mark_dirty();
             }
-            BridgeEvent::Group { id, name } => {
-                lock(&self.store).set_group_name(&id, &name);
+            BridgeEvent::Group { id, name, members } => {
+                let mut store = lock(&self.store);
+                store.set_group_name(&id, &name);
+                if !members.is_empty() {
+                    let members: Vec<_> = members
+                        .into_iter()
+                        .map(|id| crate::store::GroupMember { id, pn: None, lid: None, admin: false, super_admin: false })
+                        .collect();
+                    store.set_group_participants(&id, &members);
+                }
+                drop(store);
                 self.mark_dirty();
             }
             BridgeEvent::Message { chat, is_group, sender, from_me, ts, kind, text, media_label, quote, attachments, history, delivery } => {

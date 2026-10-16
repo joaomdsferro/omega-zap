@@ -21,6 +21,7 @@ use whatsapp_rust::prelude::*;
 use whatsapp_rust::wacore::store::DevicePropsOverride;
 use whatsapp_rust::wacore::types::events::LazyHistorySync;
 use whatsapp_rust::wacore::iq::privacy::{PrivacyCategory, PrivacyValue};
+use whatsapp_rust::wacore::types::message::AddressingMode;
 use whatsapp_rust::wacore::types::presence::{ChatActivity, ReceiptType};
 use whatsapp_rust::waproto::buffa::MessageField;
 use whatsapp_rust::waproto::whatsapp::sync_action_value::label_edit_action::ListType;
@@ -702,6 +703,7 @@ impl WaManager {
         reply_to: Option<&str>,
         link: Option<OutgoingLink>,
         forwarded: u32,
+        mentions: &[String],
     ) -> Result<MessageDto, String> {
         let text = text.trim();
         if text.is_empty() {
@@ -709,8 +711,10 @@ impl WaManager {
         }
         let client = self.connected_client().await?;
         let jid: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
+        let (text, mentioned) = mentioning(&client, &jid, text, mentions).await;
+        let text = text.as_str();
         let (context, quoted) = self.quote(chat_id, reply_to)?.unzip();
-        let context = forwarding(context, forwarded);
+        let context = with_mentions(forwarding(context, forwarded), mentioned);
         let (outgoing, card) = match link.filter(|l| text.contains(&l.url)) {
             Some(link) => {
                 let (ext, card) = self.link_message(&client, text, link).await;
@@ -825,9 +829,16 @@ impl WaManager {
             }
         };
 
-        let caption = file.caption();
+        let (caption, mentioned) = match file.caption() {
+            Some(caption) => {
+                let (caption, mentioned) = mentioning(&client, &jid, &caption, &file.mentions).await;
+                (Some(caption), mentioned)
+            }
+            None => (None, Vec::new()),
+        };
         let thumbnail = file.thumbnail.as_deref().and_then(|t| BASE64.decode(t).ok());
-        let context_info = forwarding(context, file.forwarded).map(MessageField::some).unwrap_or_default();
+        let context_info =
+            with_mentions(forwarding(context, file.forwarded), mentioned).map(MessageField::some).unwrap_or_default();
         let mut outgoing = wa::Message::default();
         match media_type {
             MediaType::Image => {
@@ -2759,6 +2770,61 @@ fn forwarding(context: Option<wa::ContextInfo>, score: u32) -> Option<wa::Contex
         context.forwarding_score = Some(score);
         context
     })
+}
+
+/// `context` naming the people a text mentions, so they are told.
+fn with_mentions(context: Option<wa::ContextInfo>, mentioned: Vec<String>) -> Option<wa::ContextInfo> {
+    if mentioned.is_empty() {
+        return context;
+    }
+    Some({
+        let mut context = context.unwrap_or_default();
+        context.mentioned_jid = mentioned;
+        context
+    })
+}
+
+/// `text` and the people it mentions as the group names them. The app
+/// writes "@<number>" for each of `mentions`, by the id it knows them by;
+/// a group that addresses its members by LID gets their LIDs instead, one
+/// by phone number gets numbers. A mention no longer in the text is dropped.
+async fn mentioning(client: &Arc<Client>, chat: &Jid, text: &str, mentions: &[String]) -> (String, Vec<String>) {
+    if mentions.is_empty() {
+        return (text.to_string(), Vec::new());
+    }
+    let routing = if whatsapp_rust::wacore_binary::JidExt::is_group(chat) { client.groups().routing_info(chat).await.ok() } else { None };
+    let mut text = text.to_string();
+    let mut mentioned = Vec::new();
+    for id in mentions {
+        let Ok(person) = id.parse::<Jid>() else { continue };
+        let written = format!("@{}", person.user);
+        if find_mention(&text, &written).is_none() {
+            continue;
+        }
+        let addressed = match routing.as_deref() {
+            Some(r) if matches!(r.addressing_mode, AddressingMode::Lid) && person.is_pn() => {
+                r.lid_user_for_phone_user(&person.user).map(|lid| Jid::lid(lid.clone()))
+            }
+            Some(r) if matches!(r.addressing_mode, AddressingMode::Pn) && person.is_lid() => {
+                r.phone_jid_for_lid_user(&person.user).cloned()
+            }
+            _ => None,
+        }
+        .unwrap_or_else(|| person.clone());
+        let now = format!("@{}", addressed.user);
+        while let Some(at) = find_mention(&text, &written) {
+            text.replace_range(at..at + written.len(), &now);
+        }
+        mentioned.push(addressed.to_non_ad_string());
+    }
+    (text, mentioned)
+}
+
+/// Where "@<number>" is in `text` as a whole word, not the start of a longer number.
+fn find_mention(text: &str, written: &str) -> Option<usize> {
+    text.match_indices(written)
+        .find(|(at, _)| !text[at + written.len()..].starts_with(|c: char| c.is_ascii_digit()))
+        .map(|(at, _)| at)
 }
 
 /// A group's members as the store keeps them: (id, phone number id, LID).

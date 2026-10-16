@@ -521,17 +521,18 @@ export interface ChatBackend {
   /**
    * Sends a text, quoting the message `replyTo` when given, with a card for
    * its link when given. `forwarded` is the forwarding score of a message
-   * sent on from another chat.
+   * sent on from another chat. `mentions` are the people picked in the
+   * text, written there as "@Name".
    */
-  sendText(chatId: string, text: string, replyTo?: string, link?: OutgoingLink, forwarded?: number): Promise<Message>;
+  sendText(chatId: string, text: string, replyTo?: string, link?: OutgoingLink, forwarded?: number, mentions?: Mention[]): Promise<Message>;
   /** Sends a sticker or GIF. */
   sendMedia?(chatId: string, item: OutgoingMedia, replyTo?: string): Promise<Message>;
   /** Stickers kept to send; absent where stickers can't be sent. */
   readonly stickers?: StickerShelf;
   /** Records voice messages; absent where they can't be sent. */
   readonly voice?: VoiceRecorder;
-  /** Uploads a file and sends it, with `caption` under it. */
-  sendFile?(chatId: string, file: File, caption?: string, replyTo?: string, forwarded?: number): Promise<Message>;
+  /** Uploads a file and sends it, with `caption` under it, which can mention people as a text does. */
+  sendFile?(chatId: string, file: File, caption?: string, replyTo?: string, forwarded?: number, mentions?: Mention[]): Promise<Message>;
   /**
    * Deletes a message for us, or for everyone when it is ours. Returns the
    * placeholder left behind, or `null` when nothing is shown any more.

@@ -144,7 +144,7 @@ fn recipient(
             if let Some(proto::group::group_attribute_blob::Content::Title(title)) =
                 &group.snapshot.title.content
             {
-                emit(Event::Group { id: id.clone(), name: title.clone() });
+                emit(Event::Group { id: id.clone(), name: title.clone(), members: Vec::new() });
             }
             Recipient::Group(id)
         }

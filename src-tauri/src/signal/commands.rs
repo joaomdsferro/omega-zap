@@ -218,3 +218,8 @@ pub fn signal_contacts(mgr: Mgr<'_>) -> Vec<ContactDto> {
 pub fn signal_person(mgr: Mgr<'_>, id: String) -> crate::store::PersonDto {
     mgr.person(&id)
 }
+
+#[tauri::command]
+pub fn signal_group_info(mgr: Mgr<'_>, id: String) -> crate::store::GroupInfoDto {
+    mgr.group_info(&id)
+}

@@ -347,11 +347,16 @@ const SIGNAL_STYLES: [number, SignalStyle][] = [
 
 export type SignalStyle = "bold" | "italic" | "strikethrough" | "monospace";
 
+/** A look over part of the text, or a mention: U+FFFC standing for the person with this ACI. */
 export interface StyleRange {
   start: number;
   length: number;
-  style: SignalStyle;
+  style?: SignalStyle;
+  mention?: string;
 }
+
+/** "@<ACI>", as the app writes a Signal mention. */
+const SIGNAL_MENTION = /@([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?![\p{L}\p{N}])/giu;
 
 /**
  * Signal formats with ranges over plain text rather than markers in it: the
@@ -373,7 +378,15 @@ export function signalBody(text: string): { body: string; ranges: StyleRange[] }
         if (!open.has(style)) open.set(style, body.length);
       } else close(style);
     }
-    body += run.text;
+    // A mention goes as Signal writes it: U+FFFC, named by a range.
+    let at = 0;
+    for (const found of run.text.matchAll(SIGNAL_MENTION)) {
+      body += run.text.slice(at, found.index);
+      ranges.push({ start: body.length, length: 1, mention: found[1].toLowerCase() });
+      body += "\uFFFC";
+      at = found.index + found[0].length;
+    }
+    body += run.text.slice(at);
   }
   for (const [, style] of SIGNAL_STYLES) close(style);
   return { body, ranges };
@@ -400,18 +413,47 @@ function emojiHtml(text: string, size: number): string {
 }
 
 /**
- * The composer's contents: the same formatting a message gets, with its
- * markers kept and dimmed so they can still be edited.
+ * Where each of `mentions` ("@Name") is in `text`: as a whole word, the
+ * longer one where two overlap ("@Ana Maria" over "@Ana").
  */
-export function editorHtml(text: string, emojiSize = 20): string {
+export function mentionSpans(text: string, mentions: string[]): { start: number; end: number; text: string }[] {
+  const spans: { start: number; end: number; text: string }[] = [];
+  for (const mention of [...new Set(mentions)].sort((a, b) => b.length - a.length)) {
+    for (let at = text.indexOf(mention); at >= 0; at = text.indexOf(mention, at + 1)) {
+      const end = at + mention.length;
+      if (WORD.test(text[end] ?? "") || WORD.test(text[at - 1] ?? "")) continue;
+      if (spans.some((s) => at < s.end && end > s.start)) continue;
+      spans.push({ start: at, end, text: mention });
+    }
+  }
+  return spans.sort((a, b) => a.start - b.start);
+}
+
+/**
+ * The composer's contents: the same formatting a message gets, with its
+ * markers kept and dimmed so they can still be edited, and the people
+ * picked to mention marked.
+ */
+export function editorHtml(text: string, emojiSize = 20, mentions: string[] = []): string {
+  const spans = mentions.length ? mentionSpans(text, mentions) : [];
   let html = "";
   for (const run of tokenize(text)) {
-    const body = emojiHtml(run.text, emojiSize);
     const classes = [styleClass(run.styles)];
     if (run.kind === "marker") classes.push("composer-marker");
     if (run.kind === "link") classes.push("text-(--accent)");
     const className = classes.filter(Boolean).join(" ");
-    html += className ? `<span class="${className}">${body}</span>` : body;
+    // A run split where mentions start and end, those parts marked.
+    const end = run.start + run.text.length;
+    const cuts = [run.start, end];
+    for (const span of spans) for (const at of [span.start, span.end]) if (at > run.start && at < end) cuts.push(at);
+    cuts.sort((a, b) => a - b);
+    for (let i = 0; i < cuts.length - 1; i++) {
+      if (cuts[i] === cuts[i + 1]) continue;
+      const body = emojiHtml(text.slice(cuts[i], cuts[i + 1]), emojiSize);
+      const mention = spans.some((s) => cuts[i] >= s.start && cuts[i] < s.end);
+      const names = [className, mention ? "mention" : ""].filter(Boolean).join(" ");
+      html += names ? `<span class="${names}">${body}</span>` : body;
+    }
   }
   // A line break at the very end only takes up a line with something after it.
   if (text.endsWith("\n")) html += "<br data-end>";

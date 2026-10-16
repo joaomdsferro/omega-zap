@@ -4,7 +4,7 @@ import type { AccountId } from "../accounts/accounts";
 import { COMMAND_PREFIX } from "../accounts/useAccount";
 import { hueFor, initialsFor } from "../lib/avatar";
 import { fileUrl } from "../lib/files";
-import { signalBody } from "../lib/markup";
+import { mentionSpans, signalBody } from "../lib/markup";
 import { MAX_SEND_BYTES, base64Json, fileDetails } from "../lib/outgoing";
 import type {
   Pins,
@@ -252,6 +252,26 @@ function toMessage(raw: RawMessage): Message {
   };
 }
 
+/**
+ * `text` with each of `mentions` ("@Name") written as the network keeps it:
+ * "@<number>" for WhatsApp (the Rust side picks the number the group uses),
+ * "@<ACI>" for Signal. Also the ids of those still in the text.
+ */
+function wireMentions(text: string, mentions: Mention[] = []): { text: string; ids: string[] } {
+  if (!mentions.length) return { text, ids: [] };
+  const idOf = new Map(mentions.map((m) => [m.text, m.id]));
+  const ids = new Set<string>();
+  let out = "";
+  let at = 0;
+  for (const span of mentionSpans(text, [...idOf.keys()])) {
+    const id = idOf.get(span.text)!;
+    out += `${text.slice(at, span.start)}@${id.split("@")[0]}`;
+    ids.add(id);
+    at = span.end;
+  }
+  return { text: out + text.slice(at), ids: [...ids] };
+}
+
 /** Real chats, served by the Rust side from a linked account's session. */
 export class TauriBackend implements ChatBackend {
   readonly demo = false;
@@ -380,6 +400,8 @@ export class TauriBackend implements ChatBackend {
         toGroupInfo(await invoke<RawGroupInfo>("wa_edit_group", { id, name: name ?? null, description: description ?? null }), account);
       this.changeMembers = async (id, change, members) =>
         toGroupInfo(await invoke<RawGroupInfo>("wa_change_members", { id, change, members }), account);
+    } else {
+      this.groupInfo = async (id) => toGroupInfo(await invoke<RawGroupInfo>("signal_group_info", { id }), account);
     }
   }
 
@@ -396,17 +418,21 @@ export class TauriBackend implements ChatBackend {
     return (await invoke<RawMessage[]>(`${this.prefix}_get_messages`, { chatId })).map(toMessage);
   }
 
-  async sendText(chatId: string, text: string, replyTo?: string, link?: OutgoingLink, forwarded?: number): Promise<Message> {
-    const args: Record<string, unknown> = { chatId, text, replyTo: replyTo ?? null, link: link ?? null, forwarded: forwarded ?? null };
+  async sendText(chatId: string, text: string, replyTo?: string, link?: OutgoingLink, forwarded?: number, mentions?: Mention[]): Promise<Message> {
+    const wire = wireMentions(text.trim(), mentions);
+    const args: Record<string, unknown> = { chatId, text: wire.text, replyTo: replyTo ?? null, link: link ?? null, forwarded: forwarded ?? null };
+    if (this.account === "whatsapp") args.mentions = wire.ids;
     // Signal formats with ranges over the text rather than markers in it.
-    if (this.account === "signal") args.styled = signalBody(text.trim());
+    if (this.account === "signal") args.styled = signalBody(wire.text);
     return toMessage(await invoke<RawMessage>(`${this.prefix}_send_text`, args));
   }
 
-  async sendFile(chatId: string, file: File, caption?: string, replyTo?: string, forwarded?: number): Promise<Message> {
+  async sendFile(chatId: string, file: File, caption?: string, replyTo?: string, forwarded?: number, mentions?: Mention[]): Promise<Message> {
     if (file.size > MAX_SEND_BYTES) throw new Error(`${file.name} is larger than ${MAX_SEND_BYTES / 1024 / 1024} MB.`);
     const details = await fileDetails(file);
-    const description = { chatId, name: file.name, mime: file.type, caption, replyTo, forwarded: forwarded ?? 0, ...details };
+    // Signal's captions carry no mention ranges here, so there they stay "@Name".
+    const wire = this.account === "whatsapp" && caption ? wireMentions(caption, mentions) : { text: caption, ids: [] };
+    const description = { chatId, name: file.name, mime: file.type, caption: wire.text, mentions: wire.ids, replyTo, forwarded: forwarded ?? 0, ...details };
     const bytes = new Uint8Array(await file.arrayBuffer());
     const raw = await invoke<RawMessage>(`${this.prefix}_send_file`, bytes, {
       headers: { "x-file": base64Json(description) },

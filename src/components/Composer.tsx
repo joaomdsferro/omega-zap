@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { AccountId } from "../accounts/accounts";
-import type { LinkPreview, OutgoingLink, OutgoingMedia, ReplyQuote, StickerShelf, TypingState, VoiceRecorder } from "../backend";
+import type { GroupMember, LinkPreview, Mention, OutgoingLink, OutgoingMedia, ReplyQuote, StickerShelf, TypingState, VoiceRecorder } from "../backend";
 import { Emoji } from "../lib/emoji";
 import { emojiForShortcode, emoticonAtEnd, searchEmoji } from "../lib/emojiSearch";
 import { SHORTCUTS, matches } from "../lib/shortcuts";
 import { formatFileSize, formatVoiceDuration } from "../lib/format";
 import { URL_PATTERN, fetchLinkPreview } from "../lib/links";
-import { FormattedLine } from "../lib/markup";
+import { FormattedLine, mentionSpans } from "../lib/markup";
 import { outgoingLink } from "../lib/outgoing";
 import { useSettings } from "../settings/settings";
 import { CloseIcon, FileIcon, MicIcon, PauseIcon, PlayIcon, PlusIcon, SendIcon, SmileIcon, TrashIcon } from "./Icons";
+import { Avatar } from "./Avatar";
 import { MediaPanel } from "./MediaPanel";
 import { MessageInput, type MessageInputHandle } from "./MessageInput";
 
@@ -22,8 +23,13 @@ interface ComposerProps {
   /** The message being replied to, shown above the text box. */
   replyTo?: ReplyQuote;
   onCancelReply?: () => void;
-  /** Sends the text, or the files with the text as their caption; a text with a link can carry its card. */
-  onSend: (text: string, files: File[], link?: OutgoingLink) => Promise<void>;
+  /**
+   * Sends the text, or the files with the text as their caption; a text with
+   * a link can carry its card, and `mentions` are the people picked with "@".
+   */
+  onSend: (text: string, files: File[], link?: OutgoingLink, mentions?: Mention[]) => Promise<void>;
+  /** The people "@" can mention, in a group; absent elsewhere. */
+  loadMembers?: () => Promise<GroupMember[]>;
   /** Files waiting to be sent. */
   files?: File[];
   /** Adds files to send; absent where files can't be sent. */
@@ -419,6 +425,25 @@ const SUGGESTIONS = 8;
 const SHORTCODE = /(?:^|\s):([\p{L}\p{N}_+-]{2,})$/u;
 /** A whole shortcode, closed with a colon: ":laughing:". */
 const CLOSED_SHORTCODE = /(?:^|\s):([\p{L}\p{N}_+-]+):$/u;
+/** What starts a mention: "@", at the start or after a space, and what follows it. */
+const MENTION = /(?:^|\s)@([^\s@]*)$/u;
+
+/** Text without case or accents, to match names against what is typed. */
+function folded(text: string): string {
+  return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
+/** The members `typed` (what follows "@") could mean: a word of the name starting with it, or digits of the number. */
+function membersMatching(members: GroupMember[], typed: string): GroupMember[] {
+  const query = folded(typed);
+  if (!query) return members;
+  const digits = /^\+?\d+$/.test(typed) ? typed.replace(/\D/g, "") : "";
+  return members.filter((m) => {
+    const name = folded(m.name);
+    if (name.startsWith(query) || name.split(/[\s.,_-]+/).some((word) => word.startsWith(query))) return true;
+    return Boolean(digits) && (m.phone ?? m.name).replace(/\D/g, "").includes(digits);
+  });
+}
 
 /** The card for the link being typed, once it has been read; `undefined` while it is looked up. */
 function useTypedLink(text: string, enabled: boolean) {
@@ -439,7 +464,7 @@ function useTypedLink(text: string, enabled: boolean) {
   return found?.url === url ? { url, preview: found.preview, loading: false } : { url, preview: null, loading: true };
 }
 
-export function Composer({ chatId, account, disabled, disabledReason, replyTo, onCancelReply, onSend, files = [], onAddFiles, onRemoveFile, onTyping, onEditLast, onSendMedia, stickers, voice, onError }: ComposerProps) {
+export function Composer({ chatId, account, disabled, disabledReason, replyTo, onCancelReply, onSend, loadMembers, files = [], onAddFiles, onRemoveFile, onTyping, onEditLast, onSendMedia, stickers, voice, onError }: ComposerProps) {
   const { settings } = useSettings();
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
@@ -455,8 +480,13 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
   // The Stickers tab, while open, makes pasted pictures into stickers.
   const pasteIntoStickers = useRef<((files: File[]) => boolean) | null>(null);
 
+  // The people picked with "@" in the text being written.
+  const [picked, setPicked] = useState<Mention[]>([]);
+  const [members, setMembers] = useState<{ chatId: string; list: GroupMember[] } | null>(null);
+
   useEffect(() => {
     input.current?.setText("");
+    setPicked([]);
     setEmojiOpen(false);
     setRecording(false);
     input.current?.focus();
@@ -505,9 +535,29 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [disabled]);
 
+  // "@" in a group offers its members; picking one writes "@Name".
+  const before = text.slice(0, caret);
+  const mentionTyped = loadMembers ? MENTION.exec(before)?.[1] : undefined;
+  const wantsMembers = mentionTyped !== undefined;
+  useEffect(() => {
+    if (!wantsMembers || !loadMembers || members?.chatId === chatId) return;
+    let alive = true;
+    loadMembers()
+      .then((list) => alive && setMembers({ chatId, list }))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [wantsMembers, loadMembers, chatId, members?.chatId]);
+  const memberList = members?.chatId === chatId ? members.list : null;
+  const mentionKey = mentionTyped !== undefined ? `${caret}:@${mentionTyped}` : null;
+  const mentionMatches = useMemo(
+    () => (mentionTyped !== undefined && memberList ? membersMatching(memberList, mentionTyped) : []),
+    [mentionTyped, memberList],
+  );
+
   // ":joy" offers 😂 and its neighbours, and ":)" offers 🙂, which Esc or
   // typing on turn down to keep the text.
-  const before = text.slice(0, caret);
   const trigger = useMemo(() => {
     const shortcode = SHORTCODE.exec(before);
     const found = shortcode ? searchEmoji(shortcode[1], SUGGESTIONS) : [];
@@ -517,14 +567,28 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
   }, [before]);
   /** The suggestion turned down, by where it was typed. */
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const mentioning = mentionKey !== dismissed ? mentionMatches : [];
   const triggerKey = trigger ? `${caret}:${trigger.typed}` : null;
-  const suggestions = trigger && triggerKey !== dismissed ? trigger.list : [];
+  const suggestions = trigger && triggerKey !== dismissed && !mentioning.length ? trigger.list : [];
   const [chosen, setChosen] = useState(0);
-  useEffect(() => setChosen(0), [triggerKey]);
+  useEffect(() => setChosen(0), [triggerKey, mentionKey]);
+  const options = mentioning.length || suggestions.length;
+  const optionList = useRef<HTMLUListElement>(null);
+  // The option moved to with the arrows stays in sight.
+  useEffect(() => {
+    optionList.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [chosen]);
 
   function suggest(emoji: string) {
     if (!trigger) return;
     input.current?.replaceBefore(caret - trigger.typed.length, emoji);
+  }
+
+  function mention(member: GroupMember) {
+    if (mentionTyped === undefined) return;
+    const written = `@${member.name}`;
+    setPicked((prev) => [...prev.filter((m) => m.text !== written), { text: written, id: member.id }]);
+    input.current?.replaceBefore(caret - mentionTyped.length - 1, `${written} `);
   }
 
   // Closing the shortcode with a colon puts its emoji in at once.
@@ -547,8 +611,11 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
     typing.stop();
     try {
       const card = !files.length && linkCard?.preview ? await outgoingLink(linkCard.preview) : undefined;
-      await onSend(value, files, card);
+      const spans = mentionSpans(value, picked.map((m) => m.text));
+      const mentions = picked.filter((m) => spans.some((s) => s.text === m.text));
+      await onSend(value, files, card, mentions.length ? mentions : undefined);
       input.current?.setText("");
+      setPicked([]);
       setHiddenLink(null);
     } finally {
       setSending(false);
@@ -563,21 +630,22 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     if (e.nativeEvent.isComposing) return;
-    if (suggestions.length) {
+    if (options) {
       const move = { ArrowDown: 1, ArrowUp: -1 }[e.key];
       if (move) {
         e.preventDefault();
-        setChosen((at) => (at + move + suggestions.length) % suggestions.length);
+        setChosen((at) => (at + move + options) % options);
         return;
       }
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
-        suggest(suggestions[chosen].emoji);
+        if (mentioning.length) mention(mentioning[Math.min(chosen, options - 1)]);
+        else suggest(suggestions[chosen].emoji);
         return;
       }
       if (e.key === "Escape") {
         e.preventDefault();
-        setDismissed(triggerKey);
+        setDismissed(mentioning.length ? mentionKey : triggerKey);
         return;
       }
     }
@@ -625,8 +693,40 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
           />
         </div>
       ) : null}
+      {mentioning.length ? (
+        <ul
+          ref={optionList}
+          role="listbox"
+          aria-label="People to mention"
+          className="absolute bottom-full left-16 z-40 mb-2 max-h-72 w-80 overflow-y-auto rounded-xl bg-(--panel-bg) py-1"
+          style={{ boxShadow: "0 2px 5px rgba(11,20,26,.26), 0 2px 10px rgba(11,20,26,.16)" }}
+        >
+          {mentioning.map((member, index) => (
+            <li
+              key={member.id}
+              role="option"
+              aria-selected={index === chosen}
+              // Pressing down here would take the cursor out of the box.
+              onPointerDown={(event) => event.preventDefault()}
+              onClick={() => mention(member)}
+              onPointerEnter={() => setChosen(index)}
+              className={[
+                "flex cursor-pointer items-center gap-3 px-3 py-1.5 text-[14px] text-(--text-primary)",
+                index === chosen ? "bg-(--hover-bg)" : "",
+              ].join(" ")}
+            >
+              <Avatar name={member.name} initials={member.initials} hue={member.avatarHue} src={member.avatarUrl} size={32} />
+              <span className="min-w-0 flex-1 truncate">{member.name}</span>
+              {member.phone && member.phone !== member.name ? (
+                <span className="shrink-0 text-[12.5px] text-(--text-secondary)">{member.phone}</span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {suggestions.length ? (
         <ul
+          ref={optionList}
           role="listbox"
           aria-label="Emoji suggestions"
           className="absolute bottom-full left-16 z-40 mb-2 w-72 overflow-hidden rounded-xl bg-(--panel-bg) py-1"
@@ -760,6 +860,7 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
 
         <MessageInput
           ref={input}
+          mentions={picked.map((m) => m.text)}
           onChange={(value, at) => {
             typing.typed(value.trim().length > 0);
             setText(value);

@@ -90,7 +90,9 @@ WhatsApp only, for now.
 - **Apple emoji**, as WhatsApp Web and Signal Desktop draw them, with an emoji and characters panel and
   `:name` suggestions while typing. The Slack and GitHub shortcodes work too: `:laughing`, `:+1`, and
   closing one with a colon (`:fire:`) puts the emoji in at once.
-- **Mentions** show the person's name.
+- **Mentions** show the person's name. In a group, `@` offers its members (type to narrow, ↑↓ and
+  Enter or Tab to pick, Esc to keep the `@`); the people picked are told, on WhatsApp in texts and
+  captions, on Signal in texts.
 - **Replies**: clicking a quote jumps to the quoted message.
 - **Reactions** on both networks. Hover a message to react. Each emoji shows its own count, yours
   highlighted; click them to see who reacted, and to take yours back.

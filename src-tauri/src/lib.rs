@@ -423,6 +423,7 @@ pub fn run() {
             signal::commands::signal_get_messages,
             signal::commands::signal_mark_read,
             signal::commands::signal_send_text,
+            signal::commands::signal_group_info,
             signal::commands::signal_send_file,
             signal::commands::signal_delete_message,
             signal::commands::signal_edit_message,

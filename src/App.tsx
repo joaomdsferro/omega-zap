@@ -12,6 +12,7 @@ import {
   type GroupInfo,
   type GroupMember,
   type MemberChange,
+  type Mention,
   type Message,
   type OutgoingLink,
   type OutgoingMedia,
@@ -629,13 +630,13 @@ function Shell() {
     [selectedBackend, selectedId],
   );
 
-  async function handleSend(text: string, files: File[], replyTo?: string, onFileSent?: () => void, link?: OutgoingLink) {
+  async function handleSend(text: string, files: File[], replyTo?: string, onFileSent?: () => void, link?: OutgoingLink, mentions?: Mention[]) {
     const backend = selectedBackend;
     const chatId = selectedId;
     if (!backend || !chatId) return;
     try {
       if (!files.length || !backend.sendFile) {
-        const message = await backend.sendText(chatId, text, replyTo, link);
+        const message = await backend.sendText(chatId, text, replyTo, link, undefined, mentions);
         setMessages((prev) => upsert(prev, message));
         return;
       }
@@ -650,12 +651,14 @@ function Shell() {
           file,
           first && !captionless ? text || undefined : undefined,
           first ? replyTo : undefined,
+          undefined,
+          mentions,
         );
         setMessages((prev) => upsert(prev, message));
         onFileSent?.();
       }
       if (captionless && text) {
-        const message = await backend.sendText(chatId, text);
+        const message = await backend.sendText(chatId, text, undefined, undefined, undefined, mentions);
         setMessages((prev) => upsert(prev, message));
       }
     } catch (e) {

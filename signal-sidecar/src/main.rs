@@ -236,7 +236,8 @@ enum Event {
     Me { id: String, phone: String, name: Option<String> },
     /// `saved` names come from the phone's contact list, the others from profiles.
     Contact { id: String, name: String, saved: bool },
-    Group { id: String, name: String },
+    /// `members` are ACIs.
+    Group { id: String, name: String, members: Vec<String> },
     Message {
         chat: String,
         is_group: bool,
@@ -456,13 +457,24 @@ pub(crate) fn with_markers(text: &str, looks: &[(u32, u32, Look)]) -> String {
 struct SendRange {
     start: u32,
     length: u32,
+    #[serde(default)]
     style: String,
+    /// The ACI of whoever the range (a U+FFFC) mentions, instead of a style.
+    #[serde(default)]
+    mention: Option<String>,
 }
 
 fn body_ranges(ranges: Vec<SendRange>) -> Vec<BodyRange> {
     ranges
         .into_iter()
         .filter_map(|range| {
+            if let Some(aci) = range.mention {
+                return Some(BodyRange {
+                    start: Some(range.start),
+                    length: Some(range.length),
+                    associated_value: Some(body_range::AssociatedValue::MentionAci(aci)),
+                });
+            }
             let style = match range.style.as_str() {
                 "bold" => body_range::Style::Bold,
                 "italic" => body_range::Style::Italic,
@@ -633,7 +645,8 @@ impl Receiver {
         for (key, group) in groups.flatten() {
             self.groups.insert(key);
             keys.extend(group.members.iter().map(|m| (Uuid::from(m.aci), m.profile_key)));
-            emit(Event::Group { id: chat_id(&Thread::Group(key)), name: group.title });
+            let members = group.members.iter().map(|m| Uuid::from(m.aci).to_string()).collect();
+            emit(Event::Group { id: chat_id(&Thread::Group(key)), name: group.title, members });
         }
         self.fill_keys(keys).await;
     }
@@ -673,7 +686,8 @@ impl Receiver {
         if let Ok(Some(group)) = self.manager.store().group(key).await {
             self.groups.insert(key);
             let keys = group.members.iter().map(|m| (Uuid::from(m.aci), m.profile_key)).collect();
-            emit(Event::Group { id: chat_id(&Thread::Group(key)), name: group.title });
+            let members = group.members.iter().map(|m| Uuid::from(m.aci).to_string()).collect();
+            emit(Event::Group { id: chat_id(&Thread::Group(key)), name: group.title, members });
             self.fill_keys(keys).await;
         }
     }

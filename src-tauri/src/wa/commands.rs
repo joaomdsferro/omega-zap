@@ -163,8 +163,9 @@ pub async fn wa_send_text(
     reply_to: Option<String>,
     link: Option<crate::account::OutgoingLink>,
     forwarded: Option<u32>,
+    mentions: Option<Vec<String>>,
 ) -> Result<MessageDto, String> {
-    mgr.send_text(&chat_id, &text, reply_to.as_deref(), link, forwarded.unwrap_or(0)).await
+    mgr.send_text(&chat_id, &text, reply_to.as_deref(), link, forwarded.unwrap_or(0), &mentions.unwrap_or_default()).await
 }
 
 #[tauri::command]
@@ -417,6 +418,7 @@ pub async fn wa_send_voice(
         forwarded: 0,
         voice: true,
         waveform: recording.waveform.clone(),
+        mentions: Vec::new(),
     };
     let sent = mgr.send_file(file, ogg).await;
     // Kept, so it can be sent again rather than recorded again.

@@ -146,6 +146,9 @@ pub struct OutgoingFile {
     /// A voice message recorded here, rather than an audio file.
     #[serde(default)]
     pub voice: bool,
+    /// The people the caption mentions, as "@<number>" there (WhatsApp).
+    #[serde(default)]
+    pub mentions: Vec<String>,
     /// A voice message's loudness over its length, 0–100.
     #[serde(default)]
     pub waveform: Vec<u8>,

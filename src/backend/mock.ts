@@ -1,7 +1,7 @@
 import { matches } from "../lib/search";
 import { hueFor, initialsFor } from "../lib/avatar";
 import { DEMO_CHATS, DEMO_MESSAGES } from "../data/demo-chats";
-import type { BackendEvent, Chat, ChatBackend, Contact, CustomList, GroupInfo, MemberChange, Message, OutgoingLink, PinNote, Pins, StarredMessage } from "./types";
+import type { BackendEvent, Chat, ChatBackend, Contact, CustomList, GroupInfo, MemberChange, Mention, Message, OutgoingLink, PinNote, Pins, StarredMessage } from "./types";
 
 /** A demo pin or unpin; pins that were undone are marked so. */
 type MockPin = PinNote & { unpinned?: boolean };
@@ -176,7 +176,7 @@ export class MockBackend implements ChatBackend {
     }
   }
 
-  async sendText(chatId: string, text: string, replyTo?: string, link?: OutgoingLink, forwarded?: number): Promise<Message> {
+  async sendText(chatId: string, text: string, replyTo?: string, link?: OutgoingLink, forwarded?: number, mentions?: Mention[]): Promise<Message> {
     const trimmed = text.trim();
     if (!trimmed) {
       throw new Error("Empty message");
@@ -190,6 +190,7 @@ export class MockBackend implements ChatBackend {
       sentAt: new Date().toISOString(),
       fromMe: true,
       text: trimmed,
+      mentions: mentions?.filter((m) => trimmed.includes(m.text)),
       status: "sent",
       forwarded,
       linkPreview: link

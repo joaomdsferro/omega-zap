@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Chat, Contact, GroupInfo as Group, GroupMember, MemberChange, Message, OutgoingLink, OutgoingMedia, Person, PersonDetails, PinNote, Pins, StarredMessage, StickerLibrary, StickerShelf, TypingState, VoiceRecorder } from "../backend";
+import type { Chat, Contact, GroupInfo as Group, GroupMember, MemberChange, Mention, Message, OutgoingLink, OutgoingMedia, Person, PersonDetails, PinNote, Pins, StarredMessage, StickerLibrary, StickerShelf, TypingState, VoiceRecorder } from "../backend";
 import { ContactInfo } from "./ContactInfo";
 import { GroupInfo } from "./GroupInfo";
 import { listenForFileDrops } from "../lib/dropped";
@@ -38,7 +38,7 @@ interface ChatViewProps {
   canSend: boolean;
   cannotSendReason?: string;
   /** Sends a text, or files with the text as their caption, quoting the message `replyTo` when given. */
-  onSend: (text: string, files: File[], replyTo?: string, onFileSent?: () => void, link?: OutgoingLink) => Promise<void>;
+  onSend: (text: string, files: File[], replyTo?: string, onFileSent?: () => void, link?: OutgoingLink, mentions?: Mention[]) => Promise<void>;
   /** Files can be sent in this chat. */
   canAttach?: boolean;
   /** Sends a sticker or GIF, answering `replyTo`; absent where they can't be sent. */
@@ -126,6 +126,11 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
   const closeGroup = useCallback(() => setGroupOpen(null), []);
   const loadShownGroup = useCallback(() => loadGroup!(chat.id), [loadGroup, chat.id]);
   const loadShownGroupDetails = useCallback(() => loadGroupDetails!(chat.id), [loadGroupDetails, chat.id]);
+  // Who can be mentioned: everyone in the group but us.
+  const loadShownMembers = useCallback(
+    async () => (await loadGroup!(chat.id)).participants.filter((m) => !m.isMe),
+    [loadGroup, chat.id],
+  );
   // Someone's contact info belongs to the chat it was opened from.
   useEffect(() => setPersonId(null), [chat.id, chat.account]);
   const scroller = useRef<HTMLDivElement>(null);
@@ -467,12 +472,12 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
   // A quoted message that is deleted can't be replied to any more.
   const replyTarget = replyingTo && messages.find((m) => m.id === replyingTo.id && !m.deleted);
 
-  async function send(text: string, files: File[], link?: OutgoingLink) {
+  async function send(text: string, files: File[], link?: OutgoingLink, mentions?: Mention[]) {
     // Each file leaves the tray as it is sent, so a failure leaves only the
     // ones still to send. What is sent shows at the bottom.
     pinned.current = null;
     stickToBottom.current = true;
-    await onSend(text, files, replyTarget?.id, () => setPending((prev) => prev.slice(1)), link);
+    await onSend(text, files, replyTarget?.id, () => setPending((prev) => prev.slice(1)), link, mentions);
     setReplyingTo(null);
     setPending([]);
   }
@@ -997,6 +1002,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
             : undefined
         }
         onSend={send}
+        loadMembers={chat.isGroup && loadGroup ? loadShownMembers : undefined}
         onSendMedia={onSendMedia ? sendMedia : undefined}
         stickers={stickers}
         voice={onSendMedia ? voice : undefined}
