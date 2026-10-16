@@ -93,7 +93,7 @@ flowchart LR
   Core --> Disk[("Encrypted store<br/>SQLCipher + AES-GCM")]
 ```
 
-The UI talks to the core through one backend interface. WhatsApp runs inside the core; Signal runs
+The UI talks to the core through one backend interface. WhatsApp and Telegram run inside the core; Signal runs
 in a separate bridge process, since its library is AGPL and links a different SQLite. See
 [architecture](docs/architecture.md).
 
