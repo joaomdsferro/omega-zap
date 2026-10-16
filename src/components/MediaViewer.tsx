@@ -7,6 +7,7 @@ import { formatDayLabel, formatMessageTime } from "../lib/format";
 import { GifVideo, plays, useMediaUrl, useNear } from "./Attachments";
 import type { LoadMedia } from "./Attachments";
 import { Avatar } from "./Avatar";
+import { VideoPlayer } from "./VideoPlayer";
 import { ChevronLeftIcon, ChevronRightIcon, CloseIcon, PlayIcon } from "./Icons";
 
 /** One photo or video: a message's attachment, or the message itself when it has one picture. */
@@ -196,14 +197,13 @@ export function MediaViewer({ chat, items, startKey, loadMedia, onClose }: Media
               style={{ boxShadow: "0 2px 12px rgba(11,20,26,.18)" }}
             />
           ) : url && url !== "failed" && video ? (
-            <video
+            <VideoPlayer
               key={url}
               src={url}
-              controls
-              autoPlay
-              playsInline
-              className="animate-fade-rise max-h-full max-w-full bg-black"
-              style={{ boxShadow: "0 2px 12px rgba(11,20,26,.18)" }}
+              onError={() => {}}
+              className="animate-fade-rise"
+              videoClassName="max-h-[calc(100dvh-13rem)] max-w-[calc(100vw-10rem)]"
+              videoStyle={{ boxShadow: "0 2px 12px rgba(11,20,26,.18)" }}
             />
           ) : url && url !== "failed" ? (
             <img

@@ -29,5 +29,14 @@ fn main() {
         unsafe { std::env::set_var("GST_PLUGIN_FEATURE_RANK", ranks) };
     }
 
+    // With WebKitGTK's dmabuf video sink a frame lives in a GPU buffer the
+    // page cannot read (a canvas copy of it comes out black), and a seek
+    // shows black until the next frame. Without it, playback measured the
+    // same (30 fps, same seek times) and the frame stays up while seeking.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_GST_DMABUF_SINK_DISABLED").is_none() {
+        unsafe { std::env::set_var("WEBKIT_GST_DMABUF_SINK_DISABLED", "1") };
+    }
+
     omega_zap_lib::run()
 }

@@ -310,6 +310,12 @@ export const ExpandIcon = (p: IconProps) => (
   </Svg>
 );
 
+export const ShrinkIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />
+  </Svg>
+);
+
 export const FileIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />

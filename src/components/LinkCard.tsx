@@ -6,6 +6,7 @@ import { embedUrl, videoLink, xVideo, type XVideo } from "../lib/links";
 import { isTauri } from "../lib/platform";
 import { useSettings } from "../settings/settings";
 import { CloseIcon, PlayIcon } from "./Icons";
+import { VideoPlayer } from "./VideoPlayer";
 
 /** Opens a page in the system browser, or a new tab in a plain browser. */
 export function openExternal(url: string) {
@@ -130,19 +131,17 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
         </div>
       ) : null}
       {clip ? (
-        <video
+        <VideoPlayer
           src={clip.url}
           poster={clip.poster ?? undefined}
-          controls
-          autoPlay
-          playsInline
           onError={() => {
             setClip(null);
             setNote("This video only plays on its own site. It was opened in your browser.");
             openExternal(preview.url);
           }}
-          className="max-h-110 w-full bg-black object-contain"
-          style={{ aspectRatio: `${clip.width} / ${clip.height}` }}
+          className="w-full"
+          videoClassName="max-h-110 w-full object-contain"
+          videoStyle={{ aspectRatio: `${clip.width} / ${clip.height}` }}
         />
       ) : player ? (
         <iframe
