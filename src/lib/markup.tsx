@@ -225,7 +225,7 @@ function withMentions(
     if (next > at) parts.push(draw(text.slice(at, next)));
     const mention = found;
     parts.push(
-      onMention ? (
+      onMention && mention.id ? (
         <button key={next} type="button" className="mention" onClick={() => onMention(mention.id)}>
           {draw(mention.text)}
         </button>
@@ -411,6 +411,9 @@ function emojiHtml(text: string, size: number): string {
   }
   return html;
 }
+
+/** A mention of everyone in a group, as WhatsApp writes it; it opens no one's contact info. */
+export const EVERYONE: Mention = { text: "@all", id: "" };
 
 /**
  * Where each of `mentions` ("@Name") is in `text`: as a whole word, the

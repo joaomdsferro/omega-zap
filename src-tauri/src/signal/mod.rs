@@ -1275,6 +1275,7 @@ impl SignalManager {
                     place: None,
                     contacts: Vec::new(),
                     poll: None,
+                    mentions_all: false,
                 };
                 let id = if from_me { ts.to_string() } else { self.message_id(&sender, ts) };
                 let incoming = Incoming {

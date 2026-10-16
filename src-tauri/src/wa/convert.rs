@@ -28,6 +28,8 @@ fn with_context(c: &mut Content, ctx: &MessageField<wa::ContextInfo>) {
     if ctx.is_forwarded == Some(true) {
         c.forwarded = ctx.forwarding_score.unwrap_or(0).max(1);
     }
+    // 1 is "@all": everyone in the group.
+    c.mentions_all = ctx.non_jid_mentions.is_some_and(|n| n & 1 != 0);
 }
 
 fn encoded(field: &Option<Vec<u8>>) -> Option<String> {

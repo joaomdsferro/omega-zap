@@ -15,6 +15,8 @@ const MEMBERS_TTL_MS: i64 = 6 * 60 * 60 * 1000;
 pub const OWN_AVATAR: &str = "me";
 /// Most messages a search returns, per account.
 pub const SEARCH_LIMIT: usize = 200;
+/// How WhatsApp writes a mention of everyone in a group.
+pub const EVERYONE: &str = "@all";
 /// Messages read from the history database per scroll back.
 pub const OLDER_PAGE: usize = 100;
 /// The most chats WhatsApp lets you pin.
@@ -244,6 +246,9 @@ pub struct Content {
     pub contacts: Vec<ContactCard>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub poll: Option<Poll>,
+    /// "@all" in the text mentions everyone in the group (WhatsApp).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mentions_all: bool,
 }
 
 /// What search looks at in a message: its text and, for a file, its name.
@@ -308,6 +313,7 @@ impl Content {
             place: None,
             contacts: Vec::new(),
             poll: None,
+            mentions_all: false,
         }
     }
 
@@ -327,6 +333,7 @@ impl Content {
             place: None,
             contacts: Vec::new(),
             poll: None,
+            mentions_all: false,
         }
     }
 
@@ -2898,7 +2905,11 @@ impl ChatStore {
         let photo = m.content.wa_media.as_ref().filter(|r| r.kind.is_none());
         let (text, mentions) = match &m.content.text {
             Some(text) => {
-                let (text, names) = self.with_mentions(text);
+                let (text, mut names) = self.with_mentions(text);
+                // Everyone, which opens no one's contact info.
+                if m.content.mentions_all && text.contains(EVERYONE) {
+                    names.push(MentionDto { text: EVERYONE.into(), id: String::new() });
+                }
                 (Some(text), names)
             }
             None => (None, Vec::new()),

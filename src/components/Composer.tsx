@@ -6,7 +6,7 @@ import { emojiForShortcode, emoticonAtEnd, searchEmoji } from "../lib/emojiSearc
 import { SHORTCUTS, matches } from "../lib/shortcuts";
 import { formatFileSize, formatVoiceDuration } from "../lib/format";
 import { URL_PATTERN, fetchLinkPreview } from "../lib/links";
-import { FormattedLine, mentionSpans } from "../lib/markup";
+import { EVERYONE, FormattedLine, mentionSpans } from "../lib/markup";
 import { outgoingLink } from "../lib/outgoing";
 import { useSettings } from "../settings/settings";
 import { CloseIcon, FileIcon, MicIcon, PauseIcon, PlayIcon, PlusIcon, SendIcon, SmileIcon, TrashIcon } from "./Icons";
@@ -433,6 +433,22 @@ function folded(text: string): string {
   return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 }
 
+/**
+ * What offers "Everyone" after "@", by language: "@all" is what is sent,
+ * whichever word found it.
+ */
+const EVERYONE_WORDS: Record<string, string[]> = {
+  en: ["all", "everyone"],
+  pt: ["todos", "todas"],
+};
+const everyoneWords = Object.values(EVERYONE_WORDS).flat();
+
+/** Whether `typed` (what follows "@") could mean everyone. */
+function meansEveryone(typed: string): boolean {
+  const query = folded(typed);
+  return everyoneWords.some((word) => word.startsWith(query));
+}
+
 /** The members `typed` (what follows "@") could mean: a word of the name starting with it, or digits of the number. */
 function membersMatching(members: GroupMember[], typed: string): GroupMember[] {
   const query = folded(typed);
@@ -551,10 +567,13 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
   }, [wantsMembers, loadMembers, chatId, members?.chatId]);
   const memberList = members?.chatId === chatId ? members.list : null;
   const mentionKey = mentionTyped !== undefined ? `${caret}:@${mentionTyped}` : null;
-  const mentionMatches = useMemo(
-    () => (mentionTyped !== undefined && memberList ? membersMatching(memberList, mentionTyped) : []),
-    [mentionTyped, memberList],
-  );
+  // Everyone first, where the network has it; `null` stands for them.
+  const canMentionEveryone = account === "whatsapp";
+  const mentionMatches = useMemo((): (GroupMember | null)[] => {
+    if (mentionTyped === undefined || !memberList) return [];
+    const people = membersMatching(memberList, mentionTyped);
+    return canMentionEveryone && memberList.length && meansEveryone(mentionTyped) ? [null, ...people] : people;
+  }, [mentionTyped, memberList, canMentionEveryone]);
 
   // ":joy" offers 😂 and its neighbours, and ":)" offers 🙂, which Esc or
   // typing on turn down to keep the text.
@@ -584,11 +603,11 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
     input.current?.replaceBefore(caret - trigger.typed.length, emoji);
   }
 
-  function mention(member: GroupMember) {
+  function mention(member: GroupMember | null) {
     if (mentionTyped === undefined) return;
-    const written = `@${member.name}`;
-    setPicked((prev) => [...prev.filter((m) => m.text !== written), { text: written, id: member.id }]);
-    input.current?.replaceBefore(caret - mentionTyped.length - 1, `${written} `);
+    const picking = member ? { text: `@${member.name}`, id: member.id } : EVERYONE;
+    setPicked((prev) => [...prev.filter((m) => m.text !== picking.text), picking]);
+    input.current?.replaceBefore(caret - mentionTyped.length - 1, `${picking.text} `);
   }
 
   // Closing the shortcode with a colon puts its emoji in at once.
@@ -703,7 +722,7 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
         >
           {mentioning.map((member, index) => (
             <li
-              key={member.id}
+              key={member?.id ?? "everyone"}
               role="option"
               aria-selected={index === chosen}
               // Pressing down here would take the cursor out of the box.
@@ -715,11 +734,21 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
                 index === chosen ? "bg-(--hover-bg)" : "",
               ].join(" ")}
             >
-              <Avatar name={member.name} initials={member.initials} hue={member.avatarHue} src={member.avatarUrl} size={32} />
-              <span className="min-w-0 flex-1 truncate">{member.name}</span>
-              {member.phone && member.phone !== member.name ? (
-                <span className="shrink-0 text-[12.5px] text-(--text-secondary)">{member.phone}</span>
-              ) : null}
+              {member ? (
+                <>
+                  <Avatar name={member.name} initials={member.initials} hue={member.avatarHue} src={member.avatarUrl} size={32} />
+                  <span className="min-w-0 flex-1 truncate">{member.name}</span>
+                  {member.phone && member.phone !== member.name ? (
+                    <span className="shrink-0 text-[12.5px] text-(--text-secondary)">{member.phone}</span>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <Avatar name="Everyone" initials="" hue={0} size={32} group />
+                  <span className="min-w-0 flex-1 truncate">Everyone</span>
+                  <span className="shrink-0 text-[12.5px] text-(--text-secondary)">{EVERYONE.text}</span>
+                </>
+              )}
             </li>
           ))}
         </ul>

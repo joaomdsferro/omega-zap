@@ -257,19 +257,22 @@ function toMessage(raw: RawMessage): Message {
  * "@<number>" for WhatsApp (the Rust side picks the number the group uses),
  * "@<ACI>" for Signal. Also the ids of those still in the text.
  */
-function wireMentions(text: string, mentions: Mention[] = []): { text: string; ids: string[] } {
-  if (!mentions.length) return { text, ids: [] };
+function wireMentions(text: string, mentions: Mention[] = []): { text: string; ids: string[]; everyone: boolean } {
+  if (!mentions.length) return { text, ids: [], everyone: false };
   const idOf = new Map(mentions.map((m) => [m.text, m.id]));
   const ids = new Set<string>();
   let out = "";
   let at = 0;
+  let everyone = false;
   for (const span of mentionSpans(text, [...idOf.keys()])) {
     const id = idOf.get(span.text)!;
-    out += `${text.slice(at, span.start)}@${id.split("@")[0]}`;
-    ids.add(id);
+    // Everyone (no id) is sent as written: "@all".
+    if (!id) everyone = true;
+    else ids.add(id);
+    out += text.slice(at, span.start) + (id ? `@${id.split("@")[0]}` : span.text);
     at = span.end;
   }
-  return { text: out + text.slice(at), ids: [...ids] };
+  return { text: out + text.slice(at), ids: [...ids], everyone };
 }
 
 /** Real chats, served by the Rust side from a linked account's session. */
@@ -421,7 +424,7 @@ export class TauriBackend implements ChatBackend {
   async sendText(chatId: string, text: string, replyTo?: string, link?: OutgoingLink, forwarded?: number, mentions?: Mention[]): Promise<Message> {
     const wire = wireMentions(text.trim(), mentions);
     const args: Record<string, unknown> = { chatId, text: wire.text, replyTo: replyTo ?? null, link: link ?? null, forwarded: forwarded ?? null };
-    if (this.account === "whatsapp") args.mentions = wire.ids;
+    if (this.account === "whatsapp") Object.assign(args, { mentions: wire.ids, mentionAll: wire.everyone });
     // Signal formats with ranges over the text rather than markers in it.
     if (this.account === "signal") args.styled = signalBody(wire.text);
     return toMessage(await invoke<RawMessage>(`${this.prefix}_send_text`, args));
@@ -431,8 +434,8 @@ export class TauriBackend implements ChatBackend {
     if (file.size > MAX_SEND_BYTES) throw new Error(`${file.name} is larger than ${MAX_SEND_BYTES / 1024 / 1024} MB.`);
     const details = await fileDetails(file);
     // Signal's captions carry no mention ranges here, so there they stay "@Name".
-    const wire = this.account === "whatsapp" && caption ? wireMentions(caption, mentions) : { text: caption, ids: [] };
-    const description = { chatId, name: file.name, mime: file.type, caption: wire.text, mentions: wire.ids, replyTo, forwarded: forwarded ?? 0, ...details };
+    const wire = this.account === "whatsapp" && caption ? wireMentions(caption, mentions) : { text: caption, ids: [], everyone: false };
+    const description = { chatId, name: file.name, mime: file.type, caption: wire.text, mentions: wire.ids, mentionAll: wire.everyone, replyTo, forwarded: forwarded ?? 0, ...details };
     const bytes = new Uint8Array(await file.arrayBuffer());
     const raw = await invoke<RawMessage>(`${this.prefix}_send_file`, bytes, {
       headers: { "x-file": base64Json(description) },

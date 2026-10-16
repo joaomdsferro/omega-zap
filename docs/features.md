@@ -92,7 +92,8 @@ WhatsApp only, for now.
   closing one with a colon (`:fire:`) puts the emoji in at once.
 - **Mentions** show the person's name. In a group, `@` offers its members (type to narrow, ↑↓ and
   Enter or Tab to pick, Esc to keep the `@`); the people picked are told, on WhatsApp in texts and
-  captions, on Signal in texts.
+  captions, on Signal in texts. On WhatsApp the list starts with **Everyone** (`@all`, also found by
+  `@everyone`, `@todos`), which tells the whole group; Signal has no such mention.
 - **Replies**: clicking a quote jumps to the quoted message.
 - **Reactions** on both networks. Hover a message to react. Each emoji shows its own count, yours
   highlighted; click them to see who reacted, and to take yours back.

@@ -704,6 +704,7 @@ impl WaManager {
         link: Option<OutgoingLink>,
         forwarded: u32,
         mentions: &[String],
+        everyone: bool,
     ) -> Result<MessageDto, String> {
         let text = text.trim();
         if text.is_empty() {
@@ -714,7 +715,8 @@ impl WaManager {
         let (text, mentioned) = mentioning(&client, &jid, text, mentions).await;
         let text = text.as_str();
         let (context, quoted) = self.quote(chat_id, reply_to)?.unzip();
-        let context = with_mentions(forwarding(context, forwarded), mentioned);
+        let everyone = everyone && mentions_everyone(text);
+        let context = with_mentions(forwarding(context, forwarded), mentioned, everyone);
         let (outgoing, card) = match link.filter(|l| text.contains(&l.url)) {
             Some(link) => {
                 let (ext, card) = self.link_message(&client, text, link).await;
@@ -738,6 +740,7 @@ impl WaManager {
         let mut content = Content::text(text, quoted);
         content.link = card;
         content.forwarded = forwarded;
+        content.mentions_all = everyone;
         self.store_sent(chat_id, sent.message_id.into_string(), content)
     }
 
@@ -837,8 +840,10 @@ impl WaManager {
             None => (None, Vec::new()),
         };
         let thumbnail = file.thumbnail.as_deref().and_then(|t| BASE64.decode(t).ok());
-        let context_info =
-            with_mentions(forwarding(context, file.forwarded), mentioned).map(MessageField::some).unwrap_or_default();
+        let everyone = file.mention_all && caption.as_deref().is_some_and(mentions_everyone);
+        let context_info = with_mentions(forwarding(context, file.forwarded), mentioned, everyone)
+            .map(MessageField::some)
+            .unwrap_or_default();
         let mut outgoing = wa::Message::default();
         match media_type {
             MediaType::Image => {
@@ -2772,15 +2777,28 @@ fn forwarding(context: Option<wa::ContextInfo>, score: u32) -> Option<wa::Contex
     })
 }
 
-/// `context` naming the people a text mentions, so they are told.
-fn with_mentions(context: Option<wa::ContextInfo>, mentioned: Vec<String>) -> Option<wa::ContextInfo> {
-    if mentioned.is_empty() {
+/// `context` naming the people a text mentions, so they are told; with
+/// `everyone`, its "@all" tells the whole group.
+fn with_mentions(context: Option<wa::ContextInfo>, mentioned: Vec<String>, everyone: bool) -> Option<wa::ContextInfo> {
+    if mentioned.is_empty() && !everyone {
         return context;
     }
     Some({
         let mut context = context.unwrap_or_default();
         context.mentioned_jid = mentioned;
+        if everyone {
+            context.non_jid_mentions = Some(1);
+        }
         context
+    })
+}
+
+/// Whether `text` still has "@all" as a word of its own.
+fn mentions_everyone(text: &str) -> bool {
+    text.match_indices(store::EVERYONE).any(|(at, word)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + word.len()..].chars().next();
+        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
     })
 }
 
