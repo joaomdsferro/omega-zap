@@ -4,7 +4,7 @@
 
 # Omega Zap
 
-### WhatsApp and Signal in one native desktop app.
+### WhatsApp, Signal and Telegram in one native desktop app.
 
 **Linked to your phone. No browser shell. Everything kept on your computer, encrypted.**
 
@@ -26,12 +26,12 @@
 
 > [!WARNING]
 > **Early test version (v0.0.x).** Expect bugs, missing features, and changes that may ask you to link
-> your accounts again. Omega Zap is an unofficial client, not affiliated with WhatsApp, Meta or Signal.
-> It is built for everyday chatting, not bots or bulk messaging; see the [FAQ](#faq).
+> your accounts again. Omega Zap is an unofficial client, not affiliated with WhatsApp, Meta, Signal or
+> Telegram. It is built for everyday chatting, not bots or bulk messaging; see the [FAQ](#faq).
 
-Omega Zap is a desktop client for WhatsApp and Signal, part of the open-source
-[Omega](#about-omega) family. It links to your phone like WhatsApp Web or Signal Desktop do, but runs
-natively: the UI is a small Tauri window and both protocols run in Rust. Close the window and it keeps
+Omega Zap is a desktop client for WhatsApp, Signal and Telegram, part of the open-source
+[Omega](#about-omega) family. It links to your phone like WhatsApp Web, Signal Desktop or Telegram
+Desktop do, but runs natively: the UI is a small Tauri window and every protocol runs in Rust. Close the window and it keeps
 running in the tray, using a fraction of the memory.
 
 ## Install
@@ -49,31 +49,34 @@ Then **link your accounts**: open Omega Zap and scan the QR code from your phone
 **Linked devices → Link a device** in WhatsApp, or **Settings → Linked devices** in Signal. On Signal,
 choose **Transfer message history** to bring your existing chats. A WhatsApp Business account links
 the same way, from the WhatsApp Business app, and sits next to your personal WhatsApp as its own account.
+For Telegram, scan the code under **Settings → Devices → Link Desktop Device**; if your account has
+two-step verification, Omega Zap asks for the password next. Telegram support is new: media, reactions
+and editing from here are still to come.
 
 Windows and macOS builds are not available yet.
 
 ## Features
 
-| | WhatsApp | Signal |
-| --- | :---: | :---: |
-| Text with formatting, emoji and mentions | ✅ | ✅ |
-| Replies, reactions, forwarding, starred messages | ✅ | ✅ |
-| Photos, videos, GIFs, voice messages, stickers, documents | ✅ | ✅ |
-| Sending files (drop, paste or pick) | ✅ | ✅ |
-| Sending stickers (favorites in sync, packs) and GIFs | ✅ | ❌ |
-| Link cards, sent and received | ✅ | ✅ |
-| Read receipts and delivery ticks | ✅ | ✅ |
-| Desktop notifications, tray with unread badge | ✅ | ✅ |
-| Search across every chat, and inside one | ✅ | ✅ |
-| Full history, fetched from the phone in the background | ✅ | at linking |
-| Favorites and chat lists, in sync with the phone | ✅ | on this computer |
-| Archive, pin, and mute for 8 hours, a week or always | ✅ | on this computer |
-| Typing, online and last seen, with privacy settings | ✅ | ❌ |
-| Editing your texts, and seeing others' edits | ✅ | ✅ |
-| Polls (voting), locations and contact cards | ✅ | ❌ |
-| Clear and delete chats | ✅ | on this computer |
-| Block, exit groups, edit groups and manage members | ✅ | ❌ |
-| Recording voice messages | ✅ | ❌ |
+| | WhatsApp | Signal | Telegram |
+| --- | :---: | :---: | :---: |
+| Text with formatting, emoji and mentions | ✅ | ✅ | plain text |
+| Replies, reactions, forwarding, starred messages | ✅ | ✅ | replies, stars |
+| Photos, videos, GIFs, voice messages, stickers, documents | ✅ | ✅ | ❌ |
+| Sending files (drop, paste or pick) | ✅ | ✅ | ❌ |
+| Sending stickers (favorites in sync, packs) and GIFs | ✅ | ❌ | ❌ |
+| Link cards, sent and received | ✅ | ✅ | ❌ |
+| Read receipts and delivery ticks | ✅ | ✅ | ✅ |
+| Desktop notifications, tray with unread badge | ✅ | ✅ | ✅ |
+| Search across every chat, and inside one | ✅ | ✅ | ✅ |
+| Full history, fetched from the phone in the background | ✅ | at linking | as you scroll |
+| Favorites and chat lists, in sync with the phone | ✅ | on this computer | on this computer |
+| Archive, pin, and mute for 8 hours, a week or always | ✅ | on this computer | on this computer |
+| Typing, online and last seen, with privacy settings | ✅ | ❌ | ❌ |
+| Editing your texts, and seeing others' edits | ✅ | ✅ | others' edits |
+| Polls (voting), locations and contact cards | ✅ | ❌ | ❌ |
+| Clear and delete chats | ✅ | on this computer | on this computer |
+| Block, exit groups, edit groups and manage members | ✅ | ❌ | ❌ |
+| Recording voice messages | ✅ | ❌ | ❌ |
 
 Both accounts can be used side by side or merged into one chat list. The interface looks like
 WhatsApp Web by default and also comes in Omega Zap's own themes. See [all features](docs/features.md).
@@ -86,6 +89,7 @@ flowchart LR
   Core <-->|whatsapp-rust| WA["WhatsApp"]
   Core <-->|JSON lines| Bridge["Signal bridge<br/>presage"]
   Bridge <--> SG["Signal"]
+  Core <-->|grammers| TG["Telegram"]
   Core --> Disk[("Encrypted store<br/>SQLCipher + AES-GCM")]
 ```
 
