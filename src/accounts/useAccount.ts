@@ -4,8 +4,16 @@ import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "../lib/platform";
 import type { AccountId } from "./accounts";
 
-/** Prefix of the Tauri commands and events that serve each account. */
-export const COMMAND_PREFIX: Record<AccountId, string> = { whatsapp: "wa", signal: "signal" };
+/** Prefix of the Tauri commands that serve each account. Both WhatsApp accounts share theirs. */
+export const COMMAND_PREFIX: Record<AccountId, string> = { whatsapp: "wa", business: "wa", signal: "signal" };
+
+/** Prefix of the events each account sends. */
+export const EVENT_PREFIX: Record<AccountId, string> = { whatsapp: "wa", business: "wab", signal: "signal" };
+
+/** Headers that tell a shared WhatsApp command which account it is for. */
+export function accountHeaders(id: AccountId): Record<string, string> {
+  return id === "business" ? { "x-wa-account": "business" } : {};
+}
 
 export type AccountState =
   | "unsupported"
@@ -70,6 +78,7 @@ export interface Account {
 
 export function useAccount(id: AccountId): Account {
   const prefix = COMMAND_PREFIX[id];
+  const events = EVENT_PREFIX[id];
   const [status, setStatus] = useState<AccountStatus>(
     isTauri ? { ...UNSUPPORTED, state: "idle" } : UNSUPPORTED,
   );
@@ -78,19 +87,19 @@ export function useAccount(id: AccountId): Account {
     if (!isTauri) return;
     // Keep the newest status: the initial fetch can resolve after an event.
     const accept = (next: AccountStatus) => setStatus((cur) => (next.seq >= cur.seq ? next : cur));
-    const unlisten = listen<AccountStatus>(`${prefix}://status`, (e) => accept(e.payload));
-    invoke<AccountStatus>(`${prefix}_status`).then(accept).catch(console.error);
+    const unlisten = listen<AccountStatus>(`${events}://status`, (e) => accept(e.payload));
+    invoke<AccountStatus>(`${prefix}_status`, {}, { headers: accountHeaders(id) }).then(accept).catch(console.error);
     return () => {
       void unlisten.then((f) => f());
     };
-  }, [prefix]);
+  }, [id, prefix, events]);
 
   const call = useCallback(
     async (command: string) => {
       if (!isTauri) return;
-      await invoke(`${prefix}_${command}`);
+      await invoke(`${prefix}_${command}`, {}, { headers: accountHeaders(id) });
     },
-    [prefix],
+    [id, prefix],
   );
 
   return useMemo(

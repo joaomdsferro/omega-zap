@@ -8,6 +8,7 @@ import { MessageInput, type MessageInputHandle } from "./MessageInput";
 /** How long after sending each network lets a message be edited. */
 export const EDIT_WINDOW_MS: Record<AccountId, number> = {
   whatsapp: 15 * 60 * 1000,
+  business: 15 * 60 * 1000,
   signal: 24 * 60 * 60 * 1000,
 };
 

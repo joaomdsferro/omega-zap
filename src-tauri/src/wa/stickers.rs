@@ -13,7 +13,6 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
-use tauri::Emitter;
 use whatsapp_rust::download::MediaType;
 use whatsapp_rust::prelude::*;
 use whatsapp_rust::waproto::buffa::MessageField;
@@ -467,7 +466,7 @@ impl WaManager {
         if changed {
             library.save(&self.dir);
             drop(library);
-            let _ = self.app.emit("wa://stickers", ());
+            self.emit("stickers", ());
         }
         result
     }

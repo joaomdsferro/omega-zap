@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
-import type { AccountId } from "../accounts/accounts";
+import { isWhatsApp, type AccountId } from "../accounts/accounts";
 import type { DeliveryStatus, LinkPreview, Message, ReplyQuote } from "../backend";
 import { authorColor } from "../lib/avatar";
 import { formatMessageTime, formatVoiceDuration } from "../lib/format";
@@ -392,7 +392,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
   const soundOnly =
     !hasText && !message.linkPreview && Boolean(message.attachments?.length) &&
     message.attachments!.every((attachment) => attachment.kind === "voice" || attachment.kind === "audio");
-  const whatsapp = account === "whatsapp";
+  const whatsapp = isWhatsApp(account);
   const react = deleted ? undefined : onReact;
 
   // The same actions, in the order each network's own app lists them.

@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import type { AccountId } from "../accounts/accounts";
+import { isWhatsApp, type AccountId } from "../accounts/accounts";
 import { Emoji } from "../lib/emoji";
 import { ALL_SECTIONS } from "../lib/emojiSearch";
 import { MoreIcon, PlusIcon } from "./Icons";
@@ -29,6 +29,7 @@ const GAP = 8;
 /** The row each phone app offers on a long press, in its own order. */
 const QUICK_REACTIONS: Record<AccountId, string[]> = {
   whatsapp: ["👍", "❤️", "😂", "😮", "😢", "🙏"],
+  business: ["👍", "❤️", "😂", "😮", "😢", "🙏"],
   signal: ["❤️", "👍", "👎", "😂", "😮", "😢"],
 };
 
@@ -36,6 +37,7 @@ const QUICK_REACTIONS: Record<AccountId, string[]> = {
 /** Signal Desktop lists Travel & Places before Activity; WhatsApp keeps Unicode's order. */
 const SECTION_ORDER: Record<AccountId, string[]> = {
   whatsapp: ["Smileys & People", "Animals & Nature", "Food & Drink", "Activity", "Travel & Places", "Objects", "Symbols", "Flags", "Characters"],
+  business: ["Smileys & People", "Animals & Nature", "Food & Drink", "Activity", "Travel & Places", "Objects", "Symbols", "Flags", "Characters"],
   signal: ["Smileys & People", "Animals & Nature", "Food & Drink", "Travel & Places", "Activity", "Objects", "Symbols", "Flags", "Characters"],
 };
 
@@ -139,7 +141,7 @@ export function EmojiGrid({
 
 export function ReactionPicker({ account, current, anchor, expanded: startExpanded = false, onPick }: ReactionPickerProps) {
   const [expanded, setExpanded] = useState(startExpanded);
-  const whatsapp = account === "whatsapp";
+  const whatsapp = isWhatsApp(account);
   const box = useRef<HTMLDivElement>(null);
   const [place, setPlace] = useState<CSSProperties>({ left: anchor.x, top: anchor.top, visibility: "hidden" });
 

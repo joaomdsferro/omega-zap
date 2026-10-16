@@ -40,6 +40,14 @@ export const WhatsAppIcon = (p: IconProps) => (
   </Svg>
 );
 
+/** WhatsApp's bubble with a B, as the Business app marks itself. */
+export const WhatsAppBusinessIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M20 11.5a8 8 0 0 1-11.7 7.1L4 20l1.4-4.2A8 8 0 1 1 20 11.5z" />
+    <path d="M10.2 15V8h2.1a1.7 1.7 0 0 1 0 3.4h-2.1m0 0h2.5a1.8 1.8 0 0 1 0 3.6h-2.5" />
+  </Svg>
+);
+
 export const SignalIcon = (p: IconProps) => (
   <Svg {...p}>
     <path

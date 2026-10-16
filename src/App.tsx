@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ACCOUNTS, ACCOUNT_IDS, type AccountId } from "./accounts/accounts";
+import { ACCOUNTS, ACCOUNT_IDS, isWhatsApp, type AccountId } from "./accounts/accounts";
 import { formatLastSeen } from "./lib/format";
 import { useAccount, type Account } from "./accounts/useAccount";
 import {
@@ -216,24 +216,34 @@ function Shell() {
   const { settings, setActiveAccount } = useSettings();
   const zoomAnnounce = useZoom();
   const whatsapp = useAccount("whatsapp");
+  const business = useAccount("business");
   const signal = useAccount("signal");
-  const accounts: Record<AccountId, Account> = useMemo(() => ({ whatsapp, signal }), [whatsapp, signal]);
+  const accounts: Record<AccountId, Account> = useMemo(
+    () => ({ whatsapp, business, signal }),
+    [whatsapp, business, signal],
+  );
 
   const demo = useMemo(() => new MockBackend(), []);
   const real = useMemo(
-    () => ({ whatsapp: new TauriBackend("whatsapp"), signal: new TauriBackend("signal") }),
+    () => ({
+      whatsapp: new TauriBackend("whatsapp"),
+      business: new TauriBackend("business"),
+      signal: new TauriBackend("signal"),
+    }),
     [],
   );
   const waLinked = whatsapp.status.linked;
+  const businessLinked = business.status.linked;
   const signalLinked = signal.status.linked;
-  const anyLinked = waLinked || signalLinked;
+  const anyLinked = waLinked || businessLinked || signalLinked;
   // Every list worth loading: the linked accounts, and the demo chats that
   // stand in for WhatsApp until it is linked.
   const sources = useMemo(() => {
     const list: ChatBackend[] = [waLinked ? real.whatsapp : demo];
+    if (businessLinked) list.push(real.business);
     if (signalLinked) list.push(real.signal);
     return list;
-  }, [demo, real, waLinked, signalLinked]);
+  }, [demo, real, waLinked, businessLinked, signalLinked]);
 
   const unified = settings.unifiedInbox;
   const active = settings.activeAccount;
@@ -643,7 +653,7 @@ function Shell() {
       // The text goes under the first file, like a caption on the phone; the
       // reply quotes from that one too. WhatsApp's audio has no caption, so
       // there it is sent as a message of its own.
-      const captionless = backend.account === "whatsapp" && files[0].type.startsWith("audio/");
+      const captionless = isWhatsApp(backend.account) && files[0].type.startsWith("audio/");
       for (const [index, file] of files.entries()) {
         const first = index === 0;
         const message = await backend.sendFile(
@@ -864,7 +874,7 @@ function Shell() {
 
   /** Where a chat's messages go when it is cleared or deleted, as the dialog says it. */
   function reachOf(account: AccountId) {
-    return account === "whatsapp" ? "this computer and your phone" : "this computer only; your phone keeps them";
+    return isWhatsApp(account) ? "this computer and your phone" : "this computer only; your phone keeps them";
   }
 
   /** Asks before something that can't be taken back. Settles once it is done, failing when cancelled. */

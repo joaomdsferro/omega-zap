@@ -24,6 +24,7 @@
 
   /* Network colours: the same in every theme, so a chat's origin reads the same. */
   --brand-whatsapp: #25d366;
+  --brand-business: #128c7e;
   --brand-signal: #3a76f0;
 
   --rail-bg: #f0f2f5;

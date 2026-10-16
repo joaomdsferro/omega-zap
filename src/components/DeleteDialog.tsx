@@ -5,6 +5,7 @@ import type { Message } from "../backend";
 /** How long after sending a message can still be deleted for everyone. */
 const DELETE_FOR_EVERYONE_MS: Record<AccountId, number> = {
   whatsapp: 60 * 60 * 60 * 1000,
+  business: 60 * 60 * 60 * 1000,
   signal: 24 * 60 * 60 * 1000,
 };
 

@@ -119,8 +119,60 @@ impl From<CdnError> for String {
     }
 }
 
+/// Which WhatsApp app a session is linked to. WhatsApp Business links the
+/// same way and speaks the same protocol; each keeps its own session, chats
+/// and files, in its own folder.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    Personal,
+    Business,
+}
+
+impl Kind {
+    /// The account's name in the UI and in notifications.
+    pub fn account(self) -> &'static str {
+        match self {
+            Kind::Personal => "whatsapp",
+            Kind::Business => "business",
+        }
+    }
+
+    /// The account's folder, under the app's data folder.
+    pub fn dir(self, data: &std::path::Path) -> PathBuf {
+        match self {
+            Kind::Personal => data.to_path_buf(),
+            Kind::Business => data.join("business"),
+        }
+    }
+
+    /// Name of an event the UI listens to for this account.
+    fn event(self, name: &str) -> String {
+        let prefix = match self {
+            Kind::Personal => "wa",
+            Kind::Business => "wab",
+        };
+        format!("{prefix}://{name}")
+    }
+}
+
+/// Both WhatsApp accounts. A command serves the business one when the UI
+/// names it in the [`ACCOUNT_HEADER`].
+pub struct WaAccounts {
+    pub personal: Arc<WaManager>,
+    pub business: Arc<WaManager>,
+}
+
+impl WaAccounts {
+    pub fn all(&self) -> [&Arc<WaManager>; 2] {
+        [&self.personal, &self.business]
+    }
+}
+
+pub const ACCOUNT_HEADER: &str = "x-wa-account";
+
 pub struct WaManager {
     app: AppHandle,
+    kind: Kind,
     dir: PathBuf,
     status: Mutex<WaStatus>,
     store: Mutex<ChatStore>,
@@ -191,7 +243,8 @@ pub struct PrivacyDto {
 }
 
 impl WaManager {
-    pub fn new(app: AppHandle, dir: PathBuf) -> std::io::Result<Arc<Self>> {
+    pub fn new(app: AppHandle, data: &std::path::Path, kind: Kind) -> std::io::Result<Arc<Self>> {
+        let dir = kind.dir(data);
         secure_dir(&dir)?;
         let linked = dir.join(LINKED_MARKER).exists();
         let history = History::new(&dir, "whatsapp history", CACHE_FILE);
@@ -210,6 +263,7 @@ impl WaManager {
         };
         Ok(Arc::new(Self {
             app,
+            kind,
             status: Mutex::new(WaStatus::idle(linked)),
             store: Mutex::new(store),
             history,
@@ -244,7 +298,7 @@ impl WaManager {
                 loop {
                     tokio::time::sleep(Duration::from_millis(350)).await;
                     if mgr.chats_dirty.swap(false, Ordering::AcqRel) {
-                        let _ = mgr.app.emit("wa://chats", ());
+                        mgr.emit("chats", ());
                         crate::tray::refresh(&mgr.app);
                     }
                     if !mgr.save_dirty.load(Ordering::Acquire) {
@@ -280,6 +334,11 @@ impl WaManager {
         lock(&self.status).clone()
     }
 
+    /// Sends an event to the UI, named for this account.
+    fn emit<S: Serialize + Clone>(&self, name: &str, payload: S) {
+        let _ = self.app.emit(&self.kind.event(name), payload);
+    }
+
     fn set_status(&self, f: impl FnOnce(&mut WaStatus)) {
         let snapshot = {
             let mut status = lock(&self.status);
@@ -287,7 +346,7 @@ impl WaManager {
             status.seq += 1;
             status.clone()
         };
-        let _ = self.app.emit("wa://status", snapshot);
+        self.emit("status", snapshot);
     }
 
     fn fail(&self, error: String) {
@@ -378,7 +437,7 @@ impl WaManager {
             store.set_message_pin(chat_id, message_id, at_ms, until_ms, None);
             store.chat_key(chat_id)
         };
-        let _ = self.app.emit("wa://pins", chat);
+        self.emit("pins", chat);
         self.mark_dirty();
         Ok(())
     }
@@ -1454,7 +1513,7 @@ impl WaManager {
     /// Tells the UI a chat lost its messages, so an open one shows it.
     fn chat_emptied(&self, chat_id: &str) {
         let chat = lock(&self.store).chat_key(chat_id);
-        let _ = self.app.emit("wa://cleared", chat);
+        self.emit("cleared", chat);
         self.mark_dirty();
     }
 
@@ -2010,7 +2069,7 @@ impl WaManager {
                 store.set_group_members(&group.to_non_ad_string(), members.len() as u32)
             };
             for dto in changed {
-                let _ = mgr.app.emit("wa://message", dto);
+                mgr.emit("message", dto);
             }
             mgr.mark_dirty();
         });
@@ -2288,15 +2347,15 @@ impl WaManager {
                     dtos.extend(self.open_vote(&client, &chat, &voter, vote).await);
                 }
                 for dto in dtos {
-                    let _ = self.app.emit("wa://message", dto);
+                    self.emit("message", dto);
                 }
                 pinned_in.sort();
                 pinned_in.dedup();
                 for chat in pinned_in {
-                    let _ = self.app.emit("wa://pins", chat);
+                    self.emit("pins", chat);
                 }
                 for notice in notices {
-                    crate::notify::deliver(&self.app, "whatsapp", "wa://notice", notice);
+                    crate::notify::deliver(&self.app, self.kind.account(), &self.kind.event("notice"), notice);
                 }
                 self.mark_dirty();
             }
@@ -2328,7 +2387,7 @@ impl WaManager {
                     self.wake.notify_one();
                     if !changed.is_empty() {
                         for dto in changed {
-                            let _ = self.app.emit("wa://message", dto);
+                            self.emit("message", dto);
                         }
                         self.mark_dirty();
                     }
@@ -2395,7 +2454,7 @@ impl WaManager {
                     active: update.state != ChatActivity::Idle,
                 };
                 drop(store);
-                let _ = self.app.emit("wa://typing", typing);
+                self.emit("typing", typing);
             }
             Event::Presence(update) => {
                 let presence = PresenceDto {
@@ -2403,7 +2462,7 @@ impl WaManager {
                     online: update.status == PresenceStatus::Available,
                     last_seen_ms: update.last_seen.map(|t| t.timestamp_millis()),
                 };
-                let _ = self.app.emit("wa://presence", presence);
+                self.emit("presence", presence);
             }
             Event::ArchiveUpdate(update) => {
                 lock(&self.store).set_archived(
@@ -2417,7 +2476,7 @@ impl WaManager {
                 let group = update.group_jid.to_non_ad_string();
                 if lock(&self.store).apply_group_change(&group, change) {
                     self.mark_dirty();
-                    let _ = self.app.emit("wa://group", lock(&self.store).chat_key(&group));
+                    self.emit("group", lock(&self.store).chat_key(&group));
                 }
             }
             Event::DeleteChatUpdate(update) => {
@@ -2441,7 +2500,7 @@ impl WaManager {
                     update.action.starred.unwrap_or(false),
                 );
                 if let Some(dto) = changed {
-                    let _ = self.app.emit("wa://message", dto);
+                    self.emit("message", dto);
                     self.mark_dirty();
                 }
             }
@@ -2703,7 +2762,7 @@ impl WaManager {
                             fetched += count;
                             silent = 0;
                             mgr.save_now();
-                            let _ = mgr.app.emit("wa://history", &chat);
+                            mgr.emit("history", &chat);
                             // Anything already known means the phone has no more before it.
                             let older = mgr.history.oldest(&chat).is_some_and(|now| now.ts_ms < oldest_ts)
                                 || lock(&mgr.store).oldest_message(&chat).is_some_and(|now| now.ts_ms < oldest_ts);

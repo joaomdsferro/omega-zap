@@ -77,6 +77,7 @@ fn avatar_path(app: &AppHandle, account: &str, name: &str) -> Option<PathBuf> {
     let dir = app.path().app_data_dir().ok()?;
     let path = match account {
         "whatsapp" => dir.join(wa::AVATAR_DIR).join(name),
+        "business" => wa::Kind::Business.dir(&dir).join(wa::AVATAR_DIR).join(name),
         "signal" => dir.join("signal").join(signal::AVATAR_DIR).join(name),
         _ => return None,
     };

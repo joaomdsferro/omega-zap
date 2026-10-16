@@ -1,4 +1,4 @@
-export type AccountId = "whatsapp" | "signal";
+export type AccountId = "whatsapp" | "business" | "signal";
 
 export interface AccountInfo {
   id: AccountId;
@@ -19,6 +19,22 @@ export const ACCOUNTS: Record<AccountId, AccountInfo> = {
     color: "var(--brand-whatsapp)",
     linkSteps: [
       "Open WhatsApp on your phone",
+      "Tap Menu (⋮) on Android or Settings on iPhone",
+      "Tap Linked devices, then Link a device",
+      "Point your phone at this screen to scan the QR code",
+    ],
+    linkNote:
+      "Omega Zap is an unofficial client for everyday chatting. Bulk messaging and automation are what get accounts banned, so don't use it for that.",
+    logoutConfirm:
+      "Log out and remove this computer from your linked devices? Chats saved here are deleted.",
+    emptyText: "Your chats will appear here once they sync.",
+  },
+  business: {
+    id: "business",
+    label: "WhatsApp Business",
+    color: "var(--brand-business)",
+    linkSteps: [
+      "Open WhatsApp Business on your phone",
       "Tap Menu (⋮) on Android or Settings on iPhone",
       "Tap Linked devices, then Link a device",
       "Point your phone at this screen to scan the QR code",
@@ -51,5 +67,10 @@ export const ACCOUNTS: Record<AccountId, AccountInfo> = {
 
 export const ACCOUNT_IDS = Object.keys(ACCOUNTS) as AccountId[];
 
+/** Both WhatsApp apps speak the same protocol, so what one can do, the other can. */
+export function isWhatsApp(id: AccountId): boolean {
+  return id === "whatsapp" || id === "business";
+}
+
 /** Networks planned next; listed in Settings so the roadmap is visible. */
-export const PLANNED_ACCOUNTS = ["WhatsApp Business", "Telegram"];
+export const PLANNED_ACCOUNTS = ["Telegram"];

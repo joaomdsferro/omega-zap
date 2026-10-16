@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import type { AccountId } from "../accounts/accounts";
+import { isWhatsApp, type AccountId } from "../accounts/accounts";
 import type { GroupMember, LinkPreview, Mention, OutgoingLink, OutgoingMedia, ReplyQuote, StickerShelf, TypingState, VoiceRecorder } from "../backend";
 import { Emoji } from "../lib/emoji";
 import { emojiForShortcode, emoticonAtEnd, searchEmoji } from "../lib/emojiSearch";
@@ -568,7 +568,7 @@ export function Composer({ chatId, account, disabled, disabledReason, replyTo, o
   const memberList = members?.chatId === chatId ? members.list : null;
   const mentionKey = mentionTyped !== undefined ? `${caret}:@${mentionTyped}` : null;
   // Everyone first, where the network has it; `null` stands for them.
-  const canMentionEveryone = account === "whatsapp";
+  const canMentionEveryone = isWhatsApp(account);
   const mentionMatches = useMemo((): (GroupMember | null)[] => {
     if (mentionTyped === undefined || !memberList) return [];
     const people = membersMatching(memberList, mentionTyped);

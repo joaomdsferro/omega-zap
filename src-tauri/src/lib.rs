@@ -131,11 +131,17 @@ fn find_file(dir: &std::path::Path, scheme: Scheme, name: &str) -> Option<std::p
         return None;
     }
     let candidates = match scheme {
-        Scheme::Avatar => vec![dir.join(wa::AVATAR_DIR).join(name), dir.join("signal").join(signal::AVATAR_DIR).join(name)],
+        Scheme::Avatar => vec![
+            dir.join(wa::AVATAR_DIR).join(name),
+            wa::Kind::Business.dir(dir).join(wa::AVATAR_DIR).join(name),
+            dir.join("signal").join(signal::AVATAR_DIR).join(name),
+        ],
         Scheme::Media => vec![
             dir.join("signal").join(signal::MEDIA_DIR).join(name),
             dir.join(wa::MEDIA_DIR).join(name),
             dir.join(wa::LINK_THUMB_DIR).join(name),
+            wa::Kind::Business.dir(dir).join(wa::MEDIA_DIR).join(name),
+            wa::Kind::Business.dir(dir).join(wa::LINK_THUMB_DIR).join(name),
             dir.join(link_preview::PREVIEW_DIR).join(name),
         ],
     };
@@ -307,9 +313,14 @@ pub fn run() {
             loopback::start(dir.clone());
             app.manage(tray::Background::new(dir.clone()));
             let signal = signal::SignalManager::new(app.handle().clone(), dir.join("signal"))?;
-            let manager = wa::WaManager::new(app.handle().clone(), dir)?;
-            manager.start();
-            app.manage(manager);
+            let accounts = wa::WaAccounts {
+                personal: wa::WaManager::new(app.handle().clone(), &dir, wa::Kind::Personal)?,
+                business: wa::WaManager::new(app.handle().clone(), &dir, wa::Kind::Business)?,
+            };
+            for manager in accounts.all() {
+                manager.start();
+            }
+            app.manage(accounts);
             signal.start();
             app.manage(signal);
             #[cfg(all(unix, not(target_os = "macos")))]
@@ -458,8 +469,10 @@ pub fn run() {
                 api.prevent_exit();
             }
             if let tauri::RunEvent::Exit = event {
-                if let Some(manager) = app.try_state::<Arc<wa::WaManager>>() {
-                    manager.save_now();
+                if let Some(accounts) = app.try_state::<wa::WaAccounts>() {
+                    for manager in accounts.all() {
+                        manager.save_now();
+                    }
                 }
                 if let Some(manager) = app.try_state::<Arc<signal::SignalManager>>() {
                     manager.save_now();

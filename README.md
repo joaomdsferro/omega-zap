@@ -47,7 +47,8 @@ Download the package for your distribution from the
 
 Then **link your accounts**: open Omega Zap and scan the QR code from your phone, under
 **Linked devices → Link a device** in WhatsApp, or **Settings → Linked devices** in Signal. On Signal,
-choose **Transfer message history** to bring your existing chats.
+choose **Transfer message history** to bring your existing chats. A WhatsApp Business account links
+the same way, from the WhatsApp Business app, and sits next to your personal WhatsApp as its own account.
 
 Windows and macOS builds are not available yet.
 

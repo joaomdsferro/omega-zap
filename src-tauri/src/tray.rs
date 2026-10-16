@@ -196,9 +196,11 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         _ => None,
     };
     if let Some(active) = active
-        && let Some(manager) = window.app_handle().try_state::<std::sync::Arc<wa::WaManager>>()
+        && let Some(accounts) = window.app_handle().try_state::<wa::WaAccounts>()
     {
-        manager.set_active(active);
+        for manager in accounts.all() {
+            manager.set_active(active);
+        }
     }
     let tauri::WindowEvent::CloseRequested { api, .. } = event else {
         return;
@@ -267,8 +269,10 @@ pub fn refresh(app: &AppHandle) {
         return;
     };
     let mut total = 0u32;
-    if let Some(manager) = app.try_state::<std::sync::Arc<wa::WaManager>>() {
-        total = total.saturating_add(manager.unread_total());
+    if let Some(accounts) = app.try_state::<wa::WaAccounts>() {
+        for manager in accounts.all() {
+            total = total.saturating_add(manager.unread_total());
+        }
     }
     if let Some(manager) = app.try_state::<std::sync::Arc<signal::SignalManager>>() {
         total = total.saturating_add(manager.unread_total());

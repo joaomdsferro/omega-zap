@@ -1,12 +1,43 @@
 use std::sync::Arc;
 
 use tauri::State;
+use tauri::ipc::{CommandArg, CommandItem, InvokeError};
+use tauri::Manager as _;
 
 use super::store::{ContactDto, ListDto, MessageDto, StarredDto};
-use super::{ChatSummary, WaManager};
+use super::{ACCOUNT_HEADER, ChatSummary, WaAccounts, WaManager};
 use crate::account::AccountStatus as WaStatus;
 
-type Mgr<'a> = State<'a, Arc<WaManager>>;
+/// The account a command is for: the business one when the UI names it in
+/// the [`ACCOUNT_HEADER`], else the personal one.
+pub struct Mgr<'r>(&'r Arc<WaManager>);
+
+impl Mgr<'_> {
+    fn inner(&self) -> &Arc<WaManager> {
+        self.0
+    }
+}
+
+impl std::ops::Deref for Mgr<'_> {
+    type Target = Arc<WaManager>;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+impl<'r, 'de: 'r, R: tauri::Runtime> CommandArg<'de, R> for Mgr<'r> {
+    fn from_command(command: CommandItem<'de, R>) -> Result<Self, InvokeError> {
+        let message = command.message;
+        let accounts = message
+            .webview_ref()
+            .try_state::<WaAccounts>()
+            .ok_or_else(|| InvokeError::from("WhatsApp is not ready yet."))?
+            .inner();
+        let business = message.headers().get(ACCOUNT_HEADER).is_some_and(|v| v == "business");
+        Ok(Mgr(if business { &accounts.business } else { &accounts.personal }))
+    }
+}
 
 #[tauri::command]
 pub fn wa_status(mgr: Mgr<'_>) -> WaStatus {
