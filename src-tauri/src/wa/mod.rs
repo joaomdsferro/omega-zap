@@ -1266,8 +1266,9 @@ impl WaManager {
     }
 
     pub fn search(&self, query: &str, chat: Option<&str>) -> Vec<StarredDto> {
-        let saved = self.history.search(query, chat, crate::store::SEARCH_LIMIT);
-        lock(&self.store).search(query, chat, crate::store::SEARCH_LIMIT, saved)
+        let limit = if chat.is_some() { crate::store::CHAT_SEARCH_LIMIT } else { crate::store::SEARCH_LIMIT };
+        let saved = self.history.search(query, chat, limit);
+        lock(&self.store).search(query, chat, limit, saved)
     }
 
     pub fn contacts(&self) -> Vec<ContactDto> {
@@ -2733,6 +2734,16 @@ impl WaManager {
                 tokio::time::sleep(BACKFILL_PACE).await;
             }
         });
+    }
+
+    /// Whether all of a chat's history is here; if not, it is fetched
+    /// before the others', as for a search in it.
+    pub fn complete_history(&self, chat_id: &str) -> bool {
+        let complete = lock(&self.store).history_complete(chat_id);
+        if !complete {
+            self.fetch_history_first(chat_id);
+        }
+        complete
     }
 
     /// Fetches this chat's history before the others'.

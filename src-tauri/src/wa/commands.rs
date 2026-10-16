@@ -276,6 +276,12 @@ pub fn wa_fetch_history_first(mgr: Mgr<'_>, chat_id: String) {
     mgr.fetch_history_first(&chat_id);
 }
 
+/// Whether all of a chat's history is here; if not, it comes from the phone before the others'.
+#[tauri::command]
+pub fn wa_complete_history(mgr: Mgr<'_>, chat_id: String) -> bool {
+    mgr.complete_history(&chat_id)
+}
+
 #[tauri::command]
 pub fn wa_search(mgr: Mgr<'_>, query: String, chat_id: Option<String>) -> Vec<StarredDto> {
     mgr.search(&query, chat_id.as_deref())

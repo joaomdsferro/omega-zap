@@ -562,6 +562,12 @@ export interface ChatBackend {
   listStarred(): Promise<StarredMessage[]>;
   /** Messages with every word of `query` in them, ignoring case and accents, newest first; only `chatId`'s when given. */
   searchMessages(query: string, chatId?: string): Promise<StarredMessage[]>;
+  /**
+   * Whether all of a chat's history is on this computer; if not, it is
+   * fetched from the phone before other chats'. Absent where there is no
+   * more to fetch than what came in.
+   */
+  completeHistory?(chatId: string): Promise<boolean>;
   listContacts(): Promise<Contact[]>;
   /** Someone's contact info, from what this computer knows. */
   person?(id: string): Promise<Person>;

@@ -547,8 +547,9 @@ impl SignalManager {
     }
 
     pub fn search(&self, query: &str, chat: Option<&str>) -> Vec<StarredDto> {
-        let saved = self.history.search(query, chat, crate::store::SEARCH_LIMIT);
-        lock(&self.store).search(query, chat, crate::store::SEARCH_LIMIT, saved)
+        let limit = if chat.is_some() { crate::store::CHAT_SEARCH_LIMIT } else { crate::store::SEARCH_LIMIT };
+        let saved = self.history.search(query, chat, limit);
+        lock(&self.store).search(query, chat, limit, saved)
     }
 
     pub fn contacts(&self) -> Vec<ContactDto> {

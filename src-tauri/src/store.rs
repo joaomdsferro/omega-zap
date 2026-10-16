@@ -15,6 +15,8 @@ const MEMBERS_TTL_MS: i64 = 6 * 60 * 60 * 1000;
 pub const OWN_AVATAR: &str = "me";
 /// Most messages a search returns, per account.
 pub const SEARCH_LIMIT: usize = 200;
+/// The most matches a search inside one chat gives: in practice, all of them.
+pub const CHAT_SEARCH_LIMIT: usize = 5000;
 /// How WhatsApp writes a mention of everyone in a group.
 pub const EVERYONE: &str = "@all";
 /// Messages read from the history database per scroll back.
@@ -1128,6 +1130,11 @@ impl ChatStore {
             done += self.history_complete.contains(id) as u32;
         }
         (done, total)
+    }
+
+    /// Whether all of a chat's older history is here.
+    pub fn history_complete(&self, chat: &str) -> bool {
+        self.history_complete.contains(&self.canonical(chat))
     }
 
     pub fn mark_history_complete(&mut self, chat: &str) {

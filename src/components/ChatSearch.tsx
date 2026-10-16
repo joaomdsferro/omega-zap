@@ -8,6 +8,8 @@ interface ChatSearchProps {
   onQuery: (query: string) => void;
   /** The ids of the messages found, newest first (`searchChat`). */
   found: string[];
+  /** Older messages are still coming from the phone, so more may be found. */
+  historyMissing?: boolean;
   /** Brings a found message into view. */
   onJump: (messageId: string) => void;
   onClose: () => void;
@@ -24,7 +26,7 @@ export function searchChat(messages: Message[], query: string): string[] {
     .reverse();
 }
 
-export function ChatSearch({ query, onQuery, found, onJump, onClose }: ChatSearchProps) {
+export function ChatSearch({ query, onQuery, found, historyMissing, onJump, onClose }: ChatSearchProps) {
   // Counted from the newest match.
   const [at, setAt] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -42,7 +44,8 @@ export function ChatSearch({ query, onQuery, found, onJump, onClose }: ChatSearc
     "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-(--icon) hover:bg-(--hover-bg) disabled:opacity-40";
 
   return (
-    <div className="flex h-13 shrink-0 items-center gap-1 border-b border-l border-(--divider) bg-(--panel-header-bg) px-3" role="search">
+    <div className="shrink-0 border-b border-l border-(--divider) bg-(--panel-header-bg)">
+    <div className="flex h-13 items-center gap-1 px-3" role="search">
       <div className="relative min-w-0 flex-1">
         <SearchIcon size={16} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-(--icon)" />
         <input
@@ -79,6 +82,12 @@ export function ChatSearch({ query, onQuery, found, onJump, onClose }: ChatSearc
       <button type="button" onClick={onClose} aria-label="Close search" title="Close search (Esc)" className={button}>
         <CloseIcon size={18} />
       </button>
+    </div>
+    {historyMissing ? (
+      <p className="px-4 pb-2 text-[12.5px] text-(--text-secondary)" aria-live="polite">
+        Older messages are still coming from your phone; more may be found as they arrive.
+      </p>
+    ) : null}
     </div>
   );
 }

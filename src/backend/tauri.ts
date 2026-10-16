@@ -287,6 +287,7 @@ export class TauriBackend implements ChatBackend {
   pinnedMessages?: (chatId: string) => Promise<Pins>;
   pinMessage?: (chatId: string, messageId: string, secs: number | null) => Promise<void>;
   groupInfo?: (id: string) => Promise<GroupInfo>;
+  completeHistory?: (chatId: string) => Promise<boolean>;
   editMessage?: (chatId: string, messageId: string, text: string) => Promise<Message>;
   votePoll?: (chatId: string, messageId: string, options: number[]) => Promise<Message>;
   groupDetails?: (id: string) => Promise<GroupInfo>;
@@ -377,6 +378,7 @@ export class TauriBackend implements ChatBackend {
       this.lookupNumber = (phone) => invoke<string | null>("wa_lookup_number", { phone });
       this.votePoll = async (chatId, messageId, options) => toMessage(await invoke<RawMessage>("wa_vote_poll", { chatId, messageId, options }));
       this.groupInfo = async (id) => toGroupInfo(await invoke<RawGroupInfo>("wa_group_info", { id }), account);
+      this.completeHistory = (chatId) => invoke<boolean>("wa_complete_history", { chatId });
       this.groupDetails = async (id) => toGroupInfo(await invoke<RawGroupInfo>("wa_group_details", { id }), account);
       this.pinnedMessages = async (chatId) => {
         const raw = await invoke<{ messages: RawMessage[]; notes: { messageId: string; at: number; pinned: boolean; byMe: boolean; by: string | null }[] }>("wa_pinned_messages", { chatId });

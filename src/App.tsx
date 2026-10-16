@@ -696,6 +696,7 @@ function Shell() {
   }, [selectedBackend]);
 
   const loadGroup = useMemo(() => selectedBackend?.groupInfo?.bind(selectedBackend), [selectedBackend]);
+  const completeHistory = useMemo(() => selectedBackend?.completeHistory?.bind(selectedBackend), [selectedBackend]);
   const loadGroupDetails = useMemo(() => selectedBackend?.groupDetails?.bind(selectedBackend), [selectedBackend]);
   const loadContacts = useMemo(() => selectedBackend?.listContacts.bind(selectedBackend), [selectedBackend]);
   const loadPinned = useMemo(() => selectedBackend?.pinnedMessages?.bind(selectedBackend), [selectedBackend]);
@@ -1329,6 +1330,7 @@ function Shell() {
         focusMessageId={focusMessage}
         onLoadOlder={selectedBackend?.olderMessages ? loadOlder : undefined}
         historyTick={historyTick}
+        completeHistory={completeHistory}
         searchMessages={searchMessages}
         onEdit={canSend ? editMessage : undefined}
         onVote={canSend ? votePoll : undefined}

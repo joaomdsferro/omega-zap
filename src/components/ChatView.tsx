@@ -104,6 +104,8 @@ interface ChatViewProps {
   historyTick?: number;
   /** Searches the whole history, for the search in this chat. */
   searchMessages?: (query: string, chatId?: string) => Promise<StarredMessage[]>;
+  /** Whether all of a chat's history is here; if not, it is fetched first. */
+  completeHistory?: (chatId: string) => Promise<boolean>;
   /** A group's info, from what this computer knows. */
   loadGroup?: (id: string) => Promise<Group>;
   /** A group's info fresh from the network. */
@@ -116,7 +118,7 @@ interface ChatViewProps {
   pinsTick?: number;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onSendMedia, stickers, voice, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, onVote, onMessageNumber, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onBlock, onClearChat, onDeleteChat, onExitGroup, onEditGroup, onChangeMembers, loadContacts, groupTick, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onSendMedia, stickers, voice, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, onVote, onMessageNumber, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, completeHistory, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onBlock, onClearChat, onDeleteChat, onExitGroup, onEditGroup, onChangeMembers, loadContacts, groupTick, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
   const [personId, setPersonId] = useState<string | null>(null);
   const closePerson = useCallback(() => setPersonId(null), []);
   const loadShownPerson = useCallback(() => loadPerson!(personId!), [loadPerson, personId]);
@@ -276,8 +278,9 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
   useEffect(() => setSearchQuery(""), [searchOpen]);
   // What is loaded is searched at once; the rest of the history after a pause in typing.
   const [savedFound, setSavedFound] = useState<Message[]>([]);
+  useEffect(() => setSavedFound([]), [searchOpen, searchQuery, chat.id]);
+  // Searched again as older messages arrive from the phone, keeping what was found meanwhile.
   useEffect(() => {
-    setSavedFound([]);
     const q = searchQuery.trim();
     if (!searchOpen || !searchMessages || !q) return;
     let alive = true;
@@ -290,7 +293,21 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
       alive = false;
       window.clearTimeout(timer);
     };
-  }, [searchOpen, searchQuery, searchMessages, chat.account, chat.id]);
+  }, [searchOpen, searchQuery, searchMessages, chat.account, chat.id, historyTick]);
+  // Searching a chat whose older messages are still on the phone fetches
+  // them first; until they are all here, the bar says more may be found.
+  const [historyMissing, setHistoryMissing] = useState(false);
+  useEffect(() => {
+    setHistoryMissing(false);
+    if (!searchOpen || !completeHistory) return;
+    let alive = true;
+    completeHistory(chat.id)
+      .then((complete) => alive && setHistoryMissing(!complete))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [searchOpen, completeHistory, chat.id, historyTick]);
   const searchFound = useMemo(() => {
     if (!searchOpen) return [];
     const loaded = searchChat(messages, searchQuery);
@@ -710,7 +727,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
       </header>
       {menuAt ? <PopupMenu x={menuAt.x} y={menuAt.y} label={`Options for ${chat.name}`} items={menuItems} onClose={() => setMenuAt(null)} /> : null}
       <PinnedBar pins={pins} chatKey={chatKey} onJump={setJumpTo} />
-      {searchOpen ? <ChatSearch query={searchQuery} onQuery={setSearchQuery} found={searchFound} onJump={setJumpTo} onClose={() => setSearching(null)} /> : null}
+      {searchOpen ? <ChatSearch query={searchQuery} onQuery={setSearchQuery} found={searchFound} historyMissing={historyMissing} onJump={setJumpTo} onClose={() => setSearching(null)} /> : null}
 
       <div className="relative flex min-h-0 flex-1 flex-col">
       <div
