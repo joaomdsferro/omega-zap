@@ -2311,10 +2311,22 @@ impl ChatStore {
         delivery: Delivery,
         reader: Option<&str>,
     ) -> Vec<MessageDto> {
-        let chat_id = self.canonical(chat);
         let reader = reader.map(|r| self.canonical(r));
         if reader.as_ref().is_some_and(|r| self.own_ids.contains(r)) {
             return Vec::new();
+        }
+        let named = |chat: &StoredChat| chat.messages.iter().any(|m| m.from_me && ids.contains(&m.id));
+        let mut chat_id = self.canonical(chat);
+        // A receipt can name the chat by a LID not yet tied to the number the
+        // chat is kept under. Message ids are random, so they find it.
+        if !self.chats.get(&chat_id).is_some_and(named) {
+            match self.chats.iter().find(|(_, stored)| named(stored)) {
+                Some((id, _)) => chat_id = id.clone(),
+                None => {
+                    log::info!("receipt for {} message(s) in {chat} matched none kept here", ids.len());
+                    return Vec::new();
+                }
+            }
         }
         let Some(stored) = self.chats.get_mut(&chat_id) else {
             return Vec::new();
@@ -3286,6 +3298,16 @@ mod tests {
         store.ingest(incoming("1@s.whatsapp.net", "a", 1, true), false);
         assert_eq!(store.apply_receipt("1@s.whatsapp.net", &["a".into()], Delivery::Read, None).len(), 1);
         assert!(store.apply_receipt("1@s.whatsapp.net", &["a".into()], Delivery::Delivered, None).is_empty());
+    }
+
+    #[test]
+    fn a_receipt_from_an_unknown_lid_finds_its_message() {
+        let mut store = ChatStore::default();
+        store.ingest(incoming("1@s.whatsapp.net", "a", 1, true), false);
+        let changed = store.apply_receipt("99@lid", &["a".into()], Delivery::Delivered, Some("99@lid"));
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].chat_id, "1@s.whatsapp.net");
+        assert!(store.apply_receipt("99@lid", &["zz".into()], Delivery::Read, None).is_empty());
     }
 
     #[test]
