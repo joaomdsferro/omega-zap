@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { isLogo } from "../lib/logos";
 import { PersonSilhouette } from "./Icons";
 
 interface AvatarProps {
@@ -45,7 +46,8 @@ export function Avatar({ name, initials, hue, src, size, group, online }: Avatar
           alt=""
           draggable={false}
           onError={() => setFailedSrc(src)}
-          className="absolute inset-0 h-full w-full rounded-full object-cover"
+          className={`absolute inset-0 h-full w-full rounded-full ${isLogo(src) ? "object-contain p-[18%]" : "object-cover"}`}
+          style={isLogo(src) ? { background: "color-mix(in oklab, var(--text-secondary) 16%, var(--panel-bg))" } : undefined}
         />
       ) : null}
       {online ? (
