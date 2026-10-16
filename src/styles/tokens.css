@@ -558,3 +558,8 @@ button.mention:hover {
   border-radius: 3px;
   box-shadow: 0 0 0 1px color-mix(in oklab, #ffcc00 50%, transparent);
 }
+
+/* A long text cut before "Read more": its last lines fade out. */
+.read-more-fade {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 2.75em), transparent);
+}

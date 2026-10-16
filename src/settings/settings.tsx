@@ -84,6 +84,9 @@ export const SIDEBAR_MAX = 640;
 /** The conversation pane never gets narrower than this while resizing. */
 export const CHAT_MIN = 380;
 
+export const LONG_TEXT_CHARS = { min: 200, max: 5000, step: 100 };
+export const LONG_TEXT_LINES = { min: 4, max: 100, step: 2 };
+
 export interface Settings {
   theme: ThemeId;
   zoom: number;
@@ -99,6 +102,12 @@ export interface Settings {
   fetchLinkPreviews: boolean;
   /** GIFs at the size they were sent and smaller stickers, instead of WhatsApp's sizes. */
   compactMedia: boolean;
+  /** Long texts show their start and a "Read more". */
+  shortenLongTexts: boolean;
+  /** Where a long text is cut: at most this many characters... */
+  longTextChars: number;
+  /** ...and this many lines. */
+  longTextLines: number;
   /** Desktop notifications for new messages and reactions. */
   notifications: boolean;
   /** Show what a message says in its notification. */
@@ -122,6 +131,9 @@ const DEFAULTS: Settings = {
   inlineVideos: true,
   fetchLinkPreviews: true,
   compactMedia: false,
+  shortenLongTexts: true,
+  longTextChars: 700,
+  longTextLines: 18,
   notifications: true,
   notificationPreview: true,
   trayBadge: "red",
@@ -165,6 +177,13 @@ function load(parsed: Stored): Settings {
     inlineVideos: parsed.inlineVideos !== false,
     fetchLinkPreviews: parsed.fetchLinkPreviews !== false,
     compactMedia: parsed.compactMedia === true,
+    shortenLongTexts: parsed.shortenLongTexts !== false,
+    longTextChars: Number.isFinite(parsed.longTextChars)
+      ? clamp(parsed.longTextChars as number, LONG_TEXT_CHARS.min, LONG_TEXT_CHARS.max)
+      : DEFAULTS.longTextChars,
+    longTextLines: Number.isFinite(parsed.longTextLines)
+      ? clamp(parsed.longTextLines as number, LONG_TEXT_LINES.min, LONG_TEXT_LINES.max)
+      : DEFAULTS.longTextLines,
     notifications: parsed.notifications !== false,
     notificationPreview: parsed.notificationPreview !== false,
     notificationOpensChat: parsed.notificationOpensChat === true,
@@ -188,6 +207,9 @@ interface SettingsContextValue {
   setInlineVideos: (inline: boolean) => void;
   setCompactMedia: (compact: boolean) => void;
   setFetchLinkPreviews: (on: boolean) => void;
+  setShortenLongTexts: (on: boolean) => void;
+  setLongTextChars: (chars: number) => void;
+  setLongTextLines: (lines: number) => void;
   setNotifications: (on: boolean) => void;
   setNotificationPreview: (on: boolean) => void;
   setTrayBadge: (badge: TrayBadge) => void;
@@ -265,6 +287,11 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       setInlineVideos: (inlineVideos) => setSettings((s) => ({ ...s, inlineVideos })),
       setFetchLinkPreviews: (fetchLinkPreviews) => setSettings((s) => ({ ...s, fetchLinkPreviews })),
       setCompactMedia: (compactMedia) => setSettings((s) => ({ ...s, compactMedia })),
+      setShortenLongTexts: (shortenLongTexts) => setSettings((s) => ({ ...s, shortenLongTexts })),
+      setLongTextChars: (chars) =>
+        setSettings((s) => ({ ...s, longTextChars: clamp(chars, LONG_TEXT_CHARS.min, LONG_TEXT_CHARS.max) })),
+      setLongTextLines: (lines) =>
+        setSettings((s) => ({ ...s, longTextLines: clamp(lines, LONG_TEXT_LINES.min, LONG_TEXT_LINES.max) })),
       setNotifications: (notifications) => setSettings((s) => ({ ...s, notifications })),
       setNotificationPreview: (notificationPreview) => setSettings((s) => ({ ...s, notificationPreview })),
       setTrayBadge: (trayBadge) => setSettings((s) => ({ ...s, trayBadge })),

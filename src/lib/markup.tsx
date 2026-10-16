@@ -417,3 +417,45 @@ export function editorHtml(text: string, emojiSize = 20): string {
   if (text.endsWith("\n")) html += "<br data-end>";
   return html;
 }
+
+/** Not worth a "Read more" for the last few words. */
+const SHORT_SLACK = 80;
+/** How far back a cut looks for the end of a line, then of a word. */
+const LINE_BACK = 160;
+const WORD_BACK = 40;
+
+/**
+ * A long text's start, as it shows before "Read more": at most `chars`
+ * characters and `lines` lines, cut at the end of a line or a word and never
+ * inside formatting, a link or a ``` block. Undefined when the text is short
+ * enough to show whole.
+ */
+export function shortened(text: string, chars: number, lines: number): string | undefined {
+  let end = Math.min(text.length, chars);
+  let count = 0;
+  for (let at = text.indexOf("\n"); at !== -1 && at < end; at = text.indexOf("\n", at + 1)) {
+    if (++count === lines) end = at;
+  }
+  if (text.length - end < SHORT_SLACK) return undefined;
+  if (count < lines) {
+    const head = text.slice(0, end);
+    const line = head.lastIndexOf("\n");
+    const space = head.search(/\s\S*$/);
+    if (line > end - LINE_BACK) end = line;
+    else if (space > end - WORD_BACK) end = space;
+  }
+  // Back to the start of whatever formatted stretch the cut falls in.
+  let stretch = -1;
+  for (const run of tokenize(text)) {
+    if (run.start >= end) break;
+    const plain = run.kind === "text" && run.styles === 0;
+    stretch = plain ? -1 : stretch === -1 ? run.start : stretch;
+    if (!plain && run.start + run.text.length > end) {
+      end = stretch;
+      break;
+    }
+  }
+  const cut = text.slice(0, end).trimEnd();
+  return cut ? cut : undefined;
+}
+

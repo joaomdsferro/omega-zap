@@ -9,6 +9,8 @@ import {
   THEMES,
   TRAY_BADGES,
   ZOOM_STEPS,
+  LONG_TEXT_CHARS,
+  LONG_TEXT_LINES,
   useSettings,
   useSidebarWidth,
 } from "../settings/settings";
@@ -191,6 +193,31 @@ function StepButton({ label, onClick, disabled, children }: { label: string; onC
   );
 }
 
+/** A number set with − and + buttons, in a settings row. */
+function Stepper({ label, value, range, onChange }: {
+  label: string;
+  value: number;
+  range: { min: number; max: number; step: number };
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div className="flex items-center gap-4 rounded-lg px-3 py-2.5">
+      <span className="min-w-0 flex-1 text-[15px] text-(--text-primary)">{label}</span>
+      <div className="flex shrink-0 items-center gap-2">
+        <StepButton label={`Fewer: ${label}`} onClick={() => onChange(value - range.step)} disabled={value <= range.min}>
+          −
+        </StepButton>
+        <output className="w-12 text-center text-[15px] tabular-nums text-(--text-primary)" aria-live="polite">
+          {value}
+        </output>
+        <StepButton label={`More: ${label}`} onClick={() => onChange(value + range.step)} disabled={value >= range.max}>
+          +
+        </StepButton>
+      </div>
+    </div>
+  );
+}
+
 function AccountCard({ account, onLink }: { account: Account; onLink: () => void }) {
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -367,6 +394,9 @@ export function SettingsPanel({ accounts, onBack, onLink, privacy, microphones }
     setFetchLinkPreviews,
     setInlineVideos,
     setCompactMedia,
+    setShortenLongTexts,
+    setLongTextChars,
+    setLongTextLines,
     setNotifications,
     setNotificationPreview,
     setTrayBadge,
@@ -477,6 +507,31 @@ export function SettingsPanel({ accounts, onBack, onLink, privacy, microphones }
               })}
             </div>
           </div>
+        </Section>
+
+        <Section title="Messages">
+          <Switch
+            checked={settings.shortenLongTexts}
+            onChange={setShortenLongTexts}
+            label="Shorten long messages"
+            description="A long message shows its start and a “Read more” that opens the rest, as on WhatsApp. Search results always show whole."
+          />
+          {settings.shortenLongTexts ? (
+            <>
+              <Stepper
+                label="Characters before “Read more”"
+                value={settings.longTextChars}
+                range={LONG_TEXT_CHARS}
+                onChange={setLongTextChars}
+              />
+              <Stepper
+                label="Lines before “Read more”"
+                value={settings.longTextLines}
+                range={LONG_TEXT_LINES}
+                onChange={setLongTextLines}
+              />
+            </>
+          ) : null}
         </Section>
 
         <Section title="Media">
