@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { ACCOUNTS, PLANNED_ACCOUNTS, type AccountId } from "../accounts/accounts";
 import type { Account } from "../accounts/useAccount";
 import type { Microphone, Privacy, PrivacyCategory } from "../backend";
+import { version } from "../../package.json";
 import { modKey } from "../lib/platform";
 import {
   SIDEBAR_DEFAULT,
@@ -592,7 +593,7 @@ export function SettingsPanel({ accounts, onBack, onLink, privacy, microphones }
         </Section>
 
         <Section title="About">
-          <p className="text-[14px] text-(--text-primary)">Omega Zap 0.0.1</p>
+          <p className="text-[14px] text-(--text-primary)">Omega Zap {version}</p>
           <p className="mt-1 text-[13px] leading-5 text-(--text-secondary)">
             An unofficial WhatsApp and Signal client. Not affiliated with WhatsApp,
             Meta or Signal.
