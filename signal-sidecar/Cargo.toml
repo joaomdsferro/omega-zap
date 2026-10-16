@@ -12,8 +12,8 @@ license = "AGPL-3.0-only"
 [workspace]
 
 [dependencies]
-presage = { git = "https://github.com/whisperfish/presage", rev = "33dd1491130793390e356e15a5711f1e6ca14fdb" }
-presage-store-sqlite = { git = "https://github.com/whisperfish/presage", rev = "33dd1491130793390e356e15a5711f1e6ca14fdb" }
+presage = { git = "https://github.com/whisperfish/presage", rev = "32ffc659fce2f0be7fb01cffdf8c3ebc0c757d80" }
+presage-store-sqlite = { git = "https://github.com/whisperfish/presage", rev = "32ffc659fce2f0be7fb01cffdf8c3ebc0c757d80" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "time"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
@@ -24,7 +24,7 @@ libsignal-message-backup = { git = "https://github.com/signalapp/libsignal", tag
 protobuf = "3.7"
 reqwest = { version = "0.13", default-features = false }
 rand = "0.9"
-base64 = "0.22"
+base64 = "0.23"
 
 [patch.crates-io]
 libsqlite3-sys = { version = "0.36.0", git = "https://github.com/whisperfish/rusqlite", rev = "2a42b3354c9194700d08aa070f70a131a470e7dc" }

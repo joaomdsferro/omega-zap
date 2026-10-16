@@ -21,13 +21,14 @@ use whatsapp_rust::prelude::*;
 use whatsapp_rust::wacore::store::DevicePropsOverride;
 use whatsapp_rust::wacore::types::events::LazyHistorySync;
 use whatsapp_rust::wacore::iq::privacy::{PrivacyCategory, PrivacyValue};
-use whatsapp_rust::wacore::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
+use whatsapp_rust::wacore::types::presence::{ChatActivity, ReceiptType};
 use whatsapp_rust::waproto::buffa::MessageField;
 use whatsapp_rust::waproto::whatsapp::sync_action_value::label_edit_action::ListType;
 use whatsapp_rust::waproto::whatsapp::sync_action_value::{FavoritesAction, LabelEditAction, favorites_action};
 use whatsapp_rust::{
-    AppStateResyncMode, ChatStateType, ErrorChainExt, MediaRetryResult, MediaReuploadRequest, PresencePolicy, PresenceStatus,
-    PinDuration, ProfilePictureLookup, RevokeType, UploadOptions, WAPatchName, message_key, message_range, schemas,
+    AppStateResyncMode, ErrorChainExt, MediaRetryResult, MediaReuploadRequest, PresencePolicy, PresenceStatus,
+    EditRequest, MessageId, MessageRef, PinDuration, ProfilePictureLookup, ProfilePictureRequest, ProfilePictureTarget, ProfilePictureType,
+    RevokeType, UploadOptions, WAPatchName, message_range, schemas,
 };
 
 use crate::account::{
@@ -347,12 +348,13 @@ impl WaManager {
         let client = self.connected_client().await?;
         let jid: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
         let target = lock(&self.store).reaction_target(chat_id, message_id).ok_or("That message is gone.")?;
-        let key = wa::MessageKey {
-            remote_jid: Some(chat_id.to_string()),
-            from_me: Some(target.from_me),
-            id: Some(message_id.to_string()),
-            participant: target.author.filter(|_| chat_id.ends_with("@g.us") && !target.from_me),
-            ..Default::default()
+        let key = {
+            let mut key = wa::MessageKey::default();
+            key.remote_jid = Some(chat_id.to_string());
+            key.from_me = Some(target.from_me);
+            key.id = Some(message_id.to_string());
+            key.participant = target.author.filter(|_| chat_id.ends_with("@g.us") && !target.from_me);
+            key
         };
         let at_ms = now_ms();
         let until_ms = match secs {
@@ -362,11 +364,11 @@ impl WaManager {
                     86_401..=604_800 => PinDuration::Days7,
                     _ => PinDuration::Days30,
                 };
-                client.pin_message(jid, key, duration).await.map_err(|e| format!("The message was not pinned: {e}"))?;
+                client.pin_message_raw(jid, key, duration).await.map_err(|e| format!("The message was not pinned: {e}"))?;
                 Some(at_ms + secs as i64 * 1000)
             }
             None => {
-                client.unpin_message(jid, key).await.map_err(|e| format!("The message was not unpinned: {e}"))?;
+                client.unpin_message_raw(jid, key).await.map_err(|e| format!("The message was not unpinned: {e}"))?;
                 None
             }
         };
@@ -460,11 +462,13 @@ impl WaManager {
                 .await
                 .map_err(|e| e.to_string())??;
         }
-        let config = whatsapp_rust::store::SqliteStoreConfig::default()
+        let config = whatsapp_rust::store::SqliteDatabaseConfig::default()
             .with_connection_init(move |conn| crate::sqlcipher::unlock(conn, &key));
-        let backend = SqliteStore::with_config(&session.to_string_lossy(), config)
+        // One account, device 1, as the store has always been opened.
+        let backend = whatsapp_rust::store::SqliteDatabase::open(&session.to_string_lossy(), config)
             .await
-            .map_err(|e| format!("Could not open the WhatsApp session store: {e}"))?;
+            .map_err(|e| format!("Could not open the WhatsApp session store: {e}"))?
+            .store(1);
 
         let mgr = self.clone();
         let bot = Bot::builder()
@@ -650,11 +654,12 @@ impl WaManager {
             (Some(sender), _) => sender.clone(),
             (None, _) => chat_id.to_string(),
         };
-        let context = wa::ContextInfo {
-            stanza_id: Some(id.to_string()),
-            participant: Some(sender.clone()),
-            quoted_message: MessageField::some(wa::Message::text(source.text.clone())),
-            ..Default::default()
+        let context = {
+            let mut context = wa::ContextInfo::default();
+            context.stanza_id = Some(id.to_string());
+            context.participant = Some(sender.clone());
+            context.quoted_message = MessageField::some(wa::Message::text(source.text.clone()));
+            context
         };
         Ok(Some((context, ReplyRef { author_jid: Some(sender), id: Some(id.to_string()), text: source.text })))
     }
@@ -711,7 +716,11 @@ impl WaManager {
                 let (ext, card) = self.link_message(&client, text, link).await;
                 let mut ext = ext;
                 ext.context_info = context.map(MessageField::some).unwrap_or_default();
-                (wa::Message { extended_text_message: MessageField::some(ext), ..Default::default() }, Some(card))
+                ({
+                    let mut message = wa::Message::default();
+                    message.extended_text_message = MessageField::some(ext);
+                    message
+                }, Some(card))
             }
             None => match context {
                 Some(context) => (wa::Message::text_with_context(text, context), None),
@@ -725,7 +734,7 @@ impl WaManager {
         let mut content = Content::text(text, quoted);
         content.link = card;
         content.forwarded = forwarded;
-        self.store_sent(chat_id, sent.message_id, content)
+        self.store_sent(chat_id, sent.message_id.into_string(), content)
     }
 
     /// A text with its link card, as WhatsApp's apps send it: the small
@@ -738,13 +747,14 @@ impl WaManager {
         link: OutgoingLink,
     ) -> (wa::message::ExtendedTextMessage, LinkPreview) {
         let thumbnail = OutgoingLink::decoded(&link.thumbnail);
-        let mut ext = wa::message::ExtendedTextMessage {
-            text: Some(text.to_string()),
-            matched_text: Some(link.url.clone()),
-            title: link.title.clone(),
-            description: link.description.clone(),
-            jpeg_thumbnail: thumbnail.clone(),
-            ..Default::default()
+        let mut ext = {
+            let mut ext = wa::message::ExtendedTextMessage::default();
+            ext.text = Some(text.to_string());
+            ext.matched_text = Some(link.url.clone());
+            ext.title = link.title.clone();
+            ext.description = link.description.clone();
+            ext.jpeg_thumbnail = thumbnail.clone();
+            ext
         };
         let mut large = None;
         if let Some(image) = OutgoingLink::decoded(&link.image) {
@@ -821,78 +831,82 @@ impl WaManager {
         let mut outgoing = wa::Message::default();
         match media_type {
             MediaType::Image => {
-                outgoing.image_message = MessageField::some(wa::message::ImageMessage {
-                    url: Some(upload.url.clone()),
-                    direct_path: Some(upload.direct_path.clone()),
-                    media_key: Some(upload.media_key.to_vec()),
-                    file_sha256: Some(upload.file_sha256.to_vec()),
-                    file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
-                    file_length: Some(upload.file_length),
-                    media_key_timestamp: Some(upload.media_key_timestamp),
-                    mimetype: Some(mime.clone()),
-                    caption,
-                    width: file.width,
-                    height: file.height,
-                    jpeg_thumbnail: thumbnail,
-                    context_info,
-                    ..Default::default()
+                outgoing.image_message = MessageField::some({
+                    let mut image = wa::message::ImageMessage::default();
+                    image.url = Some(upload.url.clone());
+                    image.direct_path = Some(upload.direct_path.clone());
+                    image.media_key = Some(upload.media_key.to_vec());
+                    image.file_sha256 = Some(upload.file_sha256.to_vec());
+                    image.file_enc_sha256 = Some(upload.file_enc_sha256.to_vec());
+                    image.file_length = Some(upload.file_length);
+                    image.media_key_timestamp = Some(upload.media_key_timestamp);
+                    image.mimetype = Some(mime.clone());
+                    image.caption = caption;
+                    image.width = file.width;
+                    image.height = file.height;
+                    image.jpeg_thumbnail = thumbnail;
+                    image.context_info = context_info;
+                    image
                 })
             }
             MediaType::Video => {
-                outgoing.video_message = MessageField::some(wa::message::VideoMessage {
-                    url: Some(upload.url.clone()),
-                    direct_path: Some(upload.direct_path.clone()),
-                    media_key: Some(upload.media_key.to_vec()),
-                    file_sha256: Some(upload.file_sha256.to_vec()),
-                    file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
-                    file_length: Some(upload.file_length),
-                    media_key_timestamp: Some(upload.media_key_timestamp),
-                    streaming_sidecar: upload.streaming_sidecar.clone(),
-                    mimetype: Some(mime.clone()),
-                    caption,
-                    seconds: file.seconds,
-                    width: file.width,
-                    height: file.height,
-                    jpeg_thumbnail: thumbnail,
-                    context_info,
-                    ..Default::default()
+                outgoing.video_message = MessageField::some({
+                    let mut video = wa::message::VideoMessage::default();
+                    video.url = Some(upload.url.clone());
+                    video.direct_path = Some(upload.direct_path.clone());
+                    video.media_key = Some(upload.media_key.to_vec());
+                    video.file_sha256 = Some(upload.file_sha256.to_vec());
+                    video.file_enc_sha256 = Some(upload.file_enc_sha256.to_vec());
+                    video.file_length = Some(upload.file_length);
+                    video.media_key_timestamp = Some(upload.media_key_timestamp);
+                    video.streaming_sidecar = upload.streaming_sidecar.clone();
+                    video.mimetype = Some(mime.clone());
+                    video.caption = caption;
+                    video.seconds = file.seconds;
+                    video.width = file.width;
+                    video.height = file.height;
+                    video.jpeg_thumbnail = thumbnail;
+                    video.context_info = context_info;
+                    video
                 })
             }
             MediaType::Audio => {
-                outgoing.audio_message = MessageField::some(wa::message::AudioMessage {
-                    url: Some(upload.url.clone()),
-                    direct_path: Some(upload.direct_path.clone()),
-                    media_key: Some(upload.media_key.to_vec()),
-                    file_sha256: Some(upload.file_sha256.to_vec()),
-                    file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
-                    file_length: Some(upload.file_length),
-                    media_key_timestamp: Some(upload.media_key_timestamp),
-                    streaming_sidecar: upload.streaming_sidecar.clone(),
+                outgoing.audio_message = MessageField::some({
+                    let mut audio = wa::message::AudioMessage::default();
+                    audio.url = Some(upload.url.clone());
+                    audio.direct_path = Some(upload.direct_path.clone());
+                    audio.media_key = Some(upload.media_key.to_vec());
+                    audio.file_sha256 = Some(upload.file_sha256.to_vec());
+                    audio.file_enc_sha256 = Some(upload.file_enc_sha256.to_vec());
+                    audio.file_length = Some(upload.file_length);
+                    audio.media_key_timestamp = Some(upload.media_key_timestamp);
+                    audio.streaming_sidecar = upload.streaming_sidecar.clone();
                     // A voice message keeps its codec, as the phone sends it.
-                    mimetype: Some(if file.voice { file.mime.clone() } else { mime.clone() }),
-                    seconds: file.seconds,
-                    ptt: Some(file.voice),
-                    waveform: (file.voice && !file.waveform.is_empty()).then(|| file.waveform.clone()),
-                    context_info,
-                    ..Default::default()
+                    audio.mimetype = Some(if file.voice { file.mime.clone() } else { mime.clone() });
+                    audio.seconds = file.seconds;
+                    audio.ptt = Some(file.voice);
+                    audio.waveform = (file.voice && !file.waveform.is_empty()).then(|| file.waveform.clone());
+                    audio.context_info = context_info;
+                    audio
                 })
             }
             _ => {
-                outgoing.document_message = MessageField::some(wa::message::DocumentMessage {
-                    url: Some(upload.url.clone()),
-                    direct_path: Some(upload.direct_path.clone()),
-                    media_key: Some(upload.media_key.to_vec()),
-                    file_sha256: Some(upload.file_sha256.to_vec()),
-                    file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
-                    file_length: Some(upload.file_length),
-                    media_key_timestamp: Some(upload.media_key_timestamp),
-                    mimetype: Some(if mime.is_empty() { "application/octet-stream".into() } else { mime.clone() }),
-                    file_name: Some(file.name.clone()),
-                    title: Some(file.name.clone()),
-                    caption,
-                    jpeg_thumbnail: thumbnail,
-                    context_info,
-                    ..Default::default()
+                outgoing.document_message = MessageField::some({
+                    let mut document = wa::message::DocumentMessage::default();
+                    document.url = Some(upload.url.clone());
+                    document.direct_path = Some(upload.direct_path.clone());
+                    document.media_key = Some(upload.media_key.to_vec());
+                    document.file_sha256 = Some(upload.file_sha256.to_vec());
+                    document.file_enc_sha256 = Some(upload.file_enc_sha256.to_vec());
+                    document.file_length = Some(upload.file_length);
+                    document.media_key_timestamp = Some(upload.media_key_timestamp);
+                    document.mimetype = Some(if mime.is_empty() { "application/octet-stream".into() } else { mime.clone() });
+                    document.file_name = Some(file.name.clone());
+                    document.title = Some(file.name.clone());
+                    document.caption = caption;
+                    document.jpeg_thumbnail = thumbnail;
+                    document.context_info = context_info;
+                    document
                 })
             }
         }
@@ -918,7 +932,7 @@ impl WaManager {
         } else {
             let _ = fs::remove_file(&staged);
         }
-        self.store_sent(chat_id, sent.message_id, content)
+        self.store_sent(chat_id, sent.message_id.into_string(), content)
     }
 
     /// Downloads and decrypts a file into `dir_name` under `prefix` and its
@@ -950,7 +964,8 @@ impl WaManager {
             &decode(&file.enc_sha256)?,
             file.size,
             media_type,
-        );
+        )
+        .map_err(|e| format!("Bad file reference: {e}"))?;
         // The folder first, so a document's own folder is not what creates it
         // with the default permissions.
         for dir in [self.dir.join(dir_name), path.parent().unwrap_or(&self.dir).to_path_buf()] {
@@ -969,7 +984,7 @@ impl WaManager {
         // Encrypted as it streams in; nothing plain reaches the disk.
         let sink = crate::vault::Writer::create(crate::vault::get(), &partial)
             .map_err(|e| format!("could not save {name}: {e}"))?;
-        let sink = match client.download_from_params_to_writer(&params, sink).await {
+        let sink = match client.download_to_writer(&params, sink).await {
             Ok(sink) => sink,
             Err(e) => {
                 let _ = fs::remove_file(&partial);
@@ -1038,17 +1053,17 @@ impl WaManager {
         let (sender, from_me) = lock(&self.store).star_target(chat_id, message_id).ok_or("That message is gone.")?;
         let chat: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
         let sender = sender.and_then(|s| s.parse::<Jid>().ok());
-        let media_key = BASE64.decode(&file.key).map_err(|e| format!("Bad file reference: {e}"))?;
+        let media_key: [u8; 32] = BASE64
+            .decode(&file.key)
+            .ok()
+            .and_then(|key| key.try_into().ok())
+            .ok_or("Bad file reference.")?;
         let participant = sender.filter(|_| !from_me && (chat_id.ends_with("@g.us") || chat_id == "status@broadcast"));
+        let id = MessageId::new(message_id).map_err(|e| format!("Bad message: {e}"))?;
+        let target = MessageRef::new(&chat, id, participant.as_ref(), from_me).map_err(|e| format!("Bad message: {e}"))?;
         let result = client
             .media_reupload()
-            .request(&MediaReuploadRequest {
-                msg_id: message_id,
-                chat_jid: &chat,
-                media_key: &media_key,
-                is_from_me: from_me,
-                participant: participant.as_ref(),
-            })
+            .request(&MediaReuploadRequest { target, media_key: &media_key })
             .await
             .map_err(|e| format!("The phone did not send the file again: {e}"))?;
         match result {
@@ -1084,17 +1099,18 @@ impl WaManager {
             )
         };
         let remove = target.mine.as_deref() == Some(emoji);
-        let key = wa::MessageKey {
-            remote_jid: Some(chat_id.to_string()),
-            from_me: Some(target.from_me),
-            id: Some(message_id.to_string()),
+        let key = {
+            let mut key = wa::MessageKey::default();
+            key.remote_jid = Some(chat_id.to_string());
+            key.from_me = Some(target.from_me);
+            key.id = Some(message_id.to_string());
             // Groups need the original sender to attribute the reaction.
-            participant: target.author.filter(|_| chat_id.ends_with("@g.us") && !target.from_me),
-            ..Default::default()
+            key.participant = target.author.filter(|_| chat_id.ends_with("@g.us") && !target.from_me);
+            key
         };
         // An empty emoji is how WhatsApp removes a reaction.
         client
-            .send_reaction(jid, key, if remove { "" } else { emoji })
+            .send_reaction_raw(jid, key, if remove { "" } else { emoji })
             .await
             .map_err(|e| format!("The reaction was not sent: {e}"))?;
         let dto = lock(&self.store)
@@ -1121,7 +1137,7 @@ impl WaManager {
         };
         let voter_jid: Jid = voter.parse().ok()?;
         let ciphertext = whatsapp_rust::wacore::poll::PollVoteCiphertext { enc_payload: &vote.payload, enc_iv: &vote.iv };
-        let hashes = match client.polls().decrypt_vote(ciphertext, &secret, &vote.target, &creator, &voter_jid).await {
+        let hashes = match client.polls().decrypt_vote_raw(ciphertext, &secret, &vote.target, &creator, &voter_jid).await {
             Ok(hashes) => hashes,
             Err(e) => {
                 log::warn!("whatsapp: a poll vote could not be opened: {e}");
@@ -1151,7 +1167,7 @@ impl WaManager {
         let chat: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
         client
             .polls()
-            .vote(chat, message_id, &creator, &secret, &names)
+            .vote_raw(chat, message_id, &creator, &secret, &names)
             .await
             .map_err(|e| format!("The vote was not sent: {e}"))?;
         let mut store = lock(&self.store);
@@ -1175,8 +1191,10 @@ impl WaManager {
         }
         let client = self.connected_client().await?;
         let jid: Jid = chat_id.parse().map_err(|e| format!("Invalid chat {chat_id}: {e}"))?;
+        let id = MessageId::new(message_id).map_err(|e| format!("The message was not edited: {e}"))?;
+        let target = MessageRef::new(&jid, id, None, true).map_err(|e| format!("The message was not edited: {e}"))?;
         client
-            .edit_message(jid, message_id, wa::Message::text(text))
+            .edit_message(EditRequest::new(target, wa::Message::text(text)))
             .await
             .map_err(|e| format!("The message was not edited: {e}"))?;
         let dto = lock(&self.store).edit_message(chat_id, message_id, None, Content::text(text, None), store::now_ms());
@@ -1201,16 +1219,19 @@ impl WaManager {
                 return Err("Only your own messages can be deleted for everyone.".into());
             }
             client
-                .revoke_message(jid, message_id, RevokeType::Sender)
+                .revoke_message_raw(&jid, message_id, RevokeType::Sender)
                 .await
                 .map_err(|e| format!("The message was not deleted: {e}"))?;
         } else {
             let participant = sender
                 .filter(|_| chat_id.ends_with("@g.us") && !from_me)
                 .and_then(|s| s.parse::<Jid>().ok());
+            let id = MessageId::new(message_id).map_err(|e| format!("The message was not deleted: {e}"))?;
+            let target =
+                MessageRef::new(&jid, id, participant.as_ref(), from_me).map_err(|e| format!("The message was not deleted: {e}"))?;
             client
                 .chat_actions()
-                .delete_message_for_me(&jid, participant.as_ref(), message_id, from_me, true, Some(ts / 1000))
+                .delete_message_for_me(&target, true, Some(ts / 1000))
                 .await
                 .map_err(|e| format!("The message was not deleted: {e}"))?;
         }
@@ -1286,7 +1307,7 @@ impl WaManager {
             return;
         };
         // Offline meanwhile: the next connection announces it.
-        if !client.is_connected() {
+        if !client.is_socket_connected() || !client.is_logged_in() {
             return;
         }
         let active = self.active.load(Ordering::Acquire);
@@ -1303,9 +1324,9 @@ impl WaManager {
     /// Tells the chat we are typing, recording, or have stopped.
     pub async fn set_typing(&self, chat_id: &str, state: &str) -> Result<(), String> {
         let state = match state {
-            "typing" => ChatStateType::Composing,
-            "recording" => ChatStateType::Recording,
-            _ => ChatStateType::Paused,
+            "typing" => ChatActivity::Typing,
+            "recording" => ChatActivity::RecordingAudio,
+            _ => ChatActivity::Idle,
         };
         let client = self.connected_client().await?;
         let jid: Jid = chat_id.parse().map_err(|e| format!("Not a chat: {e}"))?;
@@ -1377,7 +1398,7 @@ impl WaManager {
         let last = lock(&self.store).last_message_key(chat_id)?;
         let chat: Jid = last.chat.parse().ok()?;
         let sender = last.sender.and_then(|s| s.parse::<Jid>().ok());
-        let key = message_key(last.id, &chat, last.from_me, sender.as_ref());
+        let key = MessageRef::new(&chat, MessageId::new(last.id).ok()?, sender.as_ref(), last.from_me).ok()?;
         Some(message_range(last.ts_s, None, vec![(key, last.ts_s)]))
     }
 
@@ -1619,7 +1640,8 @@ impl WaManager {
         let known = lock(&self.store).full_picture(id).map(str::to_string);
         // The picture id is what follows the owner in the file name.
         let known_id = known.as_deref().and_then(|file| file.strip_suffix(".jpg")?.rsplit('-').next().map(str::to_string));
-        let lookup = client.contacts().lookup_profile_picture(jid, false, known_id.as_deref()).await.ok()?;
+        let request = ProfilePictureRequest::new(picture_target(jid), ProfilePictureType::Full).existing_id(known_id.as_deref());
+        let lookup = client.pictures().lookup(request).await.ok()?;
         let picture = match lookup {
             ProfilePictureLookup::Found(picture) => picture,
             ProfilePictureLookup::Unchanged => return known.filter(|file| dir.join(file).exists()),
@@ -1629,7 +1651,7 @@ impl WaManager {
         if dir.join(&file).exists() {
             return Some(file);
         }
-        let response = client.http_client.execute(HttpRequest::get(picture.url.as_str())).await.ok()?;
+        let response = client.http_client().execute(HttpRequest::get(picture.url.as_str())).await.ok()?;
         if response.status_code != 200 || response.body.is_empty() {
             return None;
         }
@@ -1659,16 +1681,22 @@ impl WaManager {
     pub async fn set_favorite(&self, chat_id: &str, favorite: bool) -> Result<(), String> {
         let client = self.connected_client().await?;
         let ids = lock(&self.store).favorites_with(chat_id, favorite);
-        let value = wa::SyncActionValue {
-            favorites_action: MessageField::some(FavoritesAction {
-                favorites: ids
+        let value = {
+            let mut value = wa::SyncActionValue::default();
+            value.favorites_action = MessageField::some({
+                let mut action = FavoritesAction::default();
+                action.favorites = ids
                     .into_iter()
-                    .map(|id| favorites_action::Favorite { id: Some(id), ..Default::default() })
-                    .collect(),
-                ..Default::default()
-            }),
-            timestamp: Some(now_ms()),
-            ..Default::default()
+                    .map(|id| {
+                        let mut entry = favorites_action::Favorite::default();
+                        entry.id = Some(id);
+                        entry
+                    })
+                    .collect();
+                action
+            });
+            value.timestamp = Some(now_ms());
+            value
         };
         // The phone keeps one list, so every change sends all of it.
         client
@@ -1710,18 +1738,20 @@ impl WaManager {
                 }
             }
         };
-        let value = wa::SyncActionValue {
-            label_edit_action: MessageField::some(LabelEditAction {
-                name: Some(name.to_string()),
-                color: Some(color),
-                deleted: Some(false),
-                order_index: Some(order),
-                is_active: Some(true),
-                r#type: Some(ListType::CUSTOM),
-                ..Default::default()
-            }),
-            timestamp: Some(now_ms()),
-            ..Default::default()
+        let value = {
+            let mut value = wa::SyncActionValue::default();
+            value.label_edit_action = MessageField::some({
+                let mut label = LabelEditAction::default();
+                label.name = Some(name.to_string());
+                label.color = Some(color);
+                label.deleted = Some(false);
+                label.order_index = Some(order);
+                label.is_active = Some(true);
+                label.r#type = Some(ListType::CUSTOM);
+                label
+            });
+            value.timestamp = Some(now_ms());
+            value
         };
         client
             .send_app_state_action(&schemas::LABEL_EDIT, &[id.as_str()], &value)
@@ -1774,12 +1804,10 @@ impl WaManager {
         let participant = sender
             .filter(|_| chat_id.ends_with("@g.us") && !from_me)
             .and_then(|s| s.parse::<Jid>().ok());
+        let id = MessageId::new(message_id).map_err(|e| format!("The star was not saved: {e}"))?;
+        let target = MessageRef::new(&jid, id, participant.as_ref(), from_me).map_err(|e| format!("The star was not saved: {e}"))?;
         let actions = client.chat_actions();
-        let sent = if starred {
-            actions.star_message(&jid, participant.as_ref(), message_id, from_me).await
-        } else {
-            actions.unstar_message(&jid, participant.as_ref(), message_id, from_me).await
-        };
+        let sent = if starred { actions.star_message(&target).await } else { actions.unstar_message(&target).await };
         sent.map_err(|e| format!("The star was not saved: {e}"))?;
         let dto = lock(&self.store)
             .set_starred(chat_id, message_id, starred)
@@ -1995,15 +2023,16 @@ impl WaManager {
         stored: Option<&str>,
     ) -> Result<Option<String>, String> {
         let on_disk = stored.filter(|id| dir.join(store::avatar_file(owner, id)).exists());
+        let request = ProfilePictureRequest::new(picture_target(jid), ProfilePictureType::Preview).existing_id(on_disk);
         let lookup = client
-            .contacts()
-            .lookup_profile_picture(jid, true, on_disk)
+            .pictures()
+            .lookup(request)
             .await
             .map_err(|e| format!("lookup stopped: {e}"))?;
         match lookup {
             ProfilePictureLookup::Found(picture) => {
                 let response = client
-                    .http_client
+                    .http_client()
                     .execute(HttpRequest::get(picture.url.as_str()))
                     .await
                     .map_err(|e| format!("download stopped: {e}"))?;
@@ -2344,8 +2373,8 @@ impl WaManager {
                 let typing = TypingDto {
                     chat_id: store.canonical(&source.chat.to_non_ad_string()),
                     who: source.is_group.then(|| store.display_name(&sender)),
-                    recording: update.media == ChatPresenceMedia::Audio,
-                    active: update.state == ChatPresence::Composing,
+                    recording: update.state == ChatActivity::RecordingAudio,
+                    active: update.state != ChatActivity::Idle,
                 };
                 drop(store);
                 let _ = self.app.emit("wa://typing", typing);
@@ -2353,7 +2382,7 @@ impl WaManager {
             Event::Presence(update) => {
                 let presence = PresenceDto {
                     chat_id: lock(&self.store).canonical(&update.from.to_non_ad_string()),
-                    online: !update.unavailable,
+                    online: update.status == PresenceStatus::Available,
                     last_seen_ms: update.last_seen.map(|t| t.timestamp_millis()),
                 };
                 let _ = self.app.emit("wa://presence", presence);
@@ -2724,10 +2753,11 @@ fn forwarding(context: Option<wa::ContextInfo>, score: u32) -> Option<wa::Contex
     if score == 0 {
         return context;
     }
-    Some(wa::ContextInfo {
-        is_forwarded: Some(true),
-        forwarding_score: Some(score),
-        ..context.unwrap_or_default()
+    Some({
+        let mut context = context.unwrap_or_default();
+        context.is_forwarded = Some(true);
+        context.forwarding_score = Some(score);
+        context
     })
 }
 
@@ -2789,4 +2819,9 @@ fn group_change(action: &GroupNotificationAction) -> Option<store::GroupChange> 
         GroupNotificationAction::Unlocked => store::GroupChange::Locked(false),
         _ => return None,
     })
+}
+
+/// Where a chat's profile picture is asked for: groups have their own route.
+fn picture_target(jid: &Jid) -> ProfilePictureTarget<'_> {
+    if whatsapp_rust::wacore_binary::JidExt::is_group(jid) { ProfilePictureTarget::Group(jid) } else { ProfilePictureTarget::Contact(jid) }
 }

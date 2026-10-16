@@ -704,25 +704,27 @@ impl WaManager {
         let context = self.quote(chat_id, reply_to)?.map(|(context, _)| context);
         let animated = whatsapp_rust::webp::is_animated(&bytes);
         let (upload, file) = self.upload_sticker(bytes).await?;
-        let outgoing = wa::Message {
-            sticker_message: MessageField::some(wa::message::StickerMessage {
-                url: Some(upload.url.clone()),
-                direct_path: Some(upload.direct_path.clone()),
-                media_key: Some(upload.media_key.to_vec()),
-                file_sha256: Some(upload.file_sha256.to_vec()),
-                file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
-                file_length: Some(upload.file_length),
-                media_key_timestamp: Some(upload.media_key_timestamp),
-                mimetype: Some("image/webp".into()),
-                width: Some(file.width),
-                height: Some(file.height),
-                is_animated: Some(animated),
-                sticker_sent_ts: Some(now_ms()),
-                emojis: (!emojis.is_empty()).then(|| emojis.join("")),
-                context_info: context.map(MessageField::some).unwrap_or_default(),
-                ..Default::default()
-            }),
-            ..Default::default()
+        let outgoing = {
+            let mut message = wa::Message::default();
+            message.sticker_message = MessageField::some({
+                let mut sticker = wa::message::StickerMessage::default();
+                sticker.url = Some(upload.url.clone());
+                sticker.direct_path = Some(upload.direct_path.clone());
+                sticker.media_key = Some(upload.media_key.to_vec());
+                sticker.file_sha256 = Some(upload.file_sha256.to_vec());
+                sticker.file_enc_sha256 = Some(upload.file_enc_sha256.to_vec());
+                sticker.file_length = Some(upload.file_length);
+                sticker.media_key_timestamp = Some(upload.media_key_timestamp);
+                sticker.mimetype = Some("image/webp".into());
+                sticker.width = Some(file.width);
+                sticker.height = Some(file.height);
+                sticker.is_animated = Some(animated);
+                sticker.sticker_sent_ts = Some(now_ms());
+                sticker.emojis = (!emojis.is_empty()).then(|| emojis.join(""));
+                sticker.context_info = context.map(MessageField::some).unwrap_or_default();
+                sticker
+            });
+            message
         };
         let content = convert::content(&outgoing).ok_or("The sticker could not be shown.")?;
         let sent = client
@@ -735,7 +737,7 @@ impl WaManager {
             lib.note_animated(&hash, animated);
             ((), changed)
         });
-        self.store_sent(chat_id, sent.message_id, content)
+        self.store_sent(chat_id, sent.message_id.into_string(), content)
     }
 
     /// Makes a sticker a favorite, or not, here and on the phone. `id` is a
@@ -752,21 +754,23 @@ impl WaManager {
         }
         .ok_or("That sticker is gone.")?;
         let decode = |field: &str| BASE64.decode(field).ok();
-        let value = wa::SyncActionValue {
-            sticker_action: MessageField::some(wa::sync_action_value::StickerAction {
-                direct_path: Some(file.path.clone()),
-                media_key: decode(&file.key),
-                file_enc_sha256: decode(&file.enc_sha256),
-                file_length: Some(file.size),
-                mimetype: Some(file.mime.clone().unwrap_or_else(|| "image/webp".into())),
-                width: Some(file.width),
-                height: Some(file.height),
-                is_favorite: Some(favorite),
-                is_lottie: Some(false),
-                ..Default::default()
-            }),
-            timestamp: Some(now_ms()),
-            ..Default::default()
+        let value = {
+            let mut value = wa::SyncActionValue::default();
+            value.sticker_action = MessageField::some({
+                let mut sticker = wa::sync_action_value::StickerAction::default();
+                sticker.direct_path = Some(file.path.clone());
+                sticker.media_key = decode(&file.key);
+                sticker.file_enc_sha256 = decode(&file.enc_sha256);
+                sticker.file_length = Some(file.size);
+                sticker.mimetype = Some(file.mime.clone().unwrap_or_else(|| "image/webp".into()));
+                sticker.width = Some(file.width);
+                sticker.height = Some(file.height);
+                sticker.is_favorite = Some(favorite);
+                sticker.is_lottie = Some(false);
+                sticker
+            });
+            value.timestamp = Some(now_ms());
+            value
         };
         // Unfavoriting is a set with `isFavorite` false, as on WhatsApp Web.
         client
@@ -995,27 +999,29 @@ impl WaManager {
             .upload(mp4, MediaType::Video, UploadOptions::default())
             .await
             .map_err(|e| format!("The GIF was not uploaded: {e}"))?;
-        let outgoing = wa::Message {
-            video_message: MessageField::some(wa::message::VideoMessage {
-                url: Some(upload.url.clone()),
-                direct_path: Some(upload.direct_path.clone()),
-                media_key: Some(upload.media_key.to_vec()),
-                file_sha256: Some(upload.file_sha256.to_vec()),
-                file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
-                file_length: Some(upload.file_length),
-                media_key_timestamp: Some(upload.media_key_timestamp),
-                streaming_sidecar: upload.streaming_sidecar.clone(),
-                mimetype: Some("video/mp4".into()),
-                seconds,
-                width: Some(width).filter(|w| *w > 0),
-                height: Some(height).filter(|h| *h > 0),
-                gif_playback: Some(true),
-                gif_attribution: Some(if klipy { Attribution::KLIPY } else { Attribution::NONE }),
-                jpeg_thumbnail: thumbnail,
-                context_info: context.map(MessageField::some).unwrap_or_default(),
-                ..Default::default()
-            }),
-            ..Default::default()
+        let outgoing = {
+            let mut message = wa::Message::default();
+            message.video_message = MessageField::some({
+                let mut video = wa::message::VideoMessage::default();
+                video.url = Some(upload.url.clone());
+                video.direct_path = Some(upload.direct_path.clone());
+                video.media_key = Some(upload.media_key.to_vec());
+                video.file_sha256 = Some(upload.file_sha256.to_vec());
+                video.file_enc_sha256 = Some(upload.file_enc_sha256.to_vec());
+                video.file_length = Some(upload.file_length);
+                video.media_key_timestamp = Some(upload.media_key_timestamp);
+                video.streaming_sidecar = upload.streaming_sidecar.clone();
+                video.mimetype = Some("video/mp4".into());
+                video.seconds = seconds;
+                video.width = Some(width).filter(|w| *w > 0);
+                video.height = Some(height).filter(|h| *h > 0);
+                video.gif_playback = Some(true);
+                video.gif_attribution = Some(if klipy { Attribution::KLIPY } else { Attribution::NONE });
+                video.jpeg_thumbnail = thumbnail;
+                video.context_info = context.map(MessageField::some).unwrap_or_default();
+                video
+            });
+            message
         };
         let content = convert::content(&outgoing).ok_or("The GIF could not be shown.")?;
         let sent = client
@@ -1033,7 +1039,7 @@ impl WaManager {
             }
             self.with_stickers(|lib| ((), lib.note_gif(file, seconds, now_ms())));
         }
-        self.store_sent(chat_id, sent.message_id, content)
+        self.store_sent(chat_id, sent.message_id.into_string(), content)
     }
 }
 

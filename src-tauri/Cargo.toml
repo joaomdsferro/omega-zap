@@ -18,14 +18,14 @@ tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# WhatsApp Web protocol. The crates.io 0.7.0 release enables `simd`, which needs
-# nightly Rust. A fork of upstream a214b14 (which builds on stable) that also
-# recovers app-state collections whose snapshot MAC never validates.
-whatsapp-rust = { git = "https://github.com/joaomdsferro/whatsapp-rust", rev = "b938aef12cfe1dfd406be9d01dd39cc8cc00dbc5", default-features = false, features = ["sqlite-storage", "tokio-transport", "tokio-runtime", "ureq-client", "tokio-native"] }
+# WhatsApp Web protocol, from upstream main: the crates.io 0.7.0 release
+# enables `simd`, which needs nightly Rust, and predates the gzip snapshot
+# recovery for app-state collections whose snapshot MAC never validates (#1698).
+whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "3e3abeb2e1e2b4ac720bf0236b7d14d88dea0641", default-features = false, features = ["sqlite-storage", "tokio-transport", "tokio-runtime", "ureq-client", "tokio-native"] }
 tokio = { version = "1", features = ["time", "process", "io-util", "sync"] }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 log = "0.4"
-base64 = "0.22"
+base64 = "0.23"
 ureq = "3"
 notify-rust = "4.18"
 # Emoji images resized for notifications. Already built for Tauri's icons.

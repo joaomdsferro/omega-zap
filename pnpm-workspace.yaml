@@ -1,3 +1,5 @@
 # Supply-chain policy: only install versions published >= 2 days ago.
 minimumReleaseAge: 2880 # minutes
 minimumReleaseAgeStrict: true
+# pnpm 11.22+: automatically drop exclusions the lockfile no longer needs
+minimumReleaseAgeExcludePrune: true
