@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { AccountId } from "../accounts/accounts";
 import type { DeliveryStatus, LinkPreview, Message, ReplyQuote } from "../backend";
@@ -319,6 +319,22 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
     [shortenLongTexts, longTextChars, longTextLines, highlight, message.text],
   );
   const cut = shortText !== undefined && !expanded;
+  /** Set on "Show less", so the bubble is brought back into view once it is short. */
+  const collapsed = useRef(false);
+  /** A short flash on the bubble, after "Show less" scrolled to it. */
+  const [found, setFound] = useState(false);
+  useLayoutEffect(() => {
+    if (!collapsed.current || !bubble.current) return;
+    collapsed.current = false;
+    const top = bubble.current.getBoundingClientRect().top;
+    bubble.current.scrollIntoView({ block: "nearest" });
+    if (bubble.current.getBoundingClientRect().top !== top) setFound(true);
+  }, [expanded]);
+  useEffect(() => {
+    if (!found) return;
+    const id = window.setTimeout(() => setFound(false), 800);
+    return () => window.clearTimeout(id);
+  }, [found]);
   // Inline meta: an invisible spacer reserves room so the time sits on the
   // last text line when it fits, as in WhatsApp.
   // The spacer is an invisible copy of the meta, so it always matches its width.
@@ -474,6 +490,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
         tail ? "mt-3" : "mt-0.5",
         reactions.length > 0 ? "mb-5" : "",
         flash ? "message-flash" : "",
+        found ? "message-flash message-flash-short" : "",
       ].join(" ")}
     >
       <div
@@ -631,7 +648,10 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
                   <button
                     type="button"
                     aria-expanded={expanded}
-                    onClick={() => setExpanded(!expanded)}
+                    onClick={() => {
+                      collapsed.current = expanded;
+                      setExpanded(!expanded);
+                    }}
                     className="inline-flex items-center gap-0.5 rounded-full bg-(--accent)/20 py-0.75 pr-2 pl-3 text-[13.5px] font-semibold text-(--accent-strong) hover:bg-(--accent)/30"
                   >
                     {expanded ? "Show less" : "Read more"}

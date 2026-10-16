@@ -373,6 +373,11 @@ textarea {
   animation: message-flash 1600ms ease-out both;
 }
 
+/* A bubble found again after "Show less": the same flash, quicker. */
+.message-flash-short [data-bubble]::after {
+  animation-duration: 700ms;
+}
+
 /* Scrolls sideways without a visible bar, like the filter chips. */
 .no-scrollbar {
   scrollbar-width: none;
