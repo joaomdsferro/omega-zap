@@ -270,6 +270,26 @@ const LONG_PRESS_MS = 450;
 /** WhatsApp's forwarding score from which a message counts as forwarded many times. */
 const FORWARDED_MANY = 5;
 
+/** How much of a long text shows before "Read more". */
+const SHORT_CHARS = 700;
+const SHORT_LINES = 18;
+
+/** A long text's start, cut at a word, or undefined when it is short enough to show whole. */
+function shortened(text: string): string | undefined {
+  let end = Math.min(text.length, SHORT_CHARS);
+  let lines = 0;
+  for (let at = text.indexOf("\n"); at !== -1 && at < end; at = text.indexOf("\n", at + 1)) {
+    if (++lines === SHORT_LINES) end = at;
+  }
+  // Not worth a "Read more" for the last few words.
+  if (text.length - end < 80) return undefined;
+  if (lines < SHORT_LINES) {
+    const space = text.slice(0, end).search(/\s\S*$/);
+    if (space > end - 40) end = space;
+  }
+  return text.slice(0, end).trimEnd();
+}
+
 export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight, pinned, onEdit, onPin, onSelect, onVote, onMessageContact, moreActions }: MessageBubbleProps) {
   const { settings } = useSettings();
   const [picking, setPicking] = useState(false);
@@ -308,6 +328,12 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
     const url = settings.inlineVideos ? message.text?.match(URL_PATTERN)?.find(isPlayable) : undefined;
     return url ? { url } : undefined;
   }, [message.linkPreview, fetched, message.text, settings.inlineVideos]);
+  /** A long text shows its start until "Read more"; a search's hits show it whole. */
+  const [expanded, setExpanded] = useState(false);
+  const shortText = useMemo(
+    () => (expanded || highlight?.length || !message.text ? undefined : shortened(message.text)),
+    [expanded, highlight, message.text],
+  );
   // Inline meta: an invisible spacer reserves room so the time sits on the
   // last text line when it fits, as in WhatsApp.
   // The spacer is an invisible copy of the meta, so it always matches its width.
@@ -611,7 +637,15 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
             </p>
           ) : (
             <p className="px-0.5 wrap-break-word whitespace-pre-wrap">
-              <Formatted text={message.text ?? ""} onLink={openLink} highlight={highlight} mentions={message.mentions} onMention={onOpenPerson} />
+              <Formatted text={shortText ?? message.text ?? ""} onLink={openLink} highlight={highlight} mentions={message.mentions} onMention={onOpenPerson} />
+              {shortText !== undefined ? (
+                <>
+                  {"… "}
+                  <button type="button" className="font-medium text-(--accent) hover:underline" onClick={() => setExpanded(true)}>
+                    Read more
+                  </button>
+                </>
+              ) : null}
               {metaSpacer}
             </p>
           )
