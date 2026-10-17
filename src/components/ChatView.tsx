@@ -22,6 +22,7 @@ import { BlockedIcon, CheckIcon, ChevronDownIcon, ClearIcon, CloseIcon, ExitIcon
 import { PopupMenu, type MenuEntry } from "./PopupMenu";
 import { ChatSearch, searchChat } from "./ChatSearch";
 import { searchWords } from "../lib/search";
+import { isReadOnlyChat } from "../lib/logos";
 import { SearchIcon } from "./Icons";
 
 /** Messages drawn when a chat opens; more are drawn, this many at a time, on scrolling up. */
@@ -982,6 +983,10 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
       {chat.left ? (
         <div className="flex min-h-15.5 shrink-0 items-center justify-center border-l border-(--divider) bg-(--panel-header-bg) px-4 py-3 text-center">
           <span className="text-[14px] text-(--text-secondary)">You can't send messages to this group because you're no longer a member.</span>
+        </div>
+      ) : isReadOnlyChat(chat.account, chat.id) ? (
+        <div className="flex min-h-15.5 shrink-0 items-center justify-center border-l border-(--divider) bg-(--panel-header-bg) px-4 py-3 text-center">
+          <span className="text-[14px] text-(--text-secondary)">Only Signal can send messages here.</span>
         </div>
       ) : chat.blocked ? (
         <div className="flex min-h-15.5 shrink-0 items-center justify-center gap-1 border-l border-(--divider) bg-(--panel-header-bg) px-4 py-3 text-center">

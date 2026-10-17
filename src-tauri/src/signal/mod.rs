@@ -2,12 +2,13 @@
 //! The bridge owns the protocol and its keys; this side keeps the chat list.
 
 pub mod commands;
+mod release_notes;
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -165,6 +166,9 @@ pub struct SignalManager {
     next_request: AtomicU64,
     /// Commands the bridge has yet to answer. Only some answers carry a value.
     pending: Mutex<HashMap<u64, oneshot::Sender<Result<Option<String>, String>>>>,
+    /// When Signal's release notes were last read, and whether they are being read.
+    notes_checked_ms: AtomicI64,
+    notes_running: AtomicBool,
 }
 
 /// A file extension for an attachment, so it is served and opened as what it is.
@@ -223,6 +227,14 @@ fn media_file_name(media: &MediaRef) -> String {
     }
 }
 
+/// Refuses the "Signal" chat, which only Signal writes to.
+fn writable(chat_id: &str) -> Result<(), String> {
+    if chat_id == release_notes::CHAT_ID {
+        return Err("Only Signal can send messages here.".into());
+    }
+    Ok(())
+}
+
 fn bridge_path() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let path = exe.with_file_name(format!("{BRIDGE}{}", std::env::consts::EXE_SUFFIX));
@@ -253,6 +265,8 @@ impl SignalManager {
             avatars_running: AtomicBool::new(false),
             next_request: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
+            notes_checked_ms: AtomicI64::new(0),
+            notes_running: AtomicBool::new(false),
         }))
     }
 
@@ -279,6 +293,16 @@ impl SignalManager {
                         last_save = Instant::now();
                     }
                 }
+            }
+        });
+
+        // Signal publishes release notes now and then; an app left open for
+        // days still picks them up.
+        let mgr = self.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+                mgr.check_release_notes();
             }
         });
 
@@ -365,6 +389,7 @@ impl SignalManager {
             format!("{SESSION_FILE}-shm"),
             format!("{SESSION_FILE}-journal"),
             LINKED_MARKER.to_string(),
+            release_notes::SEEN_FILE.to_string(),
         ];
         self.history.close();
         for path in names.into_iter().map(|name| self.dir.join(name)).chain(self.history.files()) {
@@ -383,6 +408,7 @@ impl SignalManager {
             }
         }
         *lock(&self.store) = ChatStore::default();
+        self.notes_checked_ms.store(0, Ordering::Release);
         self.save_dirty.store(false, Ordering::Release);
         self.chats_dirty.store(true, Ordering::Release);
         self.wake.notify_one();
@@ -774,6 +800,16 @@ impl SignalManager {
         }
         // The bridge writes it plain into memory, and it is sealed from there.
         let incoming = crate::vault::handoff_path("signal-media").map_err(|e| e.to_string())?;
+        if release_notes::is_note_image(&media) {
+            let bytes = tauri::async_runtime::spawn_blocking(move || release_notes::fetch_image(&media))
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| format!("The attachment was not downloaded: {e}"))?;
+            let saved = fs::write(&incoming, bytes).and_then(|()| crate::vault::get().import(&incoming, &path));
+            let _ = fs::remove_file(&incoming);
+            saved.map_err(|e| format!("The attachment could not be saved: {e}"))?;
+            return Ok(name);
+        }
         let command = serde_json::json!({
             "cmd": "media",
             "path": incoming,
@@ -810,6 +846,84 @@ impl SignalManager {
             .opener()
             .open_path(path.to_string_lossy(), None::<&str>)
             .map_err(|e| format!("The attachment could not be opened: {e}"))
+    }
+
+    /// Adds the release notes Signal published since the last look to the
+    /// "Signal" chat, as Signal's own apps do. Read at most every few hours.
+    fn check_release_notes(self: &Arc<Self>) {
+        if lock(&self.status).state != AccountState::Connected
+            || now_ms() - self.notes_checked_ms.load(Ordering::Acquire) < release_notes::CHECK_EVERY_MS
+        {
+            return;
+        }
+        let phone = lock(&self.status).me.as_ref().and_then(|me| me.phone.clone());
+        let own_id = lock(&self.store).own_id().map(str::to_string);
+        let (Some(phone), Some(own_id)) = (phone, own_id) else { return };
+        if self.notes_running.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let mgr = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let dir = mgr.dir.clone();
+            let fetched = tauri::async_runtime::spawn_blocking(move || {
+                let mut seen = release_notes::load_seen(&dir);
+                let notes = release_notes::fetch_new(&seen, &own_id, &phone, &release_notes::locales())?;
+                seen.extend(notes.iter().map(|n| n.id.clone()));
+                Ok::<_, String>((notes, seen))
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+            match fetched {
+                Ok((notes, seen)) => {
+                    mgr.notes_checked_ms.store(now_ms(), Ordering::Release);
+                    if !notes.is_empty() {
+                        mgr.add_release_notes(notes);
+                        release_notes::save_seen(&mgr.dir, &seen);
+                    }
+                }
+                Err(e) => log::warn!("signal: release notes not read: {e}"),
+            }
+            mgr.notes_running.store(false, Ordering::Release);
+        });
+    }
+
+    fn add_release_notes(&self, notes: Vec<release_notes::ReleaseNote>) {
+        let now = now_ms();
+        let mut store = lock(&self.store);
+        store.set_contact_name(release_notes::CHAT_ID, release_notes::CHAT_NAME);
+        let mut added = Vec::new();
+        for (i, note) in notes.into_iter().enumerate() {
+            let incoming = Incoming {
+                chat: release_notes::CHAT_ID.into(),
+                is_group: false,
+                // No sender: nobody to send read receipts to.
+                sender: None,
+                push_name: None,
+                lid_pn_pairs: Vec::new(),
+                message: StoredMessage {
+                    id: note.id,
+                    from_me: false,
+                    // In the order Signal lists them.
+                    ts_ms: now + i as i64,
+                    author_jid: None,
+                    content: note.content,
+                    status: None,
+                    reactions: Vec::new(),
+                    wire: None,
+                    read_by: Vec::new(),
+                    starred: false,
+                    deleted: None,
+                    edited_ms: None,
+                },
+            };
+            added.extend(store.ingest(incoming, true));
+        }
+        drop(store);
+        for dto in added {
+            let _ = self.app.emit("signal://message", dto);
+        }
+        self.mark_dirty();
     }
 
     /// Downloads our own profile picture and those of the listed chats that
@@ -902,6 +1016,11 @@ impl SignalManager {
                 if self.generation.load(Ordering::SeqCst) != generation {
                     return;
                 }
+                // Not an account: the UI draws Signal's logo.
+                if chat_id == release_notes::CHAT_ID {
+                    lock(&self.store).avatar_checked(&chat_id);
+                    continue;
+                }
                 match self.fetch_avatar(&dir, &chat_id, &chat_id, stored.as_deref()).await {
                     Ok(picture) => lock(&self.store).set_avatar(&chat_id, picture),
                     Err(e) => return self.avatars_stopped(&e),
@@ -914,6 +1033,7 @@ impl SignalManager {
 
     /// Reacts to a message, or takes the reaction back when it is already there.
     pub async fn react(&self, chat_id: &str, message_id: &str, emoji: &str) -> Result<MessageDto, String> {
+        writable(chat_id)?;
         self.recall(chat_id, message_id);
         let (target, me) = {
             let store = lock(&self.store);
@@ -1068,6 +1188,7 @@ impl SignalManager {
         link: Option<OutgoingLink>,
         styled: Option<Styled>,
     ) -> Result<MessageDto, String> {
+        writable(chat_id)?;
         let text = text.trim();
         if text.is_empty() {
             return Err("The message is empty.".into());
@@ -1131,6 +1252,7 @@ impl SignalManager {
     /// downloaded copy of the attachment we show.
     pub async fn send_file(&self, file: OutgoingFile, bytes: Vec<u8>) -> Result<MessageDto, String> {
         let chat_id = file.chat_id.as_str();
+        writable(chat_id)?;
         let (quote, reply) = self.quote(chat_id, file.reply_to.as_deref())?.unzip();
         let mime = match file.base_mime() {
             mime if mime.is_empty() => "application/octet-stream".to_string(),
@@ -1214,6 +1336,7 @@ impl SignalManager {
                         s.error = None;
                     });
                     self.sync_avatars();
+                    self.check_release_notes();
                 }
                 _ => self.fail(error.unwrap_or_else(|| "Signal reported a problem.".into())),
             },

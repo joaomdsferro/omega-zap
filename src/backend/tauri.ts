@@ -177,9 +177,6 @@ function toGroupRef(g: RawGroupRef): GroupRef {
   };
 }
 
-/** WhatsApp's own chat, which sends tips and security notices. */
-const OFFICIAL_CHAT = "0@s.whatsapp.net";
-
 function toChat(raw: RawChat, account: AccountId): Chat {
   return {
     id: raw.id,
@@ -189,9 +186,7 @@ function toChat(raw: RawChat, account: AccountId): Chat {
     avatarHue: hueFor(raw.id),
     avatarUrl: raw.avatar
       ? fileUrl(raw.avatar, "avatar")
-      : raw.id === OFFICIAL_CHAT && isWhatsApp(account)
-        ? officialLogo(account)
-        : undefined,
+      : officialLogo(account, raw.id),
     lastMessage: raw.lastMessage,
     lastAt: new Date(raw.lastAt).toISOString(),
     lastFromMe: raw.lastFromMe,
