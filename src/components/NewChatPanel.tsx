@@ -1,8 +1,9 @@
-import { Fragment, useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { Contact } from "../backend";
 import { AccountBadge } from "./AccountBadge";
 import { Avatar } from "./Avatar";
 import { BackIcon, SearchIcon } from "./Icons";
+import { useVirtualRows } from "../lib/useVirtualRows";
 
 interface NewChatPanelProps {
   /** `null` while they load. */
@@ -16,6 +17,15 @@ interface NewChatPanelProps {
   onBack: () => void;
   onOpen: (contact: Contact) => void;
 }
+
+/** Heights of a contact row (`h-18`) and of a letter heading, in px. */
+const ROW_PX = 72;
+const LETTER_PX = 58;
+
+const byName = new Intl.Collator(undefined, { sensitivity: "base" });
+
+/** One line of the list: ourselves, a letter heading or a contact under it. */
+type Item = { me: Contact } | { letter: string } | { contact: Contact };
 
 /** The letter a contact is filed under; anything that isn't one goes under "#". */
 function sectionOf(name: string) {
@@ -57,22 +67,36 @@ export function NewChatPanel({ contacts, showAccount, lookupNumber, lookupLabel,
   const digits = query.replace(/\D/g, "");
   const looksLikeNumber = /^\+?[\d\s().-]+$/.test(query.trim()) && digits.length >= 7;
 
-  const { me, sections } = useMemo(() => {
+  const items = useMemo(() => {
     const matching = (contacts ?? []).filter(
       (c) => !q || c.name.toLowerCase().includes(q) || (digits.length >= 3 && c.phone?.replace(/\D/g, "").includes(digits)),
     );
-    const people = matching
-      .filter((c) => !c.isMe)
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+    const people = matching.filter((c) => !c.isMe).sort((a, b) => byName.compare(a.name, b.name));
     const grouped = new Map<string, Contact[]>();
     for (const contact of people) {
       const letter = sectionOf(contact.name);
-      grouped.set(letter, [...(grouped.get(letter) ?? []), contact]);
+      const group = grouped.get(letter);
+      if (group) group.push(contact);
+      else grouped.set(letter, [contact]);
     }
     // "#" first, as on the phone.
     const order = [...grouped.keys()].sort((a, b) => (a === "#" ? -1 : b === "#" ? 1 : a.localeCompare(b)));
-    return { me: matching.filter((c) => c.isMe), sections: order.map((letter) => [letter, grouped.get(letter)!] as const) };
+    const list: Item[] = matching.filter((c) => c.isMe).map((me) => ({ me }));
+    for (const letter of order) {
+      list.push({ letter });
+      for (const contact of grouped.get(letter)!) list.push({ contact });
+    }
+    return list;
   }, [contacts, q, digits]);
+
+  // Only the lines in view exist: an address book of thousands opens at once.
+  const listRef = useRef<HTMLUListElement>(null);
+  const tops = useMemo(() => {
+    const at = [0];
+    for (const item of items) at.push(at[at.length - 1] + ("letter" in item ? LETTER_PX : ROW_PX));
+    return at;
+  }, [items]);
+  const { start, end } = useVirtualRows(listRef, tops);
 
   async function openNumber() {
     if (!lookupNumber || checking) return;
@@ -89,7 +113,7 @@ export function NewChatPanel({ contacts, showAccount, lookupNumber, lookupLabel,
     }
   }
 
-  const empty = contacts !== null && me.length === 0 && sections.length === 0;
+  const empty = contacts !== null && items.length === 0;
 
   return (
     <div className="flex h-full flex-col bg-(--panel-bg)">
@@ -162,34 +186,36 @@ export function NewChatPanel({ contacts, showAccount, lookupNumber, lookupLabel,
           <p className="px-6 py-10 text-center text-[14px] text-(--text-secondary)">Loading contacts…</p>
         ) : null}
 
-        <ul aria-label="Contacts">
-          {me.map((contact) => (
-            <Row
-              key={`${contact.account}:${contact.id}`}
-              contact={contact}
-              showAccount={showAccount}
-              title={contact.name === "You" ? "You" : `${contact.name} (You)`}
-              subtitle="Message yourself"
-              onClick={() => onOpen(contact)}
-            />
-          ))}
-          {sections.map(([letter, people]) => (
-            <Fragment key={letter}>
-              <li className="px-6 pt-6 pb-3 text-[15px] text-(--text-secondary)" aria-hidden>
-                {letter}
+        <ul
+          ref={listRef}
+          aria-label="Contacts"
+          style={{ paddingTop: tops[start], paddingBottom: tops[items.length] - tops[end] }}
+        >
+          {items.slice(start, end).map((item) =>
+            "me" in item ? (
+              <Row
+                key={`${item.me.account}:${item.me.id}`}
+                contact={item.me}
+                showAccount={showAccount}
+                title={item.me.name === "You" ? "You" : `${item.me.name} (You)`}
+                subtitle="Message yourself"
+                onClick={() => onOpen(item.me)}
+              />
+            ) : "letter" in item ? (
+              <li key={`letter:${item.letter}`} className="px-6 pt-6 pb-3 text-[15px] leading-5.5 text-(--text-secondary)" aria-hidden>
+                {item.letter}
               </li>
-              {people.map((contact) => (
-                <Row
-                  key={`${contact.account}:${contact.id}`}
-                  contact={contact}
-                  showAccount={showAccount}
-                  title={contact.name}
-                  subtitle={contact.phone && contact.phone !== contact.name ? contact.phone : undefined}
-                  onClick={() => onOpen(contact)}
-                />
-              ))}
-            </Fragment>
-          ))}
+            ) : (
+              <Row
+                key={`${item.contact.account}:${item.contact.id}`}
+                contact={item.contact}
+                showAccount={showAccount}
+                title={item.contact.name}
+                subtitle={item.contact.phone && item.contact.phone !== item.contact.name ? item.contact.phone : undefined}
+                onClick={() => onOpen(item.contact)}
+              />
+            ),
+          )}
         </ul>
 
         {empty && !looksLikeNumber ? (
