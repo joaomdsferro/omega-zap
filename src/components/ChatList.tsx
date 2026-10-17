@@ -1,10 +1,11 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type { Chat } from "../backend";
 import { formatListTime } from "../lib/format";
 import { ACCOUNTS } from "../accounts/accounts";
 import { AccountBadge } from "./AccountBadge";
 import { Avatar } from "./Avatar";
 import { FormattedLine } from "../lib/markup";
+import { useVirtualRows } from "../lib/useVirtualRows";
 import { ChevronDownIcon, MuteIcon, PinIcon, Ticks } from "./Icons";
 
 interface ChatListProps {
@@ -21,14 +22,10 @@ interface ChatListProps {
   showAccount?: boolean;
   /** Opens a chat's options at a point on screen. */
   onMenu?: (chat: Chat, x: number, y: number) => void;
-  /** Changes when a different list takes this one's place (another account or filter). */
-  scope?: string;
 }
 
-/** Rows drawn at once when a list comes up: a screenful and some. */
-const FIRST_ROWS = 30;
-/** Rows added each frame after that, until the whole list is drawn. */
-const MORE_ROWS = 60;
+/** Every row's height, in px (`h-18`). */
+const ROW_PX = 72;
 
 interface ChatRowProps {
   chat: Chat;
@@ -187,22 +184,17 @@ export function ChatList({
   highlightFading,
   showAccount,
   onMenu,
-  scope,
 }: ChatListProps) {
-  // A new list draws the rows in sight first and the rest over the next
-  // frames, so switching accounts or filters doesn't stall on hundreds of rows.
-  const [limit, setLimit] = useState(FIRST_ROWS);
-  const [shownScope, setShownScope] = useState(scope);
-  if (scope !== shownScope) {
-    setShownScope(scope);
-    setLimit(FIRST_ROWS);
-  }
-  const rows = chats.length > limit ? chats.slice(0, limit) : chats;
-  useEffect(() => {
-    if (limit >= chats.length) return;
-    const frame = requestAnimationFrame(() => setLimit((n) => n + MORE_ROWS));
-    return () => cancelAnimationFrame(frame);
-  }, [limit, chats.length]);
+  // Only the rows in or near view exist, so thousands of chats cost what a
+  // screenful does and switching accounts or filters stays instant.
+  const list = useRef<HTMLUListElement>(null);
+  const tops = useMemo(() => Array.from({ length: chats.length + 1 }, (_, i) => i * ROW_PX), [chats.length]);
+  const { start, end, reveal } = useVirtualRows(list, tops);
+  const rows = chats.slice(start, end);
+  // A chat pointed out far down the list is scrolled to, so its row exists to glow.
+  const highlightedIndex = highlighted ? chats.findIndex((c) => `${c.account}:${c.id}` === highlighted) : -1;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => reveal(highlightedIndex), [highlightedIndex]);
 
   // The rows get handlers that never change, so a new handler from above
   // does not redraw every row.
@@ -212,7 +204,13 @@ export function ChatList({
   const peek = useCallback((chat: Chat) => handlers.current.onPeek?.(chat), []);
   const menu = useCallback((chat: Chat, x: number, y: number) => handlers.current.onMenu?.(chat, x, y), []);
   return (
-    <ul className="flex flex-col" role="listbox" aria-label="Chats">
+    <ul
+      ref={list}
+      className="flex flex-col"
+      role="listbox"
+      aria-label="Chats"
+      style={{ paddingTop: start * ROW_PX, paddingBottom: (chats.length - end) * ROW_PX }}
+    >
       {rows.map((chat) => (
         <ChatRow
           key={`${chat.account}:${chat.id}`}
