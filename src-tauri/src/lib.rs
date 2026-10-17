@@ -192,6 +192,21 @@ fn serve(
     response
 }
 
+/// Answers a file request on a worker thread: reading and decrypting on the
+/// main thread would hold the window up while a list of pictures loads.
+fn serve_off_main(
+    app: &tauri::AppHandle,
+    scheme: Scheme,
+    request: tauri::http::Request<Vec<u8>>,
+    responder: tauri::UriSchemeResponder,
+) {
+    let dir = app.path().app_data_dir().ok();
+    tauri::async_runtime::spawn_blocking(move || {
+        let range = request.headers().get("range");
+        responder.respond(serve(dir.as_deref(), scheme, request.uri().path(), range));
+    });
+}
+
 /// Prints warnings and errors to stderr. `OMEGA_ZAP_LOG` raises it, for
 /// everything (`debug`) or per target (`warn,AppState=debug`).
 struct StderrLogger {
@@ -265,15 +280,13 @@ pub fn run() {
         })
         // Serves saved profile pictures: avatar://localhost/<file name>. Each
         // network keeps its own, under names that cannot clash.
-        .register_uri_scheme_protocol("avatar", |ctx, request| {
-            let dir = ctx.app_handle().path().app_data_dir().ok();
-            serve(dir.as_deref(), Scheme::Avatar, request.uri().path(), request.headers().get("range"))
+        .register_asynchronous_uri_scheme_protocol("avatar", |ctx, request, responder| {
+            serve_off_main(ctx.app_handle(), Scheme::Avatar, request, responder)
         })
         // Serves downloaded attachments and WhatsApp link pictures:
         // media://localhost/<file name>.
-        .register_uri_scheme_protocol("media", |ctx, request| {
-            let dir = ctx.app_handle().path().app_data_dir().ok();
-            serve(dir.as_deref(), Scheme::Media, request.uri().path(), request.headers().get("range"))
+        .register_asynchronous_uri_scheme_protocol("media", |ctx, request, responder| {
+            serve_off_main(ctx.app_handle(), Scheme::Media, request, responder)
         })
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
