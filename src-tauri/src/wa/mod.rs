@@ -245,7 +245,16 @@ pub struct WaManager {
     stickers: Mutex<stickers::Library>,
     /// WhatsApp's sticker store's list of packs, and when it was fetched.
     sticker_store: tokio::sync::Mutex<Option<(Instant, Vec<whatsapp_rust::sticker_pack::StickerPack>)>>,
+    /// Expired files the phone did not send again, by message id, and when it
+    /// last failed: not asked for again for a while.
+    reupload_failed: Mutex<HashMap<String, Instant>>,
+    /// Re-upload requests to the phone at once: an old chat full of expired
+    /// photos would otherwise ask for all of them together.
+    reuploads: tokio::sync::Semaphore,
 }
+
+/// How long a file the phone did not send again is left alone before asking again.
+const REUPLOAD_RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
 
 /// How long the window can be out of focus before we show as offline, so
 /// a menu or a quick switch doesn't flicker it.
@@ -322,6 +331,8 @@ impl WaManager {
             announced: std::sync::atomic::AtomicU8::new(0),
             stickers: Mutex::new(if linked { stickers::Library::load(&dir) } else { stickers::Library::default() }),
             sticker_store: tokio::sync::Mutex::new(None),
+            reupload_failed: Mutex::new(HashMap::new()),
+            reuploads: tokio::sync::Semaphore::new(3),
             dir,
         }))
     }
@@ -1138,10 +1149,20 @@ impl WaManager {
             // WhatsApp drops media from its CDN after a few weeks; the sender's
             // phone can upload it again if it still has the file.
             Err(CdnError::Rejected(_)) => {
-                let path = self
-                    .reupload_media(chat_id, message_id, &file)
-                    .await
-                    .inspect_err(|e| log::warn!("whatsapp: file {message_id} expired and was not re-uploaded: {e}"))?;
+                let failed_lately = lock(&self.reupload_failed)
+                    .get(message_id)
+                    .is_some_and(|at| at.elapsed() < REUPLOAD_RETRY_AFTER);
+                if failed_lately {
+                    return Err("The file expired and the phone did not send it again.".into());
+                }
+                let path = {
+                    let _turn = self.reuploads.acquire().await.map_err(|e| e.to_string())?;
+                    self.reupload_media(chat_id, message_id, &file).await
+                }
+                .inspect_err(|e| {
+                    lock(&self.reupload_failed).insert(message_id.to_string(), Instant::now());
+                    log::warn!("whatsapp: file {message_id} expired and was not re-uploaded: {e}");
+                })?;
                 lock(&self.store).set_wa_media_path(chat_id, message_id, &path);
                 self.mark_dirty();
                 Ok(self.fetch_cdn(CdnRef { path, ..file }, MEDIA_DIR, "wa", media_type).await?)
