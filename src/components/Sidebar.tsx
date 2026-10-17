@@ -478,6 +478,7 @@ export function Sidebar({
               highlightFading={highlightFading}
               showAccount={showAccount}
               onMenu={openChatMenu}
+              scope={`${title}|${active.id}|${inArchived}`}
             />
             {foundMessages.length > 0 && onOpenMessage ? (
               <>

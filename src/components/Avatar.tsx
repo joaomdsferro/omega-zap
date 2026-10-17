@@ -44,6 +44,9 @@ export function Avatar({ name, initials, hue, src, size, group, online }: Avatar
         <img
           src={src}
           alt=""
+          // Long lists ask only for the pictures in sight.
+          loading="lazy"
+          decoding="async"
           draggable={false}
           onError={() => setFailedSrc(src)}
           className={`absolute inset-0 h-full w-full rounded-full ${isLogo(src) ? "object-contain p-[18%]" : "object-cover"}`}

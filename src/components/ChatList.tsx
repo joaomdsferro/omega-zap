@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { Chat } from "../backend";
 import { formatListTime } from "../lib/format";
 import { ACCOUNTS } from "../accounts/accounts";
@@ -21,7 +21,14 @@ interface ChatListProps {
   showAccount?: boolean;
   /** Opens a chat's options at a point on screen. */
   onMenu?: (chat: Chat, x: number, y: number) => void;
+  /** Changes when a different list takes this one's place (another account or filter). */
+  scope?: string;
 }
+
+/** Rows drawn at once when a list comes up: a screenful and some. */
+const FIRST_ROWS = 30;
+/** Rows added each frame after that, until the whole list is drawn. */
+const MORE_ROWS = 60;
 
 interface ChatRowProps {
   chat: Chat;
@@ -180,7 +187,23 @@ export function ChatList({
   highlightFading,
   showAccount,
   onMenu,
+  scope,
 }: ChatListProps) {
+  // A new list draws the rows in sight first and the rest over the next
+  // frames, so switching accounts or filters doesn't stall on hundreds of rows.
+  const [limit, setLimit] = useState(FIRST_ROWS);
+  const [shownScope, setShownScope] = useState(scope);
+  if (scope !== shownScope) {
+    setShownScope(scope);
+    setLimit(FIRST_ROWS);
+  }
+  const rows = chats.length > limit ? chats.slice(0, limit) : chats;
+  useEffect(() => {
+    if (limit >= chats.length) return;
+    const frame = requestAnimationFrame(() => setLimit((n) => n + MORE_ROWS));
+    return () => cancelAnimationFrame(frame);
+  }, [limit, chats.length]);
+
   // The rows get handlers that never change, so a new handler from above
   // does not redraw every row.
   const handlers = useRef({ onSelect, onPeek, onMenu });
@@ -190,7 +213,7 @@ export function ChatList({
   const menu = useCallback((chat: Chat, x: number, y: number) => handlers.current.onMenu?.(chat, x, y), []);
   return (
     <ul className="flex flex-col" role="listbox" aria-label="Chats">
-      {chats.map((chat) => (
+      {rows.map((chat) => (
         <ChatRow
           key={`${chat.account}:${chat.id}`}
           chat={chat}
