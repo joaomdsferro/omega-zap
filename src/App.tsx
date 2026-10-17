@@ -778,19 +778,24 @@ function Shell() {
     () => sources.filter((backend) => (unified ? !backend.demo || !anyLinked : backend.account === active)),
     [sources, unified, anyLinked, active],
   );
-  const chats = shown.flatMap((backend) => {
-    const list = chatsBy.get(backend) ?? [];
-    if (!typing.size && !presence.size) return list;
-    // Only the chats with something to add are new objects, so the other rows stay as drawn.
-    return list.map((chat) => {
-      const key = `${backend.account}:${chat.id}`;
-      const typed = typing.get(key);
-      const seen = presence.get(key);
-      if (!typed && !seen) return chat;
-      return { ...chat, typing: typed, online: seen?.online, lastSeen: seen?.lastSeen };
+  // The same array until a list changes, so the sidebar's filters don't run
+  // again over thousands of chats with every message or keystroke.
+  const chats = useMemo(() => {
+    const all = shown.flatMap((backend) => {
+      const list = chatsBy.get(backend) ?? [];
+      if (!typing.size && !presence.size) return list;
+      // Only the chats with something to add are new objects, so the other rows stay as drawn.
+      return list.map((chat) => {
+        const key = `${backend.account}:${chat.id}`;
+        const typed = typing.get(key);
+        const seen = presence.get(key);
+        if (!typed && !seen) return chat;
+        return { ...chat, typing: typed, online: seen?.online, lastSeen: seen?.lastSeen };
+      });
     });
-  });
-  if (shown.length > 1) chats.sort(byRecency);
+    if (shown.length > 1) all.sort(byRecency);
+    return all;
+  }, [shown, chatsBy, typing, presence]);
   const showAccount = unified && anyLinked;
 
   const searchMessages = useCallback(
