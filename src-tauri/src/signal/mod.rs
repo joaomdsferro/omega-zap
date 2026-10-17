@@ -134,6 +134,7 @@ enum BridgeEvent {
         history: bool,
     },
     ProfileKey { id: String },
+    Alias { pni: String, aci: String },
     Avatar { id: u64, picture: Option<String>, error: Option<String> },
     /// A file was uploaded and sent: where it now lives on Signal's CDN.
     Uploaded { id: u64, media: Option<serde_json::Value>, error: Option<String> },
@@ -1404,6 +1405,10 @@ impl SignalManager {
                 if lock(&self.store).retry_missing_avatar(&id) && connected {
                     self.sync_avatars();
                 }
+            }
+            BridgeEvent::Alias { pni, aci } => {
+                lock(&self.store).learn_alias(&pni, &aci);
+                self.mark_dirty();
             }
             BridgeEvent::Avatar { id, picture, error } => {
                 if let Some(waiter) = lock(&self.pending).remove(&id) {

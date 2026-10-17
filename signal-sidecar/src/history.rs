@@ -124,6 +124,9 @@ fn recipient(
             if id == me {
                 return Recipient::Me;
             }
+            if let (Some(aci), Some(pni)) = (uuid(&contact.aci), uuid(&contact.pni)) {
+                emit(Event::Alias { pni: pni.to_string(), aci: aci.to_string() });
+            }
             let key = contact.profileKey.as_deref().and_then(|k| <[u8; 32]>::try_from(k).ok());
             if let (Some(aci), Some(key)) = (uuid(&contact.aci), key) {
                 keys.push((aci, key));

@@ -278,6 +278,9 @@ enum Event {
     Read { messages: Vec<ReadRef> },
     /// Someone's profile key arrived, so their picture can be fetched now.
     ProfileKey { id: String },
+    /// A phone-number identity (PNI) and an account (ACI) are the same
+    /// person: a chat started by number is filed under the PNI until then.
+    Alias { pni: String, aci: String },
     /// The answer to an `avatar` command: the id of the current picture.
     Avatar { id: u64, picture: Option<String>, error: Option<String> },
     /// The answer to `send_file`: where the file now is.
@@ -628,6 +631,8 @@ struct Receiver {
     groups: HashSet<[u8; 32]>,
     /// Senders whose profile key was looked at in this session.
     keyed: HashSet<Uuid>,
+    /// PNIs already reported as belonging to an account.
+    aliased: HashSet<Uuid>,
 }
 
 impl Receiver {
@@ -836,6 +841,14 @@ impl Receiver {
 
     /// `stored_in` is the chat presage filed a stored message under.
     async fn content(&mut self, content: &Content, stored_in: Option<&Thread>) {
+        // Someone who answers a chat we started by phone number proves their
+        // number and account are one, so both chats can become one.
+        if let (Some(pni), ServiceId::Aci(_)) = (content.metadata.pni_verified, content.metadata.sender) {
+            let pni = Uuid::from(pni);
+            if self.aliased.insert(pni) {
+                emit(Event::Alias { pni: pni.to_string(), aci: content.metadata.sender.raw_uuid().to_string() });
+            }
+        }
         if let ContentBody::SynchronizeMessage(sync) = &content.body {
             self.synced(sync);
         }
@@ -1149,6 +1162,7 @@ async fn session(
         named: HashSet::new(),
         groups: HashSet::new(),
         keyed: HashSet::new(),
+        aliased: HashSet::new(),
     };
     let mut receiving = tokio::task::spawn_local(receiver.run());
     let mut sender = manager;

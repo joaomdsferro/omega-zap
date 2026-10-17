@@ -926,6 +926,8 @@ pub struct ChatStore {
     chats: HashMap<String, StoredChat>,
     contact_names: HashMap<String, String>,
     push_names: HashMap<String, String>,
+    /// Ids that name someone also known by another id: WhatsApp LIDs to
+    /// phone numbers, Signal PNIs to ACIs.
     lid_to_pn: HashMap<String, String>,
     own_ids: Vec<String>,
     /// Whether pins, mutes and archives were replayed from app state. Caches
@@ -1207,12 +1209,10 @@ impl ChatStore {
 
     pub fn canonical(&self, jid: &str) -> String {
         let jid = strip_device(jid);
-        if is_lid(&jid)
-            && let Some(pn) = self.lid_to_pn.get(&jid)
-        {
-            return pn.clone();
+        match self.lid_to_pn.get(&jid) {
+            Some(pn) => pn.clone(),
+            None => jid,
         }
-        jid
     }
 
     /// Records that a LID and a phone-number JID are the same person, merging
@@ -1224,7 +1224,15 @@ impl ChatStore {
             (_, _, true, true) => (b, a),
             _ => return,
         };
-        if self.lid_to_pn.get(&lid) == Some(&pn) {
+        self.learn_alias(&lid, &pn);
+    }
+
+    /// Records that `alias` names the same person as `id` from now on, and
+    /// merges any chat stored under `alias` into the one under `id`: a
+    /// WhatsApp LID and phone number, or a Signal PNI and ACI.
+    pub fn learn_alias(&mut self, alias: &str, id: &str) {
+        let (lid, pn) = (alias.to_string(), id.to_string());
+        if lid == pn || self.lid_to_pn.get(&lid) == Some(&pn) {
             return;
         }
         self.lid_to_pn.insert(lid.clone(), pn.clone());
@@ -3257,6 +3265,22 @@ mod tests {
         store.set_contact_name(aci, "Inês");
         let (text, _) = store.with_mentions(&format!("olá @{aci}!"));
         assert_eq!(text, "olá @Inês!");
+    }
+
+    #[test]
+    fn a_signal_chat_started_by_number_joins_the_account_chat() {
+        let mut store = ChatStore::default();
+        let (pni, aci) = ("11111111-0000-4000-8000-000000000000", "22222222-0000-4000-8000-000000000000");
+        store.ingest(incoming(pni, "1", 1, true), false);
+        store.ingest(incoming(aci, "2", 2, false), false);
+        assert_eq!(store.list_chats().len(), 2);
+        store.learn_alias(pni, aci);
+        let chats = store.list_chats();
+        assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0].id, aci);
+        // Later messages to the number land in the same chat.
+        store.ingest(incoming(pni, "3", 3, true), false);
+        assert_eq!(store.list_chats().len(), 1);
     }
 
     #[test]
