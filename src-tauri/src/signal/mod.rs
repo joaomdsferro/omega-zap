@@ -859,6 +859,15 @@ impl SignalManager {
         Ok(picture)
     }
 
+    /// A dropped connection ends the lookups quietly: "connected" starts them again.
+    fn avatars_stopped(&self, error: &str) {
+        if lock(&self.status).state == AccountState::Connected {
+            log::warn!("signal: profile picture lookups stopped: {error}");
+        } else {
+            log::debug!("signal: profile picture lookups paused while disconnected: {error}");
+        }
+    }
+
     async fn run_avatar_sync(&self, generation: u64) {
         let dir = self.dir.join(AVATAR_DIR);
         if let Err(e) = secure_dir(&dir) {
@@ -880,7 +889,7 @@ impl SignalManager {
                     });
                     self.mark_dirty();
                 }
-                Err(e) => return log::warn!("signal: profile picture lookups stopped: {e}"),
+                Err(e) => return self.avatars_stopped(&e),
             }
         }
         loop {
@@ -894,7 +903,7 @@ impl SignalManager {
                 }
                 match self.fetch_avatar(&dir, &chat_id, &chat_id, stored.as_deref()).await {
                     Ok(picture) => lock(&self.store).set_avatar(&chat_id, picture),
-                    Err(e) => return log::warn!("signal: profile picture lookups stopped: {e}"),
+                    Err(e) => return self.avatars_stopped(&e),
                 }
                 self.mark_dirty();
                 tokio::time::sleep(AVATAR_PACE).await;
@@ -1389,7 +1398,10 @@ impl SignalManager {
                 self.mark_dirty();
             }
             BridgeEvent::ProfileKey { id } => {
-                if lock(&self.store).retry_missing_avatar(&id) {
+                // Keys also arrive while the bridge replays history, before it
+                // is connected: the sync that "connected" starts picks those up.
+                let connected = lock(&self.status).state == AccountState::Connected;
+                if lock(&self.store).retry_missing_avatar(&id) && connected {
                     self.sync_avatars();
                 }
             }
