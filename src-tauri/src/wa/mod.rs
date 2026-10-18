@@ -248,7 +248,8 @@ pub struct WaManager {
     /// What the server was last told: 0 nothing since connecting, 1 offline, 2 online.
     announced: std::sync::atomic::AtomicU8,
     /// Recent and favorite stickers, sticker packs and recent GIFs.
-    stickers: Mutex<stickers::Library>,
+    /// The app's sticker library, shared by both accounts.
+    stickers: Arc<crate::stickers::Central>,
     /// WhatsApp's sticker store's list of packs, and when it was fetched.
     sticker_store: tokio::sync::Mutex<Option<(Instant, Vec<whatsapp_rust::sticker_pack::StickerPack>)>>,
     /// When each store pack was last fetched again for stickers whose
@@ -300,7 +301,7 @@ pub struct PrivacyDto {
 }
 
 impl WaManager {
-    pub fn new(app: AppHandle, data: &std::path::Path, kind: Kind) -> std::io::Result<Arc<Self>> {
+    pub fn new(app: AppHandle, data: &std::path::Path, kind: Kind, stickers: Arc<crate::stickers::Central>) -> std::io::Result<Arc<Self>> {
         let dir = kind.dir(data);
         secure_dir(&dir)?;
         let linked = dir.join(LINKED_MARKER).exists();
@@ -338,7 +339,7 @@ impl WaManager {
             backfill_wake: tokio::sync::Notify::new(),
             active: AtomicBool::new(false),
             announced: std::sync::atomic::AtomicU8::new(0),
-            stickers: Mutex::new(if linked { stickers::Library::load(&dir) } else { stickers::Library::default() }),
+            stickers,
             sticker_store: tokio::sync::Mutex::new(None),
             pack_refreshes: tokio::sync::Mutex::new(HashMap::new()),
             reupload_failed: Mutex::new(HashMap::new()),
@@ -2315,6 +2316,7 @@ impl WaManager {
                 }
                 self.sync_chat_state(generation, client.clone());
                 self.sync_sticker_favorites(generation, client.clone());
+                self.fill_library(generation);
                 self.refresh_ticks(generation, client.clone());
                 self.fetch_all_history(generation, client.clone());
                 self.sync_participants(generation, client.clone());

@@ -129,7 +129,7 @@ pub struct SignalPackDto {
 }
 
 /// What each collection looks like on Signal, against what it holds now.
-pub fn status(packs: &Packs, collections: &[(String, crate::wa::stickers::Collection)], uploading: &HashSet<String>) -> Vec<SignalPackDto> {
+pub fn status(packs: &Packs, collections: &[(String, crate::stickers::Collection)], uploading: &HashSet<String>) -> Vec<SignalPackDto> {
     collections
         .iter()
         .map(|(source, c)| {
@@ -358,7 +358,7 @@ fn cleanup(files: &[(String, String, PathBuf, &'static str)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wa::stickers::Collection;
+    use crate::stickers::Collection;
 
     fn pack(source: &str, stickers: &[&str], at: i64) -> SignalPack {
         SignalPack {

@@ -339,7 +339,7 @@ pub async fn wa_lookup_number(mgr: Mgr<'_>, phone: String) -> Result<Option<Stri
 }
 
 #[tauri::command]
-pub fn wa_sticker_library(mgr: Mgr<'_>) -> super::stickers::LibraryDto {
+pub fn wa_sticker_library(mgr: Mgr<'_>) -> crate::stickers::LibraryDto {
     mgr.sticker_library()
 }
 

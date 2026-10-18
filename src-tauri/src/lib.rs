@@ -17,6 +17,7 @@ mod signal;
 mod telegram;
 mod sqlcipher;
 mod sticker_image;
+mod stickers;
 mod store;
 mod tray;
 mod vault;
@@ -146,6 +147,7 @@ fn find_file(dir: &std::path::Path, scheme: Scheme, name: &str) -> Option<std::p
             wa::Kind::Business.dir(dir).join(wa::MEDIA_DIR).join(name),
             wa::Kind::Business.dir(dir).join(wa::LINK_THUMB_DIR).join(name),
             dir.join(link_preview::PREVIEW_DIR).join(name),
+            stickers::Central::dir(dir).join("files").join(name),
         ],
     };
     candidates.into_iter().find(|path| path.is_file())
@@ -329,9 +331,11 @@ pub fn run() {
             loopback::start(dir.clone());
             app.manage(tray::Background::new(dir.clone()));
             let signal = signal::SignalManager::new(app.handle().clone(), dir.join("signal"))?;
+            let stickers = Arc::new(stickers::Central::open(&dir, &[wa::Kind::Personal.dir(&dir), wa::Kind::Business.dir(&dir)])?);
+            app.manage(stickers.clone());
             let accounts = wa::WaAccounts {
-                personal: wa::WaManager::new(app.handle().clone(), &dir, wa::Kind::Personal)?,
-                business: wa::WaManager::new(app.handle().clone(), &dir, wa::Kind::Business)?,
+                personal: wa::WaManager::new(app.handle().clone(), &dir, wa::Kind::Personal, stickers.clone())?,
+                business: wa::WaManager::new(app.handle().clone(), &dir, wa::Kind::Business, stickers)?,
             };
             for manager in accounts.all() {
                 manager.start();

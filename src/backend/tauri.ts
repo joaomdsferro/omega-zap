@@ -395,7 +395,8 @@ export class TauriBackend implements ChatBackend {
         addFoundSticker: (packId, pick) => this.invoke("wa_add_klipy_sticker", { packId, pick }),
         addSharedPack: (chatId, messageId) => this.invoke<string>("wa_add_shared_pack", { chatId, messageId }),
         subscribe: (listener) => {
-          const pending = listen(`${this.events}://stickers`, () => listener());
+          // The library is the app's, whichever account changed it.
+          const pending = listen("stickers://changed", () => listener());
           return () => void pending.then((unlisten) => unlisten());
         },
       };
@@ -682,7 +683,7 @@ function signalStickers(signal: <T>(cmd: string, args?: Record<string, unknown>)
       await library("wa_add_new_sticker", new Uint8Array(await picture.arrayBuffer()), { headers: { "x-pack": packId } });
     },
     addFoundSticker: (packId, pick) => library("wa_add_klipy_sticker", { packId, pick }),
-    subscribe: (listener) => on(["wa://stickers", "wab://stickers", "signal://stickers"], listener),
+    subscribe: (listener) => on(["stickers://changed", "signal://stickers"], listener),
     libraryOnly: true,
     network: {
       name: "Signal",
@@ -691,7 +692,7 @@ function signalStickers(signal: <T>(cmd: string, args?: Record<string, unknown>)
           (p) => ({ source: p.source, title: p.title, count: p.count, onNetwork: p.onSignal, url: p.url ?? undefined, uploading: p.uploading }),
         ),
       upload: (source) => signal("signal_upload_stickers", { source }),
-      subscribe: (listener) => on(["signal://stickers", "wa://stickers", "wab://stickers"], listener),
+      subscribe: (listener) => on(["signal://stickers", "stickers://changed"], listener),
     },
   };
 }

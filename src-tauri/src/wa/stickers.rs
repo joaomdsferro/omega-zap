@@ -4,513 +4,26 @@
 //! file of its own, by each sticker's hash (WhatsApp's `filehash`: the base64
 //! SHA-256 of the plain file).
 
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+use tauri::Emitter as _;
 use whatsapp_rust::download::MediaType;
 use whatsapp_rust::prelude::*;
 use whatsapp_rust::waproto::buffa::MessageField;
 use whatsapp_rust::{AppStateResyncMode, UploadOptions, WAPatchName, schemas, sticker_pack};
 
-use super::{CdnError, MEDIA_DIR, REUPLOAD_RETRY_AFTER, WaManager, cdn_file_name, convert};
-use crate::account::{lock, secure_dir};
+use super::{CdnError, MEDIA_DIR, REUPLOAD_RETRY_AFTER, WaManager, convert};
+use crate::account::lock;
 use crate::store::{CdnRef, MessageDto, StoredMessage, now_ms};
+use crate::stickers::{Collection, Library, LibraryDto, Pack, unzip};
 
-/// The most a sticker in a shared pack's zip may take once unpacked.
-const ZIP_ENTRY_MAX: usize = 4 * 1024 * 1024;
 /// Stickers of a shared pack uploaded at once.
 const UPLOADS_AT_ONCE: usize = 4;
-
-/// Stickers and GIFs shown under Recent.
-pub const RECENT: usize = 32;
-/// The most stickers a pack holds, as on the phone.
-pub const PACK_MAX: usize = 120;
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Sticker {
-    pub file: CdnRef,
-    /// When we last sent it, from here or from the phone; 0 never.
-    #[serde(default)]
-    pub sent_ms: i64,
-    /// When it was made a favorite.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub favorite_ms: Option<i64>,
-    /// `None` until the file has been looked at.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub animated: Option<bool>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub emojis: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Pack {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub publisher: String,
-    /// One of WhatsApp's own packs, from its sticker store; otherwise made here.
-    #[serde(default)]
-    pub store: bool,
-    /// Its tray picture's address, for a store pack.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tray: Option<String>,
-    /// Sticker hashes, in the pack's order.
-    pub stickers: Vec<String>,
-    pub added_ms: i64,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Gif {
-    pub file: CdnRef,
-    pub sent_ms: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seconds: Option<u32>,
-}
-
-#[derive(Serialize, Deserialize, Default, Debug)]
-pub struct Library {
-    #[serde(default)]
-    stickers: HashMap<String, Sticker>,
-    #[serde(default)]
-    packs: Vec<Pack>,
-    #[serde(default)]
-    gifs: HashMap<String, Gif>,
-    /// The phone's favorites have been asked for once.
-    #[serde(default)]
-    pub favorites_synced: bool,
-}
-
-#[derive(Serialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct StickerDto {
-    pub id: String,
-    pub width: u32,
-    pub height: u32,
-    pub animated: Option<bool>,
-    pub favorite: bool,
-    pub emojis: Vec<String>,
-}
-
-#[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct PackDto {
-    pub id: String,
-    pub name: String,
-    pub publisher: String,
-    pub store: bool,
-    pub tray: Option<String>,
-    pub stickers: Vec<StickerDto>,
-}
-
-#[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct GifDto {
-    pub id: String,
-    pub width: u32,
-    pub height: u32,
-}
-
-#[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct LibraryDto {
-    pub recent: Vec<StickerDto>,
-    pub favorites: Vec<StickerDto>,
-    pub packs: Vec<PackDto>,
-    pub gifs: Vec<GifDto>,
-}
-
-/// A sticker file as the library keeps it: always a WebP sticker.
-fn as_sticker(mut file: CdnRef) -> CdnRef {
-    file.kind = Some("sticker".into());
-    if file.mime.as_deref().is_none_or(str::is_empty) {
-        file.mime = Some("image/webp".into());
-    }
-    file
-}
-
-impl Library {
-    pub fn path(dir: &Path) -> PathBuf {
-        dir.join("stickers.json")
-    }
-
-    pub fn load(dir: &Path) -> Self {
-        let path = Self::path(dir);
-        if !path.exists() {
-            return Self::default();
-        }
-        match crate::vault::get()
-            .read(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
-        {
-            Ok(library) => library,
-            Err(e) => {
-                log::warn!("whatsapp: the sticker library could not be read, starting again: {e}");
-                Self::default()
-            }
-        }
-    }
-
-    pub fn save(&mut self, dir: &Path) {
-        self.prune();
-        match serde_json::to_vec(self) {
-            Ok(bytes) => {
-                if let Err(e) = crate::vault::get().write(&Self::path(dir), &bytes) {
-                    log::warn!("whatsapp: the sticker library was not saved: {e}");
-                }
-            }
-            Err(e) => log::warn!("whatsapp: the sticker library was not saved: {e}"),
-        }
-    }
-
-    /// Drops what is no longer shown anywhere: neither recent, favorite nor in a pack.
-    fn prune(&mut self) {
-        let mut keep: HashSet<String> = self.packs.iter().flat_map(|p| p.stickers.iter().cloned()).collect();
-        keep.extend(self.stickers.iter().filter(|(_, s)| s.favorite_ms.is_some()).map(|(h, _)| h.clone()));
-        keep.extend(self.recent_hashes());
-        self.stickers.retain(|hash, _| keep.contains(hash));
-        let gifs: HashSet<String> = self.recent_gif_hashes().into_iter().collect();
-        self.gifs.retain(|hash, _| gifs.contains(hash));
-    }
-
-    fn recent_hashes(&self) -> Vec<String> {
-        let mut sent: Vec<(&String, i64)> = self.stickers.iter().filter(|(_, s)| s.sent_ms > 0).map(|(h, s)| (h, s.sent_ms)).collect();
-        sent.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-        sent.into_iter().take(RECENT).map(|(h, _)| h.clone()).collect()
-    }
-
-    fn recent_gif_hashes(&self) -> Vec<String> {
-        let mut sent: Vec<(&String, i64)> = self.gifs.iter().map(|(h, g)| (h, g.sent_ms)).collect();
-        sent.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-        sent.into_iter().take(RECENT).map(|(h, _)| h.clone()).collect()
-    }
-
-    /// The entry for a sticker file, made when new; a newer address replaces an older one.
-    fn entry(&mut self, file: CdnRef) -> &mut Sticker {
-        let file = as_sticker(file);
-        let hash = file.sha256.clone();
-        let entry = self.stickers.entry(hash).or_insert_with(|| Sticker {
-            file: file.clone(),
-            sent_ms: 0,
-            favorite_ms: None,
-            animated: None,
-            emojis: Vec::new(),
-        });
-        if entry.file.path != file.path && !file.path.is_empty() {
-            entry.file = CdnRef {
-                width: file.width.max(entry.file.width),
-                height: file.height.max(entry.file.height),
-                ..file
-            };
-        }
-        entry
-    }
-
-    /// We sent this sticker at `at_ms` (here, or from the phone). Returns whether Recent changed.
-    pub fn note_sent(&mut self, file: CdnRef, at_ms: i64) -> bool {
-        let entry = self.entry(file);
-        if at_ms <= entry.sent_ms {
-            return false;
-        }
-        entry.sent_ms = at_ms;
-        true
-    }
-
-    /// The phone took a sticker out of Recent, unless it was sent again after `sent_before_ms`.
-    pub fn remove_recent(&mut self, hash: &str, sent_before_ms: Option<i64>) -> bool {
-        match self.stickers.get_mut(hash) {
-            Some(s) if s.sent_ms > 0 && sent_before_ms.is_none_or(|before| s.sent_ms <= before) => {
-                s.sent_ms = 0;
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// Makes a sticker a favorite or not. A favorite not known here needs its file.
-    pub fn set_favorite(&mut self, hash: &str, file: Option<CdnRef>, favorite: bool, at_ms: i64) -> bool {
-        let entry = match (self.stickers.contains_key(hash), file) {
-            (true, _) => self.stickers.get_mut(hash),
-            (false, Some(file)) if favorite => Some(self.entry(file)),
-            _ => None,
-        };
-        let Some(entry) = entry else { return false };
-        let was = entry.favorite_ms.is_some();
-        entry.favorite_ms = favorite.then(|| entry.favorite_ms.unwrap_or(at_ms));
-        was != favorite
-    }
-
-    pub fn note_animated(&mut self, hash: &str, animated: bool) -> bool {
-        match self.stickers.get_mut(hash) {
-            Some(s) if s.animated != Some(animated) => {
-                s.animated = Some(animated);
-                true
-            }
-            _ => false,
-        }
-    }
-
-    pub fn sticker(&self, hash: &str) -> Option<&Sticker> {
-        self.stickers.get(hash)
-    }
-
-    pub fn gif(&self, hash: &str) -> Option<&Gif> {
-        self.gifs.get(hash)
-    }
-
-    /// We sent this GIF at `at_ms`.
-    pub fn note_gif(&mut self, mut file: CdnRef, seconds: Option<u32>, at_ms: i64) -> bool {
-        file.kind = Some("gif".into());
-        let hash = file.sha256.clone();
-        match self.gifs.get_mut(&hash) {
-            Some(gif) if gif.sent_ms >= at_ms => false,
-            Some(gif) => {
-                gif.sent_ms = at_ms;
-                gif.file = file;
-                true
-            }
-            None => {
-                self.gifs.insert(
-                    hash,
-                    Gif {
-                        file,
-                        sent_ms: at_ms,
-                        seconds,
-                    },
-                );
-                true
-            }
-        }
-    }
-
-    /// The store pack a sticker came with, if any.
-    pub fn store_pack_of(&self, hash: &str) -> Option<String> {
-        self.packs.iter().find(|p| p.store && p.stickers.iter().any(|h| h == hash)).map(|p| p.id.clone())
-    }
-
-    /// Newer addresses for stickers already kept; others are left out.
-    /// Returns whether any changed.
-    pub fn refresh_files(&mut self, files: impl IntoIterator<Item = CdnRef>) -> bool {
-        let mut changed = false;
-        for file in files {
-            if let Some(entry) = self.stickers.get(&file.sha256)
-                && entry.file.path != file.path
-            {
-                self.entry(file);
-                changed = true;
-            }
-        }
-        changed
-    }
-
-    pub fn has_pack(&self, id: &str) -> bool {
-        self.packs.iter().any(|p| p.id == id)
-    }
-
-    /// Adds one of the store's packs with its stickers.
-    pub fn install_pack(&mut self, mut pack: Pack, stickers: Vec<(CdnRef, Vec<String>, bool)>, at_ms: i64) {
-        pack.stickers = Vec::new();
-        for (file, emojis, animated) in stickers {
-            let hash = file.sha256.clone();
-            let entry = self.entry(file);
-            entry.emojis = emojis;
-            entry.animated = Some(animated);
-            if !pack.stickers.contains(&hash) {
-                pack.stickers.push(hash);
-            }
-        }
-        pack.added_ms = at_ms;
-        self.packs.retain(|p| p.id != pack.id);
-        self.packs.push(pack);
-    }
-
-    pub fn remove_pack(&mut self, id: &str) -> bool {
-        let before = self.packs.len();
-        self.packs.retain(|p| p.id != id);
-        before != self.packs.len()
-    }
-
-    /// A pack of our own, empty. Returns its id.
-    pub fn create_pack(&mut self, name: &str, at_ms: i64) -> String {
-        let id = format!("own-{at_ms}");
-        self.packs.push(Pack {
-            id: id.clone(),
-            name: name.trim().to_string(),
-            publisher: String::new(),
-            store: false,
-            tray: None,
-            stickers: Vec::new(),
-            added_ms: at_ms,
-        });
-        id
-    }
-
-    pub fn rename_pack(&mut self, id: &str, name: &str) -> Result<(), String> {
-        let pack = self.own_pack(id)?;
-        pack.name = name.trim().to_string();
-        Ok(())
-    }
-
-    fn own_pack(&mut self, id: &str) -> Result<&mut Pack, String> {
-        match self.packs.iter_mut().find(|p| p.id == id) {
-            Some(pack) if !pack.store => Ok(pack),
-            Some(_) => Err("WhatsApp's packs can't be changed.".into()),
-            None => Err("That pack is gone.".into()),
-        }
-    }
-
-    /// Puts a sticker in one of our packs, first; one already there moves first.
-    pub fn add_to_pack(&mut self, id: &str, file: CdnRef) -> Result<(), String> {
-        let hash = file.sha256.clone();
-        let pack = self.own_pack(id)?;
-        if pack.stickers.len() >= PACK_MAX && !pack.stickers.contains(&hash) {
-            return Err(format!("A pack holds {PACK_MAX} stickers at most."));
-        }
-        pack.stickers.retain(|h| *h != hash);
-        pack.stickers.insert(0, hash);
-        self.entry(file);
-        Ok(())
-    }
-
-    pub fn remove_from_pack(&mut self, id: &str, hash: &str) -> Result<(), String> {
-        self.own_pack(id)?.stickers.retain(|h| h != hash);
-        Ok(())
-    }
-
-    /// A collection to take elsewhere: `favorites` or a pack, as its name,
-    /// publisher, and stickers (hash and emojis) in the order shown.
-    pub fn collection(&self, source: &str) -> Option<Collection> {
-        let (name, publisher, hashes) = if source == "favorites" {
-            let mut favorites: Vec<(&String, i64)> = self.stickers.iter().filter_map(|(h, s)| s.favorite_ms.map(|at| (h, at))).collect();
-            favorites.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-            ("Favorites".to_string(), String::new(), favorites.into_iter().map(|(h, _)| h.clone()).collect::<Vec<_>>())
-        } else {
-            let pack = self.packs.iter().find(|p| p.id == source)?;
-            (pack.name.clone(), pack.publisher.clone(), pack.stickers.clone())
-        };
-        let stickers = hashes
-            .into_iter()
-            .filter_map(|h| {
-                let emojis = self.stickers.get(&h)?.emojis.clone();
-                Some((h, emojis))
-            })
-            .collect();
-        Some(Collection { name, publisher, stickers })
-    }
-
-    fn dto(&self, hash: &str) -> Option<StickerDto> {
-        let s = self.stickers.get(hash)?;
-        Some(StickerDto {
-            id: hash.to_string(),
-            width: s.file.width,
-            height: s.file.height,
-            animated: s.animated,
-            favorite: s.favorite_ms.is_some(),
-            emojis: s.emojis.clone(),
-        })
-    }
-
-    pub fn to_dto(&self) -> LibraryDto {
-        let mut favorites: Vec<(&String, i64)> = self.stickers.iter().filter_map(|(h, s)| s.favorite_ms.map(|at| (h, at))).collect();
-        // The latest favorite first, as on the phone.
-        favorites.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-        let mut packs: Vec<&Pack> = self.packs.iter().collect();
-        packs.sort_by_key(|p| p.added_ms);
-        LibraryDto {
-            recent: self.recent_hashes().iter().filter_map(|h| self.dto(h)).collect(),
-            favorites: favorites.into_iter().filter_map(|(h, _)| self.dto(h)).collect(),
-            packs: packs
-                .into_iter()
-                .map(|p| PackDto {
-                    id: p.id.clone(),
-                    name: p.name.clone(),
-                    publisher: p.publisher.clone(),
-                    store: p.store,
-                    tray: p.tray.clone(),
-                    stickers: p.stickers.iter().filter_map(|h| self.dto(h)).collect(),
-                })
-                .collect(),
-            gifs: self
-                .recent_gif_hashes()
-                .iter()
-                .filter_map(|h| {
-                    let g = self.gifs.get(h)?;
-                    Some(GifDto {
-                        id: h.clone(),
-                        width: g.file.width,
-                        height: g.file.height,
-                    })
-                })
-                .collect(),
-        }
-    }
-}
-
-/// The files in a zip, by name: stored or deflated, as WhatsApp packs them.
-/// No zip64: a sticker pack is far from needing it.
-pub fn unzip(bytes: &[u8]) -> Result<HashMap<String, Vec<u8>>, String> {
-    use std::io::Read as _;
-    let bad = || "The pack's file could not be read.".to_string();
-    let u16_at = |at: usize| bytes.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize).ok_or_else(bad);
-    let u32_at = |at: usize| bytes.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize).ok_or_else(bad);
-    // The end record is last, after a comment of up to 64 KB.
-    let floor = bytes.len().saturating_sub(22 + 65_535);
-    let end = (floor..bytes.len().saturating_sub(21))
-        .rev()
-        .find(|&at| bytes[at..].starts_with(&[0x50, 0x4b, 0x05, 0x06]))
-        .ok_or_else(bad)?;
-    let count = u16_at(end + 10)?;
-    let mut at = u32_at(end + 16)?;
-    let mut files = HashMap::new();
-    for _ in 0..count {
-        if u32_at(at)? != 0x0201_4b50 {
-            return Err(bad());
-        }
-        let method = u16_at(at + 10)?;
-        let packed = u32_at(at + 20)?;
-        let size = u32_at(at + 24)?;
-        let (name_len, extra_len, comment_len) = (u16_at(at + 28)?, u16_at(at + 30)?, u16_at(at + 32)?);
-        let local = u32_at(at + 42)?;
-        let name = String::from_utf8_lossy(bytes.get(at + 46..at + 46 + name_len).ok_or_else(bad)?).into_owned();
-        at += 46 + name_len + extra_len + comment_len;
-        if name.ends_with('/') || size > ZIP_ENTRY_MAX {
-            continue;
-        }
-        if u32_at(local)? != 0x0403_4b50 {
-            return Err(bad());
-        }
-        let start = local + 30 + u16_at(local + 26)? + u16_at(local + 28)?;
-        let data = bytes.get(start..start + packed).ok_or_else(bad)?;
-        let plain = match method {
-            0 => data.to_vec(),
-            8 => {
-                let mut out = Vec::with_capacity(size);
-                flate2::read::DeflateDecoder::new(data)
-                    .take(ZIP_ENTRY_MAX as u64)
-                    .read_to_end(&mut out)
-                    .map_err(|_| bad())?;
-                out
-            }
-            _ => continue,
-        };
-        files.insert(name, plain);
-    }
-    Ok(files)
-}
-
-/// Favorites or a pack, to take to another network.
-pub struct Collection {
-    pub name: String,
-    pub publisher: String,
-    /// Hash and emojis of each sticker.
-    pub stickers: Vec<(String, Vec<String>)>,
-}
 
 /// One of the packs in WhatsApp's sticker store, as the store lists it.
 #[derive(Serialize, Clone, Debug)]
@@ -567,18 +80,19 @@ impl WaManager {
     /// Changes the library; when `f` says something changed, saves it and
     /// tells the UI.
     fn with_stickers<R>(&self, f: impl FnOnce(&mut Library) -> (R, bool)) -> R {
-        let mut library = lock(&self.stickers);
+        let mut library = lock(&self.stickers.library);
         let (result, changed) = f(&mut library);
         if changed {
-            library.save(&self.dir);
+            self.stickers.save(&mut library);
             drop(library);
             self.emit("stickers", ());
+            let _ = self.app.emit("stickers://changed", ());
         }
         result
     }
 
     pub fn sticker_library(&self) -> LibraryDto {
-        lock(&self.stickers).to_dto()
+        lock(&self.stickers.library).to_dto()
     }
 
     /// Keeps the stickers and GIFs in messages of ours as recent: sent from
@@ -665,7 +179,9 @@ impl WaManager {
     /// Asks the phone once for the collection favorites live in, so the ones
     /// made before this app listened arrive.
     pub(super) fn sync_sticker_favorites(self: &Arc<Self>, generation: u64, client: Arc<Client>) {
-        if lock(&self.stickers).favorites_synced {
+        let business = self.kind == super::Kind::Business;
+        let synced = |lib: &Library| if business { lib.business_favorites_synced } else { lib.favorites_synced };
+        if synced(&lock(&self.stickers.library)) {
             return;
         }
         let mgr = self.clone();
@@ -697,7 +213,11 @@ impl WaManager {
             };
             if done {
                 mgr.with_stickers(|lib| {
-                    lib.favorites_synced = true;
+                    if business {
+                        lib.business_favorites_synced = true;
+                    } else {
+                        lib.favorites_synced = true;
+                    }
                     ((), true)
                 });
             }
@@ -705,7 +225,7 @@ impl WaManager {
     }
 
     fn library_file(&self, id: &str) -> Option<(CdnRef, MediaType)> {
-        let library = lock(&self.stickers);
+        let library = lock(&self.stickers.library);
         library
             .sticker(id)
             .map(|s| (s.file.clone(), MediaType::Sticker))
@@ -713,8 +233,13 @@ impl WaManager {
     }
 
     /// A library sticker's or GIF's file, downloaded if needed: its name in the media folder.
+    /// Kept in the library's own folder once fetched, so it no longer needs
+    /// WhatsApp, nor its address on the CDN to last.
     pub async fn library_media(&self, id: &str) -> Result<String, String> {
         let (file, media_type) = self.library_file(id).ok_or("That sticker is gone.")?;
+        if let Some(kept) = self.stickers.kept(&file) {
+            return Ok(kept);
+        }
         let name = match self.fetch_cdn(file.clone(), MEDIA_DIR, "wa", media_type).await {
             // Gone from WhatsApp's CDN: favorites and recents keep the address
             // they had when first seen, which expires after a few weeks.
@@ -724,33 +249,69 @@ impl WaManager {
             })?,
             other => other?,
         };
-        if media_type == MediaType::Sticker
-            && lock(&self.stickers).sticker(id).is_some_and(|s| s.animated.is_none())
-            && let Ok(bytes) = crate::vault::get().read(&self.dir.join(MEDIA_DIR).join(&name))
-        {
+        let bytes = crate::vault::get().read(&self.dir.join(MEDIA_DIR).join(&name)).map_err(|e| format!("The file could not be read: {e}"))?;
+        if media_type == MediaType::Sticker && lock(&self.stickers.library).sticker(id).is_some_and(|s| s.animated.is_none()) {
             let animated = whatsapp_rust::webp::is_animated(&bytes);
             self.with_stickers(|lib| ((), lib.note_animated(id, animated)));
         }
-        Ok(name)
+        match self.stickers.keep(&file, &bytes) {
+            Ok(kept) => Ok(kept),
+            Err(e) => {
+                log::warn!("{e}");
+                Ok(name)
+            }
+        }
+    }
+
+    /// Fetches every library file not kept yet, one at a time, so packs
+    /// outlive WhatsApp's CDN. Once per start, by whichever account
+    /// connects first.
+    pub(super) fn fill_library(self: &Arc<Self>, generation: u64) {
+        if self.stickers.filling.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let mgr = self.clone();
+        tauri::async_runtime::spawn(async move {
+            // After the start's own traffic.
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            let wanted: Vec<String> = {
+                let library = lock(&mgr.stickers.library);
+                library.files().into_iter().filter(|f| mgr.stickers.kept(f).is_none()).map(|f| f.sha256).collect()
+            };
+            let mut missing = 0;
+            for id in wanted {
+                if mgr.generation.load(Ordering::SeqCst) != generation {
+                    // This account went away: another may take it up.
+                    mgr.stickers.filling.store(false, Ordering::SeqCst);
+                    return;
+                }
+                if mgr.library_media(&id).await.is_err() {
+                    missing += 1;
+                }
+            }
+            if missing > 0 {
+                log::info!("stickers: {missing} library files could not be fetched");
+            }
+        });
     }
 
     pub fn sticker_collection(&self, source: &str) -> Option<Collection> {
-        lock(&self.stickers).collection(source)
+        lock(&self.stickers.library).collection(source)
     }
 
     /// The emojis a library sticker goes with.
     pub fn sticker_emojis(&self, id: &str) -> Vec<String> {
-        lock(&self.stickers).sticker(id).map(|s| s.emojis.clone()).unwrap_or_default()
+        lock(&self.stickers.library).sticker(id).map(|s| s.emojis.clone()).unwrap_or_default()
     }
 
     /// A sticker whose address expired, fetched from a fresh one: a store
     /// pack's own list has them, and otherwise the phone that sent a message
     /// with it can put it back on the CDN.
     async fn recover_sticker(&self, id: &str, file: &CdnRef) -> Result<String, String> {
-        let pack = lock(&self.stickers).store_pack_of(id);
+        let pack = lock(&self.stickers.library).store_pack_of(id);
         if let Some(pack) = pack {
             self.refresh_store_pack(&pack).await;
-            let fresh = lock(&self.stickers).sticker(id).map(|s| s.file.clone());
+            let fresh = lock(&self.stickers.library).sticker(id).map(|s| s.file.clone());
             if let Some(fresh) = fresh.filter(|f| f.path != file.path)
                 && let Ok(name) = self.fetch_cdn(fresh, MEDIA_DIR, "wa", MediaType::Sticker).await
             {
@@ -793,6 +354,9 @@ impl WaManager {
     /// A library sticker's or GIF's plain bytes, downloaded if needed.
     pub(crate) async fn library_bytes(&self, id: &str) -> Result<Vec<u8>, String> {
         let name = self.library_media(id).await?;
+        if name.starts_with("st-") {
+            return self.stickers.read(&name);
+        }
         crate::vault::get()
             .read(&self.dir.join(MEDIA_DIR).join(name))
             .map_err(|e| format!("The file could not be read: {e}"))
@@ -801,7 +365,7 @@ impl WaManager {
     /// Sends a sticker from the library.
     pub async fn send_library_sticker(&self, chat_id: &str, id: &str, reply_to: Option<&str>) -> Result<MessageDto, String> {
         let bytes = self.library_bytes(id).await?;
-        let emojis = lock(&self.stickers).sticker(id).map(|s| s.emojis.clone()).unwrap_or_default();
+        let emojis = lock(&self.stickers.library).sticker(id).map(|s| s.emojis.clone()).unwrap_or_default();
         self.send_sticker_bytes(chat_id, bytes, emojis, reply_to).await
     }
 
@@ -856,12 +420,8 @@ impl WaManager {
             kind: Some("sticker".into()),
             file_name: None,
         };
-        if let Ok(name) = cdn_file_name(&file, "wa") {
-            let path = self.dir.join(MEDIA_DIR).join(name);
-            if !path.exists() {
-                let _ = secure_dir(&self.dir.join(MEDIA_DIR));
-                let _ = crate::vault::get().write(&path, &plain);
-            }
+        if let Err(e) = self.stickers.keep(&file, &plain) {
+            log::warn!("{e}");
         }
         Ok((upload, file))
     }
@@ -915,7 +475,7 @@ impl WaManager {
     pub async fn set_sticker_favorite(&self, id: Option<&str>, message: Option<(&str, &str)>, favorite: bool) -> Result<(), String> {
         let client = self.connected_client().await?;
         let file = match (id, message) {
-            (Some(id), _) => lock(&self.stickers).sticker(id).map(|s| s.file.clone()),
+            (Some(id), _) => lock(&self.stickers.library).sticker(id).map(|s| s.file.clone()),
             (None, Some((chat, message))) => {
                 self.recall(chat, message);
                 lock(&self.store).wa_media(chat, message).filter(|f| f.kind.as_deref() == Some("sticker"))
@@ -993,7 +553,7 @@ impl WaManager {
                 }
             }
         };
-        let library = lock(&self.stickers);
+        let library = lock(&self.stickers.library);
         Ok(packs
             .into_iter()
             .filter_map(|p| {
@@ -1131,7 +691,7 @@ impl WaManager {
     /// Puts a library sticker, or the sticker in a message, in one of our packs.
     pub fn add_to_pack(&self, pack_id: &str, id: Option<&str>, message: Option<(&str, &str)>) -> Result<(), String> {
         let file = match (id, message) {
-            (Some(id), _) => lock(&self.stickers).sticker(id).map(|s| s.file.clone()),
+            (Some(id), _) => lock(&self.stickers.library).sticker(id).map(|s| s.file.clone()),
             (None, Some((chat, message))) => {
                 self.recall(chat, message);
                 lock(&self.store).wa_media(chat, message).filter(|f| f.kind.as_deref() == Some("sticker"))
@@ -1201,7 +761,7 @@ impl WaManager {
     /// Sends one of the GIFs we sent before again.
     pub async fn send_recent_gif(&self, chat_id: &str, id: &str, reply_to: Option<&str>) -> Result<MessageDto, String> {
         let (width, height) = {
-            let library = lock(&self.stickers);
+            let library = lock(&self.stickers.library);
             let gif = library.gif(id).ok_or("That GIF is gone.")?;
             (gif.file.width, gif.file.height)
         };
@@ -1261,160 +821,11 @@ impl WaManager {
             .map_err(|e| format!("The GIF was uploaded but not sent: {e}"))?;
         // Kept so it plays without downloading it back.
         if let Some(file) = content.wa_media.clone() {
-            if let Ok(name) = cdn_file_name(&file, "wa") {
-                let path = self.dir.join(MEDIA_DIR).join(name);
-                if !path.exists() {
-                    let _ = secure_dir(&self.dir.join(MEDIA_DIR));
-                    let _ = crate::vault::get().write(&path, &plain);
-                }
+            if let Err(e) = self.stickers.keep(&file, &plain) {
+                log::warn!("{e}");
             }
             self.with_stickers(|lib| ((), lib.note_gif(file, seconds, now_ms())));
         }
         self.store_sent(chat_id, sent.message_id.into_string(), content)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn file(hash: &str) -> CdnRef {
-        CdnRef {
-            path: format!("/v/{hash}"),
-            key: "a2V5".into(),
-            sha256: hash.into(),
-            enc_sha256: "ZW5j".into(),
-            size: 100,
-            mime: Some("image/webp".into()),
-            width: 512,
-            height: 512,
-            kind: Some("sticker".into()),
-            file_name: None,
-        }
-    }
-
-    #[test]
-    fn recent_is_newest_sent_first_and_capped() {
-        let mut lib = Library::default();
-        for i in 0..40 {
-            lib.note_sent(file(&format!("h{i:02}")), 1000 + i);
-        }
-        // An older replay doesn't move it back.
-        assert!(!lib.note_sent(file("h39"), 5));
-        let dto = lib.to_dto();
-        assert_eq!(dto.recent.len(), RECENT);
-        assert_eq!(dto.recent[0].id, "h39");
-        lib.prune();
-        assert_eq!(lib.stickers.len(), RECENT);
-    }
-
-    #[test]
-    fn removing_from_recent_respects_a_later_send() {
-        let mut lib = Library::default();
-        lib.note_sent(file("a"), 2000);
-        assert!(!lib.remove_recent("a", Some(1000)));
-        assert!(lib.remove_recent("a", Some(2000)));
-        assert!(lib.to_dto().recent.is_empty());
-    }
-
-    #[test]
-    fn favorites_need_the_file_only_when_new() {
-        let mut lib = Library::default();
-        assert!(!lib.set_favorite("x", None, true, 1));
-        assert!(lib.set_favorite("x", Some(file("x")), true, 1));
-        assert!(lib.set_favorite("x", None, false, 2));
-        assert!(lib.to_dto().favorites.is_empty());
-        // Still known as long as something shows it.
-        lib.note_sent(file("x"), 3);
-        assert!(lib.set_favorite("x", None, true, 4));
-        assert_eq!(lib.to_dto().favorites[0].id, "x");
-    }
-
-    #[test]
-    fn own_packs_take_stickers_store_packs_do_not() {
-        let mut lib = Library::default();
-        let id = lib.create_pack(" Mine ", 10);
-        lib.add_to_pack(&id, file("a")).unwrap();
-        lib.add_to_pack(&id, file("b")).unwrap();
-        lib.add_to_pack(&id, file("a")).unwrap();
-        let store = Pack {
-            id: "Cuppy".into(),
-            name: "Cuppy".into(),
-            publisher: "WhatsApp".into(),
-            store: true,
-            tray: None,
-            stickers: vec![],
-            added_ms: 0,
-        };
-        lib.install_pack(store, vec![(file("c"), vec!["😀".into()], false)], 20);
-        assert!(lib.add_to_pack("Cuppy", file("d")).is_err());
-        let dto = lib.to_dto();
-        assert_eq!(dto.packs[0].name, "Mine");
-        assert_eq!(dto.packs[0].stickers.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
-        assert_eq!(dto.packs[1].stickers[0].emojis, ["😀"]);
-        lib.remove_pack("Cuppy");
-        lib.prune();
-        assert!(lib.sticker("c").is_none());
-        assert!(lib.sticker("a").is_some());
-    }
-
-    /// A zip of one file, stored (method 0) or deflated (8).
-    fn zip_of(name: &str, plain: &[u8], method: u16) -> Vec<u8> {
-        use std::io::Write as _;
-        let data = if method == 8 {
-            let mut deflate = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
-            deflate.write_all(plain).unwrap();
-            deflate.finish().unwrap()
-        } else {
-            plain.to_vec()
-        };
-        let header = |zip: &mut Vec<u8>, central: bool| {
-            zip.extend(if central { 0x0201_4b50u32 } else { 0x0403_4b50 }.to_le_bytes());
-            if central {
-                zip.extend([20, 0]);
-            }
-            zip.extend([20, 0, 0, 0]);
-            zip.extend(method.to_le_bytes());
-            zip.extend([0u8; 8]);
-            zip.extend((data.len() as u32).to_le_bytes());
-            zip.extend((plain.len() as u32).to_le_bytes());
-            zip.extend((name.len() as u16).to_le_bytes());
-            zip.extend([0, 0]);
-            if central {
-                zip.extend([0u8; 10]);
-                zip.extend(0u32.to_le_bytes());
-            }
-            zip.extend(name.as_bytes());
-        };
-        let mut zip = Vec::new();
-        header(&mut zip, false);
-        zip.extend(&data);
-        let central = zip.len() as u32;
-        header(&mut zip, true);
-        let size = zip.len() as u32 - central;
-        zip.extend(0x0605_4b50u32.to_le_bytes());
-        zip.extend([0, 0, 0, 0, 1, 0, 1, 0]);
-        zip.extend(size.to_le_bytes());
-        zip.extend(central.to_le_bytes());
-        zip.extend([0, 0]);
-        zip
-    }
-
-    #[test]
-    fn a_shared_packs_zip_is_unpacked() {
-        let plain = b"RIFF deflated deflated deflated WEBP";
-        assert_eq!(unzip(&zip_of("a.webp", plain, 0)).unwrap()["a.webp"], plain);
-        assert_eq!(unzip(&zip_of("b.webp", plain, 8)).unwrap()["b.webp"], plain);
-        assert!(unzip(b"not a zip").is_err());
-    }
-
-    #[test]
-    fn gifs_keep_the_latest_send() {
-        let mut lib = Library::default();
-        let mut gif = file("g");
-        gif.kind = Some("gif".into());
-        assert!(lib.note_gif(gif.clone(), Some(3), 5));
-        assert!(!lib.note_gif(gif.clone(), None, 4));
-        assert_eq!(lib.to_dto().gifs.len(), 1);
     }
 }
