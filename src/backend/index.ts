@@ -39,6 +39,7 @@ export type {
   StickerNetwork,
   LibraryInfo,
   MadeSticker,
+  MadeGif,
   PictureProbe,
   NetworkPack,
   Microphone,

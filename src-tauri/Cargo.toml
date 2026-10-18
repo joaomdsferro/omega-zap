@@ -49,6 +49,9 @@ flate2 = "1"
 # A shared pack's stickers are uploaded a few at a time. Already built.
 futures = "0.3"
 color_quant = "1.1"
+# GIFs made in the editor are H.264 in an mp4, as WhatsApp sends them.
+# Cisco's OpenH264, built in from source, so nothing is needed on the system.
+openh264 = { version = "0.9", default-features = false, features = ["source"] }
 # Voice messages: the microphone (ALSA on Linux, Core Audio on macOS) and
 # Opus, built in (static, with cmake), so nothing is needed on the system.
 # Telegram (MTProto), in pure Rust. The session is kept as JSON and sealed by

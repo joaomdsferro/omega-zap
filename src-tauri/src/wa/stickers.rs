@@ -413,6 +413,33 @@ impl WaManager {
         })
     }
 
+    /// Uploads a GIF made in the editor and keeps it with the GIFs, first
+    /// under Recent, to send from there.
+    pub async fn make_gif(&self, video: crate::gif_video::Video) -> Result<(), String> {
+        let client = self.connected_client().await?;
+        let seconds = crate::klipy::mp4_seconds(&video.mp4);
+        let plain = video.mp4.clone();
+        let upload = client
+            .upload(video.mp4, MediaType::Video, UploadOptions::default())
+            .await
+            .map_err(|e| format!("The GIF was not uploaded: {e}"))?;
+        let file = CdnRef {
+            path: upload.direct_path.clone(),
+            key: BASE64.encode(upload.media_key),
+            sha256: BASE64.encode(upload.file_sha256),
+            enc_sha256: BASE64.encode(upload.file_enc_sha256),
+            size: upload.file_length,
+            mime: Some("video/mp4".into()),
+            width: video.width,
+            height: video.height,
+            kind: Some("gif".into()),
+            file_name: None,
+        };
+        self.stickers.keep(&file, &plain)?;
+        self.with_stickers(|lib| ((), lib.note_gif(file, seconds, now_ms())));
+        Ok(())
+    }
+
     /// Uploads a sticker's bytes and keeps a copy in the media folder, so it
     /// shows without downloading it back. Returns the upload and the file.
     async fn upload_sticker(&self, bytes: Vec<u8>) -> Result<(whatsapp_rust::upload::UploadResponse, CdnRef), String> {

@@ -267,7 +267,32 @@ pub fn render(frames: Vec<(RgbaImage, u32)>, edit: &Edit, overlay: Option<&RgbaI
     if frames.is_empty() {
         return Err("There is nothing to make a sticker of.".into());
     }
-    // The frames within the kept part, each shown for as long as it is in it.
+    let kept = clip(&frames, edit);
+    let filter = if kept.len() > 1 { FilterType::Triangle } else { FilterType::Lanczos3 };
+    let outline = edit.outline.min(OUTLINE_MAX);
+    let made: Vec<(RgbaImage, u32)> = kept
+        .into_iter()
+        .map(|(frame, ms)| {
+            let mut square = place(&frame, edit.crop, filter);
+            if outline > 0 {
+                square = outlined(&square, outline);
+            }
+            if let Some(overlay) = overlay {
+                imageops::overlay(&mut square, overlay, 0, 0);
+            }
+            (square, ms)
+        })
+        .collect();
+    if made.len() > 1 {
+        Ok(Sticker { bytes: encode_animated(&made)?, animated: true })
+    } else {
+        Ok(Sticker { bytes: encode_static(&made[0].0)?, animated: false })
+    }
+}
+
+/// The frames within the part of the animation kept, each shown for as long
+/// as it is in it, at most [`MAX_ANIMATION_MS`] of them.
+fn clip(frames: &[(RgbaImage, u32)], edit: &Edit) -> Vec<(RgbaImage, u32)> {
     let end = edit.end_ms.unwrap_or(u32::MAX).max(edit.start_ms + 1);
     let mut kept: Vec<(RgbaImage, u32)> = Vec::new();
     let mut at = 0u32;
@@ -289,26 +314,34 @@ pub fn render(frames: Vec<(RgbaImage, u32)>, edit: &Edit, overlay: Option<&RgbaI
     if kept.is_empty() {
         kept.push((frames[0].0.clone(), 0));
     }
-    let filter = if kept.len() > 1 { FilterType::Triangle } else { FilterType::Lanczos3 };
-    let outline = edit.outline.min(OUTLINE_MAX);
+    kept
+}
+
+/// Makes a GIF from frames as the editor set it up: the part kept, scaled
+/// to within [`crate::gif_video::SIDE_MAX`], then `overlay` (the caption,
+/// stretched to the frame) over each frame.
+pub fn render_gif(frames: Vec<(RgbaImage, u32)>, edit: &Edit, overlay: Option<&RgbaImage>) -> Result<crate::gif_video::Video, String> {
+    if frames.is_empty() {
+        return Err("There is nothing to make a GIF of.".into());
+    }
+    let kept = clip(&frames, edit);
+    if kept.len() < 2 {
+        return Err("A GIF needs something that moves: a GIF or a video.".into());
+    }
+    let (w, h) = kept[0].0.dimensions();
+    let (width, height) = crate::gif_video::size_for(w, h);
+    let overlay = overlay.map(|o| if o.dimensions() == (width, height) { o.clone() } else { imageops::resize(o, width, height, FilterType::Triangle) });
     let made: Vec<(RgbaImage, u32)> = kept
         .into_iter()
         .map(|(frame, ms)| {
-            let mut square = place(&frame, edit.crop, filter);
-            if outline > 0 {
-                square = outlined(&square, outline);
+            let mut frame = if frame.dimensions() == (width, height) { frame } else { imageops::resize(&frame, width, height, FilterType::Triangle) };
+            if let Some(overlay) = &overlay {
+                imageops::overlay(&mut frame, overlay, 0, 0);
             }
-            if let Some(overlay) = overlay {
-                imageops::overlay(&mut square, overlay, 0, 0);
-            }
-            (square, ms)
+            (frame, ms)
         })
         .collect();
-    if made.len() > 1 {
-        Ok(Sticker { bytes: encode_animated(&made)?, animated: true })
-    } else {
-        Ok(Sticker { bytes: encode_static(&made[0].0)?, animated: false })
-    }
+    crate::gif_video::encode(&made)
 }
 
 /// The part `crop` of a frame, scaled to fill the square.
@@ -554,6 +587,24 @@ mod tests {
         let picture = RgbaImage::from_fn(w, h, |x, y| image::Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255]));
         picture.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).unwrap();
         out
+    }
+
+    #[test]
+    fn a_video_becomes_a_gif_at_its_own_shape_with_its_caption() {
+        let frames: Vec<(RgbaImage, u32)> =
+            (0..45).map(|i| (RgbaImage::from_fn(512, 288, |x, y| image::Rgba([(x % 256) as u8, (y % 256) as u8, (i * 5) as u8, 255])), 67)).collect();
+        let caption = RgbaImage::from_fn(512, 289, |_, y| image::Rgba([255, 255, 255, if y > 250 { 255 } else { 0 }]));
+        let edit = Edit { crop: [0.0, 0.0, 1.0, 1.0], outline: 0, start_ms: 1000, end_ms: Some(3000) };
+        let gif = render_gif(frames, &edit, Some(&caption)).unwrap();
+        assert_eq!((gif.width, gif.height), (480, 270));
+        assert_eq!(crate::klipy::mp4_seconds(&gif.mp4), Some(2));
+    }
+
+    #[test]
+    fn a_still_is_not_made_into_a_gif() {
+        let still = vec![(RgbaImage::new(100, 100), 0)];
+        let edit = Edit { crop: [0.0, 0.0, 1.0, 1.0], outline: 0, start_ms: 0, end_ms: None };
+        assert!(render_gif(still, &edit, None).is_err());
     }
 
     #[test]

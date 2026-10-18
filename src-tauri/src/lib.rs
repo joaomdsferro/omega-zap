@@ -16,6 +16,7 @@ mod players;
 mod signal;
 mod telegram;
 mod sqlcipher;
+mod gif_video;
 mod sticker_image;
 mod stickers;
 mod store;
@@ -432,6 +433,7 @@ pub fn run() {
             stickers::stickers_info,
             stickers::stickers_probe,
             wa::commands::wa_make_sticker,
+            wa::commands::wa_make_gif,
             wa::commands::wa_send_gif,
             wa::commands::wa_send_voice,
             voice::voice_start,

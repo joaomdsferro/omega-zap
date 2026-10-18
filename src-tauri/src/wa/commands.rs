@@ -533,11 +533,14 @@ struct MakeRequest {
     overlay: bool,
 }
 
-/// Makes a sticker in the editor's way and keeps it in a pack; returns the pack's id.
-#[tauri::command]
-pub async fn wa_make_sticker(mgr: Mgr<'_>, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+/// The editor's request and what it sent: the frames, each with how long it
+/// shows, and the caption layer.
+type Made = (MakeRequest, Vec<(image::RgbaImage, u32)>, Option<image::RgbaImage>);
+
+/// Reads what the editor sent, the frames decoded off the async runtime.
+async fn made_from(request: &tauri::ipc::Request<'_>) -> Result<Made, String> {
     use base64::Engine as _;
-    let make: MakeRequest = header(&request, "x-make")
+    let make: MakeRequest = header(request, "x-make")
         .and_then(|h| base64::engine::general_purpose::STANDARD.decode(h).ok())
         .and_then(|json| serde_json::from_slice(&json).ok())
         .ok_or("The sticker's settings are missing.")?;
@@ -554,8 +557,8 @@ pub async fn wa_make_sticker(mgr: Mgr<'_>, request: tauri::ipc::Request<'_>) -> 
         at += len;
     }
     let overlay = if make.overlay { parts.pop() } else { None };
-    let (edit, frame_ms) = (make.edit, make.frame_ms);
-    let made = tauri::async_runtime::spawn_blocking(move || -> Result<crate::sticker_image::Sticker, String> {
+    let frame_ms = make.frame_ms.clone();
+    let (frames, overlay) = tauri::async_runtime::spawn_blocking(move || -> Result<_, String> {
         let frames = match frame_ms {
             Some(ms) => parts
                 .iter()
@@ -568,9 +571,30 @@ pub async fn wa_make_sticker(mgr: Mgr<'_>, request: tauri::ipc::Request<'_>) -> 
             Some(png) => Some(image::load_from_memory(&png).map_err(|e| format!("The caption could not be read: {e}"))?.to_rgba8()),
             None => None,
         };
-        crate::sticker_image::render(frames, &edit, overlay.as_ref())
+        Ok((frames, overlay))
     })
     .await
-    .map_err(|e| format!("The sticker could not be made: {e}"))??;
+    .map_err(|e| format!("The picture could not be read: {e}"))??;
+    Ok((make, frames, overlay))
+}
+
+/// Makes a sticker in the editor's way and keeps it in a pack; returns the pack's id.
+#[tauri::command]
+pub async fn wa_make_sticker(mgr: Mgr<'_>, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let (make, frames, overlay) = made_from(&request).await?;
+    let edit = make.edit.clone();
+    let made = tauri::async_runtime::spawn_blocking(move || crate::sticker_image::render(frames, &edit, overlay.as_ref()))
+        .await
+        .map_err(|e| format!("The sticker could not be made: {e}"))??;
     mgr.make_sticker(made, make.pack.as_deref(), make.new_pack.as_deref(), make.emojis).await
+}
+
+/// Makes a GIF in the editor's way (an mp4, as WhatsApp sends GIFs) and keeps it with the GIFs.
+#[tauri::command]
+pub async fn wa_make_gif(mgr: Mgr<'_>, request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let (make, frames, overlay) = made_from(&request).await?;
+    let video = tauri::async_runtime::spawn_blocking(move || crate::sticker_image::render_gif(frames, &make.edit, overlay.as_ref()))
+        .await
+        .map_err(|e| format!("The GIF could not be made: {e}"))??;
+    mgr.make_gif(video).await
 }

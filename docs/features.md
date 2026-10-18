@@ -144,12 +144,16 @@ Everything Omega Zap does today, network by network. For what is still missing, 
   it on a screen of its own: Recent, Favorites and every pack on the left, the open one large on the
   right with where it is on WhatsApp, Signal (add or update it there) and Telegram (later). Rename or
   delete packs, star stickers, drag them to reorder a pack of yours or onto another pack, search by
-  pack name or emoji, add packs from WhatsApp's store, and see the GIFs you sent.
+  pack name or emoji, add packs from WhatsApp's store, and see the GIFs you sent or made.
 - **Making stickers**: **New** (or **Add** in a pack) opens the sticker editor. Drop, paste or choose
   a picture, a GIF or a short video; drag and zoom it in the square (or **Whole** / **Fill**), add a
   white outline and a caption on top or at the bottom, and for a GIF or video, pick the part to keep
   (up to 10 seconds). Choose its emoji and the pack (or a new one). The preview is live; the sticker
   is made as a WebP within WhatsApp's sizes, animated when the source moves.
+- **Making GIFs**: the editor's **GIF** switch (or **Make a GIF** under GIFs) makes a GIF from a GIF
+  or a short video: kept whole at its own shape, with a caption and the part to keep (up to 10
+  seconds). It is made as WhatsApp sends GIFs, an H.264 mp4 at most 480 pixels a side that plays on a
+  loop, and kept with the GIFs, under Recent, to send from any WhatsApp chat.
 - **Your WhatsApp stickers on Signal**: in a Signal chat the **Stickers** tab shows the same library
   (the personal WhatsApp account's, or the business one's when only it is linked). **Add to Signal**
   beside Favorites or a pack, or **Add all**, makes it a Signal pack (still WebP stickers stay as they

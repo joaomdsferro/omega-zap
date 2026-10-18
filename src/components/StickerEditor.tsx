@@ -16,6 +16,8 @@ const CAPTION_FONT = '"Anton", Impact, "Arial Black", "Helvetica Neue", sans-ser
 const QUICK_EMOJIS = ["😂", "❤️", "👍", "😍", "😭", "🙏", "😮", "😡", "🎉", "🔥", "😎", "🥲"];
 
 type Kind = "image" | "animated" | "video";
+/** What the editor makes: a sticker into a pack, or a GIF. */
+export type Making = "sticker" | "gif";
 
 interface Source {
   blob: Blob;
@@ -33,7 +35,9 @@ interface StickerEditorProps {
   pack: string | null;
   /** A picture to start from; without one, the editor asks for it. */
   picture?: Blob;
-  onDone: (packId: string) => void;
+  /** What it makes at first; it can switch when the shelf makes GIFs. */
+  making?: Making;
+  onDone: () => void;
   onClose: () => void;
   onError: (message: string) => void;
 }
@@ -50,15 +54,18 @@ function captionSize(text: string, width: number, max: number): number {
   return size;
 }
 
-/** The caption drawn on a transparent 512 square, as the backend lays it over the sticker. */
-async function captionLayer(text: string, top: boolean): Promise<Blob | undefined> {
+/**
+ * The caption drawn on a transparent layer, as the backend lays it over
+ * each frame: a 512 square for a sticker, the frame's shape for a GIF.
+ */
+async function captionLayer(text: string, top: boolean, width = SIDE, height = SIDE): Promise<Blob | undefined> {
   if (!text.trim()) return undefined;
   const canvas = document.createElement("canvas");
-  canvas.width = SIDE;
-  canvas.height = SIDE;
+  canvas.width = width;
+  canvas.height = height;
   const ctx = canvas.getContext("2d");
   if (!ctx) return undefined;
-  const size = captionSize(text, SIDE * 0.9, 76);
+  const size = captionSize(text, width * 0.9, (76 * width) / SIDE);
   ctx.font = `900 ${size}px ${CAPTION_FONT}`;
   ctx.textAlign = "center";
   ctx.textBaseline = top ? "top" : "bottom";
@@ -66,9 +73,9 @@ async function captionLayer(text: string, top: boolean): Promise<Blob | undefine
   ctx.lineWidth = Math.max(4, size / 7);
   ctx.strokeStyle = "#000";
   ctx.fillStyle = "#fff";
-  const y = top ? SIDE * 0.05 : SIDE * 0.95;
-  ctx.strokeText(text, SIDE / 2, y);
-  ctx.fillText(text, SIDE / 2, y);
+  const y = top ? height * 0.05 : height * 0.95;
+  ctx.strokeText(text, width / 2, y);
+  ctx.fillText(text, width / 2, y);
   return new Promise((resolve) => canvas.toBlob((b) => resolve(b ?? undefined), "image/png"));
 }
 
@@ -149,7 +156,9 @@ async function readSource(blob: Blob, shelf: StickerShelf): Promise<Source> {
  * something that moves, the part to keep. The preview is live; the sticker
  * itself is made by the app with the same settings.
  */
-export function StickerEditor({ shelf, pack, picture, onDone, onClose, onError }: StickerEditorProps) {
+export function StickerEditor({ shelf, pack, picture, making: startMaking = "sticker", onDone, onClose, onError }: StickerEditorProps) {
+  const [mode, setMode] = useState<Making>(shelf.makeGif ? startMaking : "sticker");
+  const gif = mode === "gif";
   const [source, setSource] = useState<Source | null>(null);
   const [loading, setLoading] = useState(false);
   const [zoom, setZoom] = useState(1);
@@ -230,11 +239,13 @@ export function StickerEditor({ shelf, pack, picture, onDone, onClose, onError }
     return () => video.removeEventListener("timeupdate", onTime);
   }, [clip, source]);
 
-  // The picture at zoom 1 fits the square whole.
+  // The picture at zoom 1 fits the square whole. A GIF keeps the source's
+  // shape, whole: the frame is the picture.
   const base = source ? VIEW / Math.max(source.width, source.height) : 1;
-  const shown = source ? { w: source.width * base * zoom, h: source.height * base * zoom } : { w: 0, h: 0 };
-  const left = VIEW / 2 - shown.w / 2 + offset.x;
-  const top = VIEW / 2 - shown.h / 2 + offset.y;
+  const frame = gif && source ? { w: Math.round(source.width * base), h: Math.round(source.height * base) } : { w: VIEW, h: VIEW };
+  const shown = gif ? frame : source ? { w: source.width * base * zoom, h: source.height * base * zoom } : { w: 0, h: 0 };
+  const left = gif ? 0 : VIEW / 2 - shown.w / 2 + offset.x;
+  const top = gif ? 0 : VIEW / 2 - shown.h / 2 + offset.y;
   const crop: [number, number, number, number] = source ? [-left / shown.w, -top / shown.h, VIEW / shown.w, VIEW / shown.h] : [0, 0, 1, 1];
 
   function fit(mode: "whole" | "fill") {
@@ -259,38 +270,47 @@ export function StickerEditor({ shelf, pack, picture, onDone, onClose, onError }
         .map(([x, y]) => `drop-shadow(${(x * outlinePx).toFixed(1)}px ${(y * outlinePx).toFixed(1)}px 0 #fff)`)
         .join(" ")
     : undefined;
-  const previewCaption = useMemo(() => captionSize(caption, VIEW * 0.9, (76 * VIEW) / SIDE), [caption]);
+  const previewCaption = useMemo(() => captionSize(caption, frame.w * 0.9, (76 * frame.w) / SIDE), [caption, frame.w]);
 
   const moves = source?.kind === "animated" || source?.kind === "video";
   const clipMs = clip[1] - clip[0];
   const packName = newPack.trim();
-  const canMake = Boolean(source) && !making && (target !== "" || packName !== "" || packs.length === 0);
+  const canMake = Boolean(source) && !making && (gif ? moves : target !== "" || packName !== "" || packs.length === 0);
+  const what = gif ? "GIF" : "sticker";
 
   async function make() {
     if (!source || !shelf.make) return;
-    setMaking("Making the sticker…");
+    setMaking(`Making the ${what}…`);
     try {
-      const overlay = await captionLayer(caption.trim(), captionTop);
-      let sticker: Parameters<NonNullable<StickerShelf["make"]>>[0]["source"];
+      // A GIF's caption is drawn at the frame's shape, 512 on its longer side.
+      const layer = gif ? { w: Math.round((SIDE * frame.w) / VIEW), h: Math.round((SIDE * frame.h) / VIEW) } : { w: SIDE, h: SIDE };
+      const overlay = await captionLayer(caption.trim(), captionTop, layer.w, layer.h);
+      let picture: Parameters<NonNullable<StickerShelf["make"]>>[0]["source"];
       if (source.kind === "video") {
         const frames = await videoFrames(source.url, clip[0], clip[1], (done) => setMaking(`Reading the video… ${Math.round(done * 100)}%`));
-        setMaking("Making the sticker…");
-        sticker = { frames, frameMs: frames.map(() => Math.round(1000 / VIDEO_FPS)) };
+        setMaking(`Making the ${what}…`);
+        picture = { frames, frameMs: frames.map(() => Math.round(1000 / VIDEO_FPS)) };
       } else {
-        sticker = { file: source.blob };
+        picture = { file: source.blob };
       }
-      const packId = await shelf.make({
-        source: sticker,
-        crop,
-        outline,
-        startMs: source.kind === "animated" ? clip[0] : 0,
-        endMs: source.kind === "animated" ? clip[1] : undefined,
-        overlay,
-        emojis,
-        pack: target || undefined,
-        newPack: target ? undefined : packName || "My stickers",
-      });
-      onDone(packId);
+      const startMs = source.kind === "animated" ? clip[0] : 0;
+      const endMs = source.kind === "animated" ? clip[1] : undefined;
+      if (gif) {
+        await shelf.makeGif?.({ source: picture, startMs, endMs, overlay });
+      } else {
+        await shelf.make({
+          source: picture,
+          crop,
+          outline,
+          startMs,
+          endMs,
+          overlay,
+          emojis,
+          pack: target || undefined,
+          newPack: target ? undefined : packName || "My stickers",
+        });
+      }
+      onDone();
     } catch (e) {
       onError(String(e instanceof Error ? e.message : e));
       setMaking(null);
@@ -298,7 +318,7 @@ export function StickerEditor({ shelf, pack, picture, onDone, onClose, onError }
   }
 
   function onPointerDown(event: ReactPointerEvent) {
-    if (!source) return;
+    if (!source || gif) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     drag.current = { x: event.clientX, y: event.clientY, ox: offset.x, oy: offset.y };
   }
@@ -324,7 +344,7 @@ export function StickerEditor({ shelf, pack, picture, onDone, onClose, onError }
         ref={dialog}
         role="dialog"
         aria-modal="true"
-        aria-label="New sticker"
+        aria-label={`New ${what}`}
         tabIndex={-1}
         onKeyDown={onKeyDown}
         onDragOver={(e) => e.preventDefault()}
@@ -337,34 +357,52 @@ export function StickerEditor({ shelf, pack, picture, onDone, onClose, onError }
         className="flex h-[min(640px,100%)] w-[min(980px,100%)] overflow-hidden rounded-2xl bg-(--panel-bg) shadow-2xl outline-none"
       >
         <aside className="flex w-65 shrink-0 flex-col gap-5 overflow-y-auto border-r border-(--divider) p-5">
-          <h2 className="font-(family-name:--font-display) text-[19px] font-bold text-(--text-primary)">New sticker</h2>
+          <h2 className="font-(family-name:--font-display) text-[19px] font-bold text-(--text-primary)">New {what}</h2>
 
-          <div>
-            <h3 className="mb-1.5 text-[12px] text-(--text-secondary)">Fit</h3>
-            <div className="flex gap-1.5">
-              <button type="button" disabled={!source} className={tab(zoom === 1 && !offset.x && !offset.y)} onClick={() => fit("whole")}>
-                Whole
-              </button>
-              <button type="button" disabled={!source} className={tab(zoom > 1 && !offset.x && !offset.y)} onClick={() => fit("fill")}>
-                Fill
-              </button>
+          {shelf.makeGif ? (
+            <div className="-mt-2 flex gap-1.5" role="radiogroup" aria-label="What to make">
+              {(["sticker", "gif"] as const).map((m) => (
+                <button key={m} type="button" role="radio" aria-checked={mode === m} disabled={Boolean(making)} className={tab(mode === m)} onClick={() => setMode(m)}>
+                  {m === "gif" ? "GIF" : "Sticker"}
+                </button>
+              ))}
             </div>
-            <label className="mt-3 flex items-center gap-2 text-[12px] text-(--text-secondary)">
-              Zoom
-              <input type="range" min={0.5} max={4} step={0.01} value={zoom} disabled={!source} onChange={(e) => setZoom(Number(e.target.value))} className="flex-1 accent-(--accent)" />
-            </label>
-            <p className="mt-1 text-[12px] text-(--text-secondary)">Drag the picture to place it.</p>
-          </div>
+          ) : null}
 
-          <div>
-            <label className="flex items-center justify-between text-[14px] text-(--text-primary)">
-              White outline
-              <input type="checkbox" checked={outline > 0} onChange={(e) => setOutline(e.target.checked ? 10 : 0)} className="h-4 w-4 accent-(--accent)" />
-            </label>
-            {outline > 0 ? (
-              <input type="range" min={4} max={24} value={outline} onChange={(e) => setOutline(Number(e.target.value))} aria-label="Outline width" className="mt-2 w-full accent-(--accent)" />
-            ) : null}
-          </div>
+          {gif ? (
+            <p className="text-[13px] text-(--text-secondary)">
+              {source && !moves ? "A GIF is made from something that moves: choose a GIF or a short video." : "Kept whole, at its own shape, and sent as WhatsApp sends GIFs."}
+            </p>
+          ) : (
+            <>
+              <div>
+                <h3 className="mb-1.5 text-[12px] text-(--text-secondary)">Fit</h3>
+                <div className="flex gap-1.5">
+                  <button type="button" disabled={!source} className={tab(zoom === 1 && !offset.x && !offset.y)} onClick={() => fit("whole")}>
+                    Whole
+                  </button>
+                  <button type="button" disabled={!source} className={tab(zoom > 1 && !offset.x && !offset.y)} onClick={() => fit("fill")}>
+                    Fill
+                  </button>
+                </div>
+                <label className="mt-3 flex items-center gap-2 text-[12px] text-(--text-secondary)">
+                  Zoom
+                  <input type="range" min={0.5} max={4} step={0.01} value={zoom} disabled={!source} onChange={(e) => setZoom(Number(e.target.value))} className="flex-1 accent-(--accent)" />
+                </label>
+                <p className="mt-1 text-[12px] text-(--text-secondary)">Drag the picture to place it.</p>
+              </div>
+
+              <div>
+                <label className="flex items-center justify-between text-[14px] text-(--text-primary)">
+                  White outline
+                  <input type="checkbox" checked={outline > 0} onChange={(e) => setOutline(e.target.checked ? 10 : 0)} className="h-4 w-4 accent-(--accent)" />
+                </label>
+                {outline > 0 ? (
+                  <input type="range" min={4} max={24} value={outline} onChange={(e) => setOutline(Number(e.target.value))} aria-label="Outline width" className="mt-2 w-full accent-(--accent)" />
+                ) : null}
+              </div>
+            </>
+          )}
 
           <div>
             <h3 className="mb-1.5 text-[12px] text-(--text-secondary)">Caption</h3>
@@ -420,13 +458,13 @@ export function StickerEditor({ shelf, pack, picture, onDone, onClose, onError }
                   className="flex-1 accent-(--accent)"
                 />
               </label>
-              <p className="mt-1 text-[12px] text-(--text-secondary)">WhatsApp plays up to 10 s.</p>
+              <p className="mt-1 text-[12px] text-(--text-secondary)">{gif ? "Up to 10 s." : "WhatsApp plays up to 10 s."}</p>
             </div>
           ) : null}
 
           <div className="flex-1" />
           <button type="button" onClick={() => picker.current?.click()} className="h-8 self-start rounded-full bg-(--chip-bg) px-3 text-[13px] text-(--text-primary)">
-            {source ? "Another picture…" : "Choose a picture…"}
+            {gif ? (source ? "Another GIF or video…" : "Choose a GIF or video…") : source ? "Another picture…" : "Choose a picture…"}
           </button>
         </aside>
 
@@ -439,12 +477,12 @@ export function StickerEditor({ shelf, pack, picture, onDone, onClose, onError }
           <div className="flex min-h-0 flex-1 items-center justify-center">
             {source ? (
               <div
-                className="relative cursor-grab touch-none overflow-hidden rounded-xl active:cursor-grabbing"
-                style={{ width: VIEW, height: VIEW, background: "repeating-conic-gradient(rgba(127,127,127,.22) 0 25%, transparent 0 50%) 0 0/20px 20px" }}
+                className={["relative touch-none overflow-hidden rounded-xl", gif ? "" : "cursor-grab active:cursor-grabbing"].join(" ")}
+                style={{ width: frame.w, height: frame.h, background: "repeating-conic-gradient(rgba(127,127,127,.22) 0 25%, transparent 0 50%) 0 0/20px 20px" }}
                 onPointerDown={onPointerDown}
                 onPointerMove={onPointerMove}
                 onPointerUp={() => (drag.current = null)}
-                onWheel={(e) => setZoom((z) => Math.min(4, Math.max(0.5, z * (e.deltaY < 0 ? 1.06 : 1 / 1.06))))}
+                onWheel={(e) => !gif && setZoom((z) => Math.min(4, Math.max(0.5, z * (e.deltaY < 0 ? 1.06 : 1 / 1.06))))}
               >
                 {source.kind === "video" ? (
                   <video
@@ -456,7 +494,7 @@ export function StickerEditor({ shelf, pack, picture, onDone, onClose, onError }
                     playsInline
                     draggable={false}
                     className="pointer-events-none absolute max-w-none"
-                    style={{ left, top, width: shown.w, height: shown.h, filter: outlineFilter }}
+                    style={{ left, top, width: shown.w, height: shown.h, filter: gif ? undefined : outlineFilter }}
                   />
                 ) : (
                   <img
@@ -464,14 +502,14 @@ export function StickerEditor({ shelf, pack, picture, onDone, onClose, onError }
                     alt="The sticker being made"
                     draggable={false}
                     className="pointer-events-none absolute max-w-none"
-                    style={{ left, top, width: shown.w, height: shown.h, filter: outlineFilter }}
+                    style={{ left, top, width: shown.w, height: shown.h, filter: gif ? undefined : outlineFilter }}
                   />
                 )}
                 {caption.trim() ? (
                   <span
                     className="pointer-events-none absolute inset-x-0 text-center text-white"
                     style={{
-                      [captionTop ? "top" : "bottom"]: VIEW * 0.05,
+                      [captionTop ? "top" : "bottom"]: frame.h * 0.05,
                       fontFamily: CAPTION_FONT,
                       fontWeight: 900,
                       fontSize: previewCaption,
@@ -492,58 +530,64 @@ export function StickerEditor({ shelf, pack, picture, onDone, onClose, onError }
                 style={{ width: VIEW, height: VIEW }}
               >
                 <StickerIcon size={40} />
-                {loading ? "Opening…" : "Drop, paste or choose a picture, GIF or short video"}
+                {loading ? "Opening…" : gif ? "Drop, paste or choose a GIF or short video" : "Drop, paste or choose a picture, GIF or short video"}
               </button>
             )}
           </div>
 
           <div className="flex flex-wrap items-center gap-3 border-t border-(--divider) bg-(--panel-bg) px-5 py-3">
-            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1" role="group" aria-label="Emoji it goes with">
-              <span className="mr-1 text-[12px] text-(--text-secondary)">Emoji</span>
-              {QUICK_EMOJIS.map((emoji) => {
-                const on = emojis.includes(emoji);
-                return (
-                  <button
-                    key={emoji}
-                    type="button"
-                    aria-pressed={on}
-                    onClick={() => setEmojis((prev) => (on ? prev.filter((e) => e !== emoji) : [...prev, emoji].slice(-3)))}
-                    className={["flex h-8 w-8 items-center justify-center rounded-lg text-[18px]", on ? "bg-(--chip-active-bg)" : "hover:bg-(--hover-bg)"].join(" ")}
-                  >
-                    {emoji}
-                  </button>
-                );
-              })}
-            </div>
-            <select
-              value={target}
-              onChange={(e) => setTarget(e.target.value)}
-              aria-label="Pack"
-              className="h-9 rounded-lg bg-(--search-bg) px-2 text-[14px] text-(--text-primary) outline-none"
-            >
-              {packs.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-              <option value="">New pack…</option>
-            </select>
-            {target === "" ? (
-              <input
-                value={newPack}
-                onChange={(e) => setNewPack(e.target.value)}
-                placeholder="My stickers"
-                aria-label="New pack's name"
-                className="h-9 w-36 rounded-lg bg-(--search-bg) px-3 text-[14px] text-(--text-primary) outline-none placeholder:text-(--text-secondary)"
-              />
-            ) : null}
+            {gif ? (
+              <p className="min-w-0 flex-1 text-[13px] text-(--text-secondary)">Kept with your GIFs, to send from any chat.</p>
+            ) : (
+              <>
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1" role="group" aria-label="Emoji it goes with">
+                  <span className="mr-1 text-[12px] text-(--text-secondary)">Emoji</span>
+                  {QUICK_EMOJIS.map((emoji) => {
+                    const on = emojis.includes(emoji);
+                    return (
+                      <button
+                        key={emoji}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => setEmojis((prev) => (on ? prev.filter((e) => e !== emoji) : [...prev, emoji].slice(-3)))}
+                        className={["flex h-8 w-8 items-center justify-center rounded-lg text-[18px]", on ? "bg-(--chip-active-bg)" : "hover:bg-(--hover-bg)"].join(" ")}
+                      >
+                        {emoji}
+                      </button>
+                    );
+                  })}
+                </div>
+                <select
+                  value={target}
+                  onChange={(e) => setTarget(e.target.value)}
+                  aria-label="Pack"
+                  className="h-9 rounded-lg bg-(--search-bg) px-2 text-[14px] text-(--text-primary) outline-none"
+                >
+                  {packs.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                  <option value="">New pack…</option>
+                </select>
+                {target === "" ? (
+                  <input
+                    value={newPack}
+                    onChange={(e) => setNewPack(e.target.value)}
+                    placeholder="My stickers"
+                    aria-label="New pack's name"
+                    className="h-9 w-36 rounded-lg bg-(--search-bg) px-3 text-[14px] text-(--text-primary) outline-none placeholder:text-(--text-secondary)"
+                  />
+                ) : null}
+              </>
+            )}
             <button
               type="button"
               disabled={!canMake}
               onClick={() => void make()}
               className="h-9 rounded-full bg-(--accent) px-4 text-[14px] font-semibold text-(--on-accent) disabled:opacity-50"
             >
-              {making ?? "Add to pack"}
+              {making ?? (gif ? "Add to GIFs" : "Add to pack")}
             </button>
           </div>
         </section>

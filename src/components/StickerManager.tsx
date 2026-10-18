@@ -11,8 +11,8 @@ interface StickerManagerProps {
   /** Where the library's packs can also go (Signal), when that account is linked. */
   network?: StickerNetwork;
   onError: (message: string) => void;
-  /** Opens the sticker editor, to make one into `packId` (or a new pack). */
-  onMake?: (packId: string | null, picture?: Blob) => void;
+  /** Opens the editor, to make a sticker into `packId` (or a new pack), or a GIF. */
+  onMake?: (packId: string | null, picture?: Blob, gif?: boolean) => void;
 }
 
 /** What the right side shows: a section of the library, the GIFs, or the store. */
@@ -80,7 +80,7 @@ export function StickerManager({ shelf, network, onError, onMake }: StickerManag
           {onMake ? (
             <button
               type="button"
-              onClick={() => onMake(pack && !pack.store ? pack.id : null)}
+              onClick={() => onMake(pack && !pack.store ? pack.id : null, undefined, section === "gifs")}
               className="flex h-8 items-center gap-1 rounded-full bg-(--accent) px-3 text-[13px] font-semibold text-(--on-accent)"
             >
               <PlusIcon size={16} />
@@ -158,7 +158,7 @@ export function StickerManager({ shelf, network, onError, onMake }: StickerManag
             <AddStickers stickers={shelf} onPicture={(picture) => onMake?.(null, picture)} onError={report} onBack={() => setSection("favorites")} />
           </div>
         ) : section === "gifs" ? (
-          <GifSection shelf={shelf} gifs={library.gifs} />
+          <GifSection shelf={shelf} gifs={library.gifs} onMake={onMake && shelf.makeGif ? () => onMake(null, undefined, true) : undefined} />
         ) : (
           <>
             <PackHeader
@@ -501,12 +501,20 @@ function StickerGrid({ shelf, stickers, pack, packs, empty, onAdd, onError }: {
   );
 }
 
-function GifSection({ shelf, gifs }: { shelf: StickerShelf; gifs: { id: string; width: number; height: number }[] }) {
+function GifSection({ shelf, gifs, onMake }: { shelf: StickerShelf; gifs: { id: string; width: number; height: number }[]; onMake?: () => void }) {
   return (
     <>
-      <header className="shrink-0 border-b border-(--divider) px-6 pt-5 pb-4">
-        <h2 className="font-(family-name:--font-display) text-[20px] font-bold text-(--text-primary)">GIFs</h2>
-        <p className="text-[13px] text-(--text-secondary)">The {plural(gifs.length, "GIF")} you sent lately, kept here to send again from any chat.</p>
+      <header className="flex shrink-0 items-start gap-4 border-b border-(--divider) px-6 pt-5 pb-4">
+        <div className="min-w-0 flex-1">
+          <h2 className="font-(family-name:--font-display) text-[20px] font-bold text-(--text-primary)">GIFs</h2>
+          <p className="text-[13px] text-(--text-secondary)">The {plural(gifs.length, "GIF")} you sent or made lately, kept here to send again from any chat.</p>
+        </div>
+        {onMake ? (
+          <button type="button" onClick={onMake} className="flex h-8 shrink-0 items-center gap-1 rounded-full bg-(--chip-bg) px-3 text-[13px] text-(--text-primary) hover:bg-(--hover-bg)">
+            <PlusIcon size={16} />
+            Make a GIF
+          </button>
+        ) : null}
       </header>
       {gifs.length ? (
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
@@ -517,7 +525,7 @@ function GifSection({ shelf, gifs }: { shelf: StickerShelf; gifs: { id: string; 
           </div>
         </div>
       ) : (
-        <p className="m-auto max-w-80 text-center text-[14px] text-(--text-secondary)">GIFs you send show here.</p>
+        <p className="m-auto max-w-80 text-center text-[14px] text-(--text-secondary)">GIFs you send or make show here.</p>
       )}
     </>
   );

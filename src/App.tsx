@@ -233,7 +233,7 @@ function Shell() {
   // The app's sticker library, for its own screen; only the app has one.
   const stickerLibrary = useMemo(() => (isTauri ? libraryShelf() : undefined), []);
   /** The sticker editor, open on a pack (null for a new one) and maybe a picture. */
-  const [makingSticker, setMakingSticker] = useState<{ pack: string | null; picture?: Blob } | null>(null);
+  const [makingSticker, setMakingSticker] = useState<{ pack: string | null; picture?: Blob; gif?: boolean } | null>(null);
   const real = useMemo(
     () => ({
       whatsapp: new TauriBackend("whatsapp"),
@@ -1477,7 +1477,7 @@ function Shell() {
             shelf={stickerLibrary}
             network={signalLinked ? real.signal.stickers?.network : undefined}
             onError={setError}
-            onMake={(pack, picture) => setMakingSticker({ pack, picture })}
+            onMake={(pack, picture, gif) => setMakingSticker({ pack, picture, gif })}
           />
         </main>
       ) : (
@@ -1624,6 +1624,7 @@ function Shell() {
           shelf={stickerLibrary}
           pack={makingSticker.pack}
           picture={makingSticker.picture}
+          making={makingSticker.gif ? "gif" : "sticker"}
           onDone={() => setMakingSticker(null)}
           onClose={() => setMakingSticker(null)}
           onError={setError}

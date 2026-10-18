@@ -22,6 +22,7 @@
 | `src-tauri/src/wa/` | The WhatsApp connection and its events (`convert.rs` maps messages to the store, `stickers.rs` syncs the sticker library with the phone and WhatsApp's sticker store) |
 | `src-tauri/src/stickers/` | The app's one sticker library (packs, favorites, recent stickers and GIFs) and its files, kept encrypted in `stickers/` apart from any account |
 | `src-tauri/src/sticker_image.rs`, `klipy.rs` | Pictures made into stickers (and into the WebP or APNG Signal packs take); GIF search (the KLIPY key is built in from `KLIPY_API_KEY`) |
+| `src-tauri/src/gif_video.rs` | GIFs made in the editor: frames encoded as H.264 with OpenH264 (built in from source) and put in an mp4, index first |
 | `src-tauri/src/signal/` | Starts the Signal bridge and turns its events into the same chat state (`stickers.rs` makes the WhatsApp library's packs into Signal packs) |
 | `src-tauri/src/vault.rs`, `sqlcipher.rs` | The storage key and encryption |
 | `src-tauri/src/tray.rs`, `notify.rs` | Background mode, tray and notifications |

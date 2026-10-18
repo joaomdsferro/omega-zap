@@ -35,6 +35,7 @@ import type {
   ReactionCount,
   StarredMessage,
   StickerShelf,
+  MadeSticker,
   SharedStickerPack,
   VoiceRecorder,
   OutgoingMedia,
@@ -657,6 +658,26 @@ export class TauriBackend implements ChatBackend {
   }
 }
 
+/** The editor's picture or frames, then its caption, as one body, and the settings that go with it. */
+async function madeBody(made: Pick<MadeSticker, "source" | "crop" | "outline" | "startMs" | "endMs" | "overlay">) {
+  const blobs = "file" in made.source ? [made.source.file] : [...made.source.frames];
+  if (made.overlay) blobs.push(made.overlay);
+  const parts = await Promise.all(blobs.map(async (b) => new Uint8Array(await b.arrayBuffer())));
+  const body = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const part of parts) {
+    body.set(part, at);
+    at += part.length;
+  }
+  const settings = {
+    edit: { crop: made.crop, outline: made.outline, startMs: Math.round(made.startMs), endMs: made.endMs === undefined ? null : Math.round(made.endMs) },
+    parts: parts.map((p) => p.length),
+    frameMs: "frames" in made.source ? made.source.frameMs : null,
+    overlay: Boolean(made.overlay),
+  };
+  return { body, settings };
+}
+
 /**
  * The app's sticker library as a shelf of its own, for the sticker manager:
  * WhatsApp's commands, run by whichever account the host picks for it.
@@ -681,25 +702,13 @@ export function libraryShelf(): StickerShelf {
     info: () => invoke("stickers_info"),
     probe: async (picture) => invoke("stickers_probe", new Uint8Array(await picture.arrayBuffer())),
     make: async (sticker) => {
-      const blobs = "file" in sticker.source ? [sticker.source.file] : [...sticker.source.frames];
-      if (sticker.overlay) blobs.push(sticker.overlay);
-      const parts = await Promise.all(blobs.map(async (b) => new Uint8Array(await b.arrayBuffer())));
-      const body = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-      let at = 0;
-      for (const part of parts) {
-        body.set(part, at);
-        at += part.length;
-      }
-      const settings = {
-        pack: sticker.pack ?? null,
-        newPack: sticker.newPack ?? null,
-        emojis: sticker.emojis,
-        edit: { crop: sticker.crop, outline: sticker.outline, startMs: Math.round(sticker.startMs), endMs: sticker.endMs === undefined ? null : Math.round(sticker.endMs) },
-        parts: parts.map((p) => p.length),
-        frameMs: "frames" in sticker.source ? sticker.source.frameMs : null,
-        overlay: Boolean(sticker.overlay),
-      };
-      return library<string>("wa_make_sticker", body, { headers: { "x-make": base64Json(settings) } });
+      const { body, settings } = await madeBody(sticker);
+      const request = { ...settings, pack: sticker.pack ?? null, newPack: sticker.newPack ?? null, emojis: sticker.emojis };
+      return library<string>("wa_make_sticker", body, { headers: { "x-make": base64Json(request) } });
+    },
+    makeGif: async (gif) => {
+      const { body, settings } = await madeBody({ ...gif, crop: [0, 0, 1, 1], outline: 0 });
+      await library("wa_make_gif", body, { headers: { "x-make": base64Json(settings) } });
     },
     addNewSticker: async (packId, picture) => {
       await library("wa_add_new_sticker", new Uint8Array(await picture.arrayBuffer()), { headers: { "x-pack": packId } });

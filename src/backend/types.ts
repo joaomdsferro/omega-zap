@@ -525,6 +525,8 @@ export interface StickerShelf {
   probe?(picture: Blob): Promise<PictureProbe>;
   /** Makes a sticker as the editor set it up and keeps it in a pack; returns the pack's id. */
   make?(sticker: MadeSticker): Promise<string>;
+  /** Makes a GIF (an mp4, as WhatsApp sends them) from frames as the editor set it up, kept with the GIFs. */
+  makeGif?(gif: MadeGif): Promise<void>;
   /** Makes a sticker from a picture and puts it in one of our packs. */
   addNewSticker(packId: string, picture: Blob): Promise<void>;
   /** Puts a sticker found by search in one of our packs. */
@@ -566,6 +568,9 @@ export interface MadeSticker {
   pack?: string;
   newPack?: string;
 }
+
+/** A GIF from the editor: the part of an animation or a video kept, and the caption drawn over it at the frame's shape. */
+export type MadeGif = Pick<MadeSticker, "source" | "startMs" | "endMs" | "overlay">;
 
 export interface LibraryInfo {
   stickers: number;
