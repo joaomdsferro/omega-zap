@@ -13,7 +13,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use whatsapp_rust::download::{DownloadParams, MediaType};
+use whatsapp_rust::download::{DownloadParams, MediaDecryptionError, MediaType};
 use whatsapp_rust::features::{GroupDescription, GroupSubject, PreviousDescription, SyncActionMessageRange};
 use whatsapp_rust::wacore::stanza::groups::{GroupNotificationAction, GroupParticipantInfo};
 use whatsapp_rust::http::HttpRequest;
@@ -1132,7 +1132,10 @@ impl WaManager {
             Ok(sink) => sink,
             Err(e) => {
                 let _ = fs::remove_file(&partial);
-                let rejected = matches!(e.http_status(), Some(401 | 403 | 404 | 410));
+                // Every host served bytes that fail the file's MAC or hash:
+                // an expired address the CDN answers with something else.
+                let rejected = matches!(e.http_status(), Some(401 | 403 | 404 | 410))
+                    || e.sources().any(|cause| cause.is::<MediaDecryptionError>());
                 let message = format!("Could not download the file: {e}");
                 return Err(if rejected { CdnError::Rejected(message) } else { CdnError::Failed(message) });
             }
