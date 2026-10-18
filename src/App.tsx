@@ -33,6 +33,7 @@ import { NewChatPanel } from "./components/NewChatPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { isTauri } from "./lib/platform";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { StickerEditor } from "./components/StickerEditor";
 import { StickerManager } from "./components/StickerManager";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { chatNumber, shortcutFor } from "./lib/shortcuts";
@@ -231,29 +232,8 @@ function Shell() {
   const demo = useMemo(() => new MockBackend(), []);
   // The app's sticker library, for its own screen; only the app has one.
   const stickerLibrary = useMemo(() => (isTauri ? libraryShelf() : undefined), []);
-  /** Makes a sticker from a picture (asked for when not given) into a pack, or a new one. */
-  const makeSticker = useCallback(
-    async (packId: string | null, picture?: Blob) => {
-      if (!stickerLibrary) return;
-      const file =
-        picture ??
-        (await new Promise<File | undefined>((resolve) => {
-          const input = document.createElement("input");
-          input.type = "file";
-          input.accept = "image/png,image/jpeg,image/gif,image/webp";
-          input.onchange = () => resolve(input.files?.[0]);
-          input.click();
-        }));
-      if (!file) return;
-      try {
-        const id = packId ?? (await stickerLibrary.createPack("My stickers"));
-        await stickerLibrary.addNewSticker(id, file);
-      } catch (e) {
-        setError(String(e));
-      }
-    },
-    [stickerLibrary],
-  );
+  /** The sticker editor, open on a pack (null for a new one) and maybe a picture. */
+  const [makingSticker, setMakingSticker] = useState<{ pack: string | null; picture?: Blob } | null>(null);
   const real = useMemo(
     () => ({
       whatsapp: new TauriBackend("whatsapp"),
@@ -1497,7 +1477,7 @@ function Shell() {
             shelf={stickerLibrary}
             network={signalLinked ? real.signal.stickers?.network : undefined}
             onError={setError}
-            onMake={(packId, picture) => void makeSticker(packId, picture)}
+            onMake={(pack, picture) => setMakingSticker({ pack, picture })}
           />
         </main>
       ) : (
@@ -1639,6 +1619,16 @@ function Shell() {
         />
       ) : null}
       {shortcutsOpen ? <ShortcutsDialog onClose={() => setShortcutsOpen(false)} /> : null}
+      {makingSticker && stickerLibrary ? (
+        <StickerEditor
+          shelf={stickerLibrary}
+          pack={makingSticker.pack}
+          picture={makingSticker.picture}
+          onDone={() => setMakingSticker(null)}
+          onClose={() => setMakingSticker(null)}
+          onError={setError}
+        />
+      ) : null}
       {forwarding ? (
         <ForwardDialog
           messages={forwarding}

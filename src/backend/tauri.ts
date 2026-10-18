@@ -679,6 +679,28 @@ export function libraryShelf(): StickerShelf {
     removeFromPack: (packId, id) => library("wa_remove_from_pack", { packId, id }),
     moveInPack: (packId, id, to) => library("wa_move_in_pack", { packId, id, to }),
     info: () => invoke("stickers_info"),
+    probe: async (picture) => invoke("stickers_probe", new Uint8Array(await picture.arrayBuffer())),
+    make: async (sticker) => {
+      const blobs = "file" in sticker.source ? [sticker.source.file] : [...sticker.source.frames];
+      if (sticker.overlay) blobs.push(sticker.overlay);
+      const parts = await Promise.all(blobs.map(async (b) => new Uint8Array(await b.arrayBuffer())));
+      const body = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+      let at = 0;
+      for (const part of parts) {
+        body.set(part, at);
+        at += part.length;
+      }
+      const settings = {
+        pack: sticker.pack ?? null,
+        newPack: sticker.newPack ?? null,
+        emojis: sticker.emojis,
+        edit: { crop: sticker.crop, outline: sticker.outline, startMs: Math.round(sticker.startMs), endMs: sticker.endMs === undefined ? null : Math.round(sticker.endMs) },
+        parts: parts.map((p) => p.length),
+        frameMs: "frames" in sticker.source ? sticker.source.frameMs : null,
+        overlay: Boolean(sticker.overlay),
+      };
+      return library<string>("wa_make_sticker", body, { headers: { "x-make": base64Json(settings) } });
+    },
     addNewSticker: async (packId, picture) => {
       await library("wa_add_new_sticker", new Uint8Array(await picture.arrayBuffer()), { headers: { "x-pack": packId } });
     },

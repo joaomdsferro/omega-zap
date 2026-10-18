@@ -393,6 +393,26 @@ impl WaManager {
         })
     }
 
+    /// Makes a sticker as the editor set it up and puts it first in a pack
+    /// of ours, or in a new one named `new_pack`. Returns the pack's id.
+    pub async fn make_sticker(&self, made: crate::sticker_image::Sticker, pack_id: Option<&str>, new_pack: Option<&str>, emojis: Vec<String>) -> Result<String, String> {
+        let animated = made.animated;
+        let file = self.upload_sticker(made.bytes).await?.1;
+        let hash = file.sha256.clone();
+        let pack_id = match (pack_id, new_pack) {
+            (Some(id), _) => id.to_string(),
+            (None, Some(name)) => self.create_pack(name)?,
+            (None, None) => self.create_pack("My stickers")?,
+        };
+        self.with_stickers(|lib| {
+            let added = lib.add_to_pack(&pack_id, file);
+            lib.note_animated(&hash, animated);
+            lib.set_emojis(&hash, emojis);
+            let ok = added.is_ok();
+            (added.map(|_| pack_id.clone()), ok)
+        })
+    }
+
     /// Uploads a sticker's bytes and keeps a copy in the media folder, so it
     /// shows without downloading it back. Returns the upload and the file.
     async fn upload_sticker(&self, bytes: Vec<u8>) -> Result<(whatsapp_rust::upload::UploadResponse, CdnRef), String> {

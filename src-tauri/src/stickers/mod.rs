@@ -268,6 +268,12 @@ impl Library {
         was != favorite
     }
 
+    pub fn set_emojis(&mut self, hash: &str, emojis: Vec<String>) {
+        if let Some(s) = self.stickers.get_mut(hash) {
+            s.emojis = emojis;
+        }
+    }
+
     pub fn note_animated(&mut self, hash: &str, animated: bool) -> bool {
         match self.stickers.get_mut(hash) {
             Some(s) if s.animated != Some(animated) => {
@@ -665,6 +671,16 @@ pub struct InfoDto {
     pub gifs: usize,
     /// On disk, encrypted.
     pub bytes: u64,
+}
+
+/// What the editor needs to know of a picture, GIF or WebP (the body).
+#[tauri::command]
+pub async fn stickers_probe(request: tauri::ipc::Request<'_>) -> Result<crate::sticker_image::Probe, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("The picture is missing.".into());
+    };
+    let bytes = bytes.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::sticker_image::probe(&bytes)).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

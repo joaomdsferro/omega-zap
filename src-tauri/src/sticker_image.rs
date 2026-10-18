@@ -179,6 +179,205 @@ fn encode_animated(frames: &[(RgbaImage, u32)]) -> Result<Vec<u8>, String> {
     Ok(best)
 }
 
+/// What the sticker editor asks of a picture, GIF or video's frames.
+#[derive(serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Edit {
+    /// The part of the source that fills the square, as fractions of its
+    /// width and height: x, y, width, height. It may reach past the
+    /// source, which leaves transparency there.
+    pub crop: [f64; 4],
+    /// A white outline this many pixels wide (of the 512 square); 0 for none.
+    #[serde(default)]
+    pub outline: u32,
+    /// The part of an animation kept, in milliseconds.
+    #[serde(default)]
+    pub start_ms: u32,
+    #[serde(default)]
+    pub end_ms: Option<u32>,
+}
+
+/// What the editor needs to know of a file before showing it.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Probe {
+    pub width: u32,
+    pub height: u32,
+    pub animated: bool,
+    pub duration_ms: u32,
+}
+
+/// The longest side a source frame is kept at while editing: the square
+/// never needs more unless zoomed far in.
+const SOURCE_MAX: u32 = 1024;
+/// The widest outline the editor offers.
+const OUTLINE_MAX: u32 = 24;
+
+/// A picture's frames as they are, each with how long it shows (a still is
+/// one frame), at most [`SOURCE_MAX`] a side.
+pub fn source_frames(bytes: &[u8]) -> Result<Vec<(RgbaImage, u32)>, String> {
+    let format = image::guess_format(bytes).map_err(|_| "That file is not a picture.".to_string())?;
+    let animation = |frames: image::Frames<'_>| -> Result<Vec<(RgbaImage, u32)>, String> {
+        let mut out = Vec::new();
+        for frame in frames {
+            let frame = frame.map_err(unreadable)?;
+            let (num, den) = frame.delay().numer_denom_ms();
+            let ms = match num.checked_div(den).unwrap_or(0) {
+                0..=10 => 100,
+                ms => ms,
+            };
+            out.push((bounded(frame.into_buffer()), ms));
+        }
+        Ok(out)
+    };
+    let frames = match format {
+        ImageFormat::Gif => animation(GifDecoder::new(Cursor::new(bytes)).map_err(unreadable)?.into_frames())?,
+        ImageFormat::WebP => {
+            let decoder = WebPDecoder::new(Cursor::new(bytes)).map_err(unreadable)?;
+            if decoder.has_animation() { animation(decoder.into_frames())? } else { Vec::new() }
+        }
+        _ => Vec::new(),
+    };
+    if frames.len() > 1 {
+        return Ok(frames);
+    }
+    let still = image::load_from_memory_with_format(bytes, format).map_err(unreadable)?.to_rgba8();
+    Ok(vec![(bounded(still), 0)])
+}
+
+fn bounded(picture: RgbaImage) -> RgbaImage {
+    let (w, h) = picture.dimensions();
+    if w.max(h) <= SOURCE_MAX {
+        return picture;
+    }
+    let scale = f64::from(SOURCE_MAX) / f64::from(w.max(h));
+    imageops::resize(&picture, ((f64::from(w) * scale) as u32).max(1), ((f64::from(h) * scale) as u32).max(1), FilterType::Triangle)
+}
+
+pub fn probe(bytes: &[u8]) -> Result<Probe, String> {
+    let frames = source_frames(bytes)?;
+    let (width, height) = frames[0].0.dimensions();
+    Ok(Probe { width, height, animated: frames.len() > 1, duration_ms: frames.iter().map(|(_, ms)| ms).sum() })
+}
+
+/// Makes a sticker from frames as the editor set it up: the part of the
+/// animation kept, the crop, the outline, then `overlay` (a 512 square
+/// with the caption) over each frame.
+pub fn render(frames: Vec<(RgbaImage, u32)>, edit: &Edit, overlay: Option<&RgbaImage>) -> Result<Sticker, String> {
+    if frames.is_empty() {
+        return Err("There is nothing to make a sticker of.".into());
+    }
+    // The frames within the kept part, each shown for as long as it is in it.
+    let end = edit.end_ms.unwrap_or(u32::MAX).max(edit.start_ms + 1);
+    let mut kept: Vec<(RgbaImage, u32)> = Vec::new();
+    let mut at = 0u32;
+    for (frame, ms) in frames.iter() {
+        let (from, to) = (at.max(edit.start_ms), (at + ms).min(end));
+        at += ms;
+        if to <= from && !(kept.is_empty() && at >= end) {
+            continue;
+        }
+        let shown = to.saturating_sub(from);
+        if kept.iter().map(|(_, ms)| ms).sum::<u32>() >= MAX_ANIMATION_MS {
+            break;
+        }
+        match kept.last_mut() {
+            Some((_, last)) if *last < MIN_FRAME_MS => *last += shown,
+            _ => kept.push((frame.clone(), shown)),
+        }
+    }
+    if kept.is_empty() {
+        kept.push((frames[0].0.clone(), 0));
+    }
+    let filter = if kept.len() > 1 { FilterType::Triangle } else { FilterType::Lanczos3 };
+    let outline = edit.outline.min(OUTLINE_MAX);
+    let made: Vec<(RgbaImage, u32)> = kept
+        .into_iter()
+        .map(|(frame, ms)| {
+            let mut square = place(&frame, edit.crop, filter);
+            if outline > 0 {
+                square = outlined(&square, outline);
+            }
+            if let Some(overlay) = overlay {
+                imageops::overlay(&mut square, overlay, 0, 0);
+            }
+            (square, ms)
+        })
+        .collect();
+    if made.len() > 1 {
+        Ok(Sticker { bytes: encode_animated(&made)?, animated: true })
+    } else {
+        Ok(Sticker { bytes: encode_static(&made[0].0)?, animated: false })
+    }
+}
+
+/// The part `crop` of a frame, scaled to fill the square.
+fn place(frame: &RgbaImage, crop: [f64; 4], filter: FilterType) -> RgbaImage {
+    let (w, h) = (f64::from(frame.width()), f64::from(frame.height()));
+    let [cx, cy, cw, ch] = crop;
+    let (cx, cy, cw, ch) = (cx * w, cy * h, (cw * w).max(1.0), (ch * h).max(1.0));
+    let (sx, sy) = (f64::from(SIDE) / cw, f64::from(SIDE) / ch);
+    // Only the part of the source inside the crop is scaled.
+    let (x0, y0) = (cx.max(0.0), cy.max(0.0));
+    let (x1, y1) = ((cx + cw).min(w), (cy + ch).min(h));
+    let mut square = RgbaImage::new(SIDE, SIDE);
+    if x1 - x0 < 1.0 || y1 - y0 < 1.0 {
+        return square;
+    }
+    let part = imageops::crop_imm(frame, x0 as u32, y0 as u32, ((x1 - x0) as u32).max(1), ((y1 - y0) as u32).max(1)).to_image();
+    let (pw, ph) = (((x1 - x0) * sx).round().max(1.0) as u32, ((y1 - y0) * sy).round().max(1.0) as u32);
+    let scaled = imageops::resize(&part, pw.min(SIDE * 2), ph.min(SIDE * 2), filter);
+    imageops::overlay(&mut square, &scaled, ((x0 - cx) * sx).round() as i64, ((y0 - cy) * sy).round() as i64);
+    square
+}
+
+/// The picture on a white shape a little larger than it, as stickers are
+/// often cut out: its alpha grown by `r` pixels.
+fn outlined(picture: &RgbaImage, r: u32) -> RgbaImage {
+    let (w, h) = picture.dimensions();
+    let alpha: Vec<u8> = picture.pixels().map(|p| p[3]).collect();
+    let grown = dilate(&alpha, w as usize, h as usize, r as usize);
+    let mut out = RgbaImage::from_fn(w, h, |x, y| image::Rgba([255, 255, 255, grown[(y * w + x) as usize]]));
+    imageops::overlay(&mut out, picture, 0, 0);
+    out
+}
+
+/// The greatest value within a square of `r` around each point, rows then
+/// columns, each in one pass (van Herk's way).
+fn dilate(values: &[u8], w: usize, h: usize, r: usize) -> Vec<u8> {
+    let rows: Vec<u8> = (0..h).flat_map(|y| line_max(&values[y * w..(y + 1) * w], r)).collect();
+    let mut out = vec![0u8; w * h];
+    let mut column = vec![0u8; h];
+    for x in 0..w {
+        for y in 0..h {
+            column[y] = rows[y * w + x];
+        }
+        for (y, v) in line_max(&column, r).into_iter().enumerate() {
+            out[y * w + x] = v;
+        }
+    }
+    out
+}
+
+fn line_max(line: &[u8], r: usize) -> Vec<u8> {
+    let k = 2 * r + 1;
+    let n = line.len();
+    // Padded with r zeros each side, then up to whole blocks.
+    let len = (n + 2 * r).div_ceil(k) * k;
+    let mut padded = vec![0u8; len];
+    padded[r..r + n].copy_from_slice(line);
+    let (mut ahead, mut behind) = (padded.clone(), padded.clone());
+    for start in (0..len).step_by(k) {
+        for i in start + 1..start + k {
+            ahead[i] = ahead[i].max(ahead[i - 1]);
+        }
+        for i in (start..start + k - 1).rev() {
+            behind[i] = behind[i].max(behind[i + 1]);
+        }
+    }
+    (0..n).map(|i| behind[i].max(ahead[i + 2 * r])).collect()
+}
+
 /// What Signal takes for one sticker in a pack.
 const SIGNAL_MAX: usize = 300 * 1024;
 /// The sides an animated sticker shrinks through until it fits.
@@ -445,6 +644,31 @@ mod tests {
         after[10] = 1; // (2, 2)
         assert_eq!(changed_box(&before, &after, 4, 4), (1, 1, 2, 2));
         assert_eq!(changed_box(&before, &before, 4, 4), (0, 0, 1, 1));
+    }
+
+    #[test]
+    fn the_editor_crops_outlines_and_trims() {
+        // A 100×50 red bar on transparency, six frames of 100 ms.
+        let frame = RgbaImage::from_fn(100, 50, |x, _| if (20..80).contains(&x) { image::Rgba([255, 0, 0, 255]) } else { image::Rgba([0, 0, 0, 0]) });
+        let frames: Vec<_> = (0..6).map(|_| (frame.clone(), 100)).collect();
+        // The whole bar, letterboxed: the crop reaches above and below it.
+        let edit = Edit { crop: [0.0, -0.5, 1.0, 2.0], outline: 8, start_ms: 100, end_ms: Some(400) };
+        let made = render(frames, &edit, None).unwrap();
+        assert!(made.animated);
+        let back = image::load_from_memory(&made.bytes).unwrap().to_rgba8();
+        assert_eq!(back.dimensions(), (SIDE, SIDE));
+        // Above the bar is clear, its middle red, just past its end white.
+        assert!(back.get_pixel(256, 20)[3] < 30);
+        let mid = back.get_pixel(256, 256);
+        assert!(mid[0] > 200 && mid[1] < 80, "{mid:?}");
+        let edge = back.get_pixel(410 + 4, 256);
+        assert!(edge[0] > 200 && edge[1] > 200 && edge[3] > 200, "{edge:?}");
+    }
+
+    #[test]
+    fn a_line_grows_by_its_radius() {
+        assert_eq!(line_max(&[0, 0, 0, 9, 0, 0, 0], 2), [0, 9, 9, 9, 9, 9, 0]);
+        assert_eq!(line_max(&[5], 3), [5]);
     }
 
     #[test]

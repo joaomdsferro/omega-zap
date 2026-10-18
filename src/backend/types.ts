@@ -521,6 +521,10 @@ export interface StickerShelf {
   moveInPack?(packId: string, id: string, to: number): Promise<void>;
   /** What the library holds and takes on disk. */
   info?(): Promise<LibraryInfo>;
+  /** Whether a picture moves, and for how long (GIF and WebP; the UI knows its videos itself). */
+  probe?(picture: Blob): Promise<PictureProbe>;
+  /** Makes a sticker as the editor set it up and keeps it in a pack; returns the pack's id. */
+  make?(sticker: MadeSticker): Promise<string>;
   /** Makes a sticker from a picture and puts it in one of our packs. */
   addNewSticker(packId: string, picture: Blob): Promise<void>;
   /** Puts a sticker found by search in one of our packs. */
@@ -536,6 +540,31 @@ export interface StickerShelf {
   libraryOnly?: boolean;
   /** Where the library is another network's: its packs made into this one's (Signal). */
   network?: StickerNetwork;
+}
+
+export interface PictureProbe {
+  width: number;
+  height: number;
+  animated: boolean;
+  durationMs: number;
+}
+
+/** A sticker made in the editor, to render and keep. */
+export interface MadeSticker {
+  /** The picture, GIF or WebP as chosen, or a video's frames (PNG) with how long each shows. */
+  source: { file: Blob } | { frames: Blob[]; frameMs: number[] };
+  /** The part of the source that fills the square, in fractions of its width and height: x, y, width, height. */
+  crop: [number, number, number, number];
+  /** White outline width, in pixels of the 512 square; 0 for none. */
+  outline: number;
+  startMs: number;
+  endMs?: number;
+  /** A 512 square drawn over it: the caption. */
+  overlay?: Blob;
+  emojis: string[];
+  /** One of our packs, or a new pack's name. */
+  pack?: string;
+  newPack?: string;
 }
 
 export interface LibraryInfo {

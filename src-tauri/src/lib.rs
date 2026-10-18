@@ -430,6 +430,8 @@ pub fn run() {
             wa::commands::wa_remove_from_pack,
             wa::commands::wa_move_in_pack,
             stickers::stickers_info,
+            stickers::stickers_probe,
+            wa::commands::wa_make_sticker,
             wa::commands::wa_send_gif,
             wa::commands::wa_send_voice,
             voice::voice_start,

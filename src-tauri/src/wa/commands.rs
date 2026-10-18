@@ -513,3 +513,64 @@ pub async fn wa_add_shared_pack(mgr: Mgr<'_>, chat_id: String, message_id: Strin
 pub fn wa_move_in_pack(mgr: Mgr<'_>, pack_id: String, id: String, to: usize) -> Result<(), String> {
     mgr.move_in_pack(&pack_id, &id, to)
 }
+
+/// What the editor sends with `wa_make_sticker`, base64 JSON in `x-make`.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MakeRequest {
+    pack: Option<String>,
+    new_pack: Option<String>,
+    #[serde(default)]
+    emojis: Vec<String>,
+    edit: crate::sticker_image::Edit,
+    /// The body's parts, by length: the source file, or a video's frames
+    /// (PNG), then the caption layer when there is one.
+    parts: Vec<usize>,
+    /// How long each frame shows, when the parts are a video's frames.
+    #[serde(default)]
+    frame_ms: Option<Vec<u32>>,
+    #[serde(default)]
+    overlay: bool,
+}
+
+/// Makes a sticker in the editor's way and keeps it in a pack; returns the pack's id.
+#[tauri::command]
+pub async fn wa_make_sticker(mgr: Mgr<'_>, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    use base64::Engine as _;
+    let make: MakeRequest = header(&request, "x-make")
+        .and_then(|h| base64::engine::general_purpose::STANDARD.decode(h).ok())
+        .and_then(|json| serde_json::from_slice(&json).ok())
+        .ok_or("The sticker's settings are missing.")?;
+    let tauri::ipc::InvokeBody::Raw(body) = request.body() else {
+        return Err("The picture is missing.".into());
+    };
+    if body.len() > 64 * 1024 * 1024 || make.parts.iter().sum::<usize>() != body.len() {
+        return Err("The picture did not arrive whole.".into());
+    }
+    let mut parts = Vec::with_capacity(make.parts.len());
+    let mut at = 0;
+    for len in &make.parts {
+        parts.push(body[at..at + len].to_vec());
+        at += len;
+    }
+    let overlay = if make.overlay { parts.pop() } else { None };
+    let (edit, frame_ms) = (make.edit, make.frame_ms);
+    let made = tauri::async_runtime::spawn_blocking(move || -> Result<crate::sticker_image::Sticker, String> {
+        let frames = match frame_ms {
+            Some(ms) => parts
+                .iter()
+                .zip(ms)
+                .map(|(png, ms)| Ok((image::load_from_memory(png).map_err(|e| format!("A frame could not be read: {e}"))?.to_rgba8(), ms)))
+                .collect::<Result<Vec<_>, String>>()?,
+            None => crate::sticker_image::source_frames(parts.first().ok_or("The picture is missing.")?)?,
+        };
+        let overlay = match overlay {
+            Some(png) => Some(image::load_from_memory(&png).map_err(|e| format!("The caption could not be read: {e}"))?.to_rgba8()),
+            None => None,
+        };
+        crate::sticker_image::render(frames, &edit, overlay.as_ref())
+    })
+    .await
+    .map_err(|e| format!("The sticker could not be made: {e}"))??;
+    mgr.make_sticker(made, make.pack.as_deref(), make.new_pack.as_deref(), make.emojis).await
+}

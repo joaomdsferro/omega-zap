@@ -38,6 +38,8 @@ export type {
   SharedStickerPack,
   StickerNetwork,
   LibraryInfo,
+  MadeSticker,
+  PictureProbe,
   NetworkPack,
   Microphone,
   VoiceLevel,
