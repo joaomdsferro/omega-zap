@@ -428,6 +428,8 @@ pub fn run() {
             wa::commands::wa_rename_pack,
             wa::commands::wa_add_to_pack,
             wa::commands::wa_remove_from_pack,
+            wa::commands::wa_move_in_pack,
+            stickers::stickers_info,
             wa::commands::wa_send_gif,
             wa::commands::wa_send_voice,
             voice::voice_start,

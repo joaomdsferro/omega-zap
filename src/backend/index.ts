@@ -37,6 +37,7 @@ export type {
   StickerShelf,
   SharedStickerPack,
   StickerNetwork,
+  LibraryInfo,
   NetworkPack,
   Microphone,
   VoiceLevel,
@@ -50,4 +51,4 @@ export type {
   OutgoingMedia,
 } from "./types";
 export { MockBackend } from "./mock";
-export { TauriBackend } from "./tauri";
+export { TauriBackend, libraryShelf } from "./tauri";

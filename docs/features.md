@@ -140,7 +140,11 @@ Everything Omega Zap does today, network by network. For what is still missing, 
   stickers on KLIPY; they are made into WhatsApp stickers as they are sent.
 - **One sticker library for the app**: stickers, packs and GIFs are kept on this computer (encrypted),
   shared by both WhatsApp accounts and Signal, and stay when an account is unlinked. Each sticker is
-  downloaded once and kept, so packs outlive WhatsApp's servers.
+  downloaded once and kept, so packs outlive WhatsApp's servers. The rail's **Stickers** button opens
+  it on a screen of its own: Recent, Favorites and every pack on the left, the open one large on the
+  right with where it is on WhatsApp, Signal (add or update it there) and Telegram (later). Rename or
+  delete packs, star stickers, drag them to reorder a pack of yours or onto another pack, search by
+  pack name or emoji, add packs from WhatsApp's store, and see the GIFs you sent.
 - **Your WhatsApp stickers on Signal**: in a Signal chat the **Stickers** tab shows the same library
   (the personal WhatsApp account's, or the business one's when only it is linked). **Add to Signal**
   beside Favorites or a pack, or **Add all**, makes it a Signal pack (still WebP stickers stay as they

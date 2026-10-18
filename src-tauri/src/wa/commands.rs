@@ -508,3 +508,8 @@ pub async fn wa_add_klipy_sticker(mgr: Mgr<'_>, pack_id: String, pick: crate::kl
 pub async fn wa_add_shared_pack(mgr: Mgr<'_>, chat_id: String, message_id: String) -> Result<String, String> {
     mgr.add_shared_pack(&chat_id, &message_id).await
 }
+
+#[tauri::command]
+pub fn wa_move_in_pack(mgr: Mgr<'_>, pack_id: String, id: String, to: usize) -> Result<(), String> {
+    mgr.move_in_pack(&pack_id, &id, to)
+}

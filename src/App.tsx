@@ -4,6 +4,7 @@ import { formatLastSeen } from "./lib/format";
 import { useAccount, type Account } from "./accounts/useAccount";
 import {
   MockBackend,
+  libraryShelf,
   TauriBackend,
   type Chat,
   type ChatBackend,
@@ -30,7 +31,9 @@ import { ListEditor, chatKey } from "./components/ListEditor";
 import { NavRail, type RailAccount, type SidebarView } from "./components/NavRail";
 import { NewChatPanel } from "./components/NewChatPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
+import { isTauri } from "./lib/platform";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { StickerManager } from "./components/StickerManager";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { chatNumber, shortcutFor } from "./lib/shortcuts";
 import { Sidebar } from "./components/Sidebar";
@@ -226,6 +229,31 @@ function Shell() {
   );
 
   const demo = useMemo(() => new MockBackend(), []);
+  // The app's sticker library, for its own screen; only the app has one.
+  const stickerLibrary = useMemo(() => (isTauri ? libraryShelf() : undefined), []);
+  /** Makes a sticker from a picture (asked for when not given) into a pack, or a new one. */
+  const makeSticker = useCallback(
+    async (packId: string | null, picture?: Blob) => {
+      if (!stickerLibrary) return;
+      const file =
+        picture ??
+        (await new Promise<File | undefined>((resolve) => {
+          const input = document.createElement("input");
+          input.type = "file";
+          input.accept = "image/png,image/jpeg,image/gif,image/webp";
+          input.onchange = () => resolve(input.files?.[0]);
+          input.click();
+        }));
+      if (!file) return;
+      try {
+        const id = packId ?? (await stickerLibrary.createPack("My stickers"));
+        await stickerLibrary.addNewSticker(id, file);
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [stickerLibrary],
+  );
   const real = useMemo(
     () => ({
       whatsapp: new TauriBackend("whatsapp"),
@@ -1452,6 +1480,7 @@ function Shell() {
         onChange={setView}
         accounts={rail}
         active={unified ? null : active}
+        stickers={Boolean(stickerLibrary)}
         profiles={(unified ? ACCOUNT_IDS : [active])
           .map((id) => accounts[id])
           .filter((account) => account.status.linked && account.status.me !== null)}
@@ -1462,6 +1491,17 @@ function Shell() {
         }}
       />
 
+      {view === "stickers" && stickerLibrary ? (
+        <main className="flex h-full min-w-0 flex-1 contain-strict">
+          <StickerManager
+            shelf={stickerLibrary}
+            network={signalLinked ? real.signal.stickers?.network : undefined}
+            onError={setError}
+            onMake={(packId, picture) => void makeSticker(packId, picture)}
+          />
+        </main>
+      ) : (
+        <>
       <SidebarColumn max={maxSidebar} label={view === "chats" ? "Chat list" : "Settings"}>
         {view === "chats" && panel === "new-chat" ? (
           <NewChatPanel
@@ -1555,6 +1595,8 @@ function Shell() {
       </SidebarColumn>
 
       <main className="flex h-full min-w-0 flex-1 contain-strict">{main}</main>
+        </>
+      )}
 
       <ZoomToast zoom={zoomAnnounce} />
 

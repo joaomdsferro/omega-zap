@@ -2,10 +2,10 @@ import type { ReactNode } from "react";
 import { ACCOUNTS, type AccountId } from "../accounts/accounts";
 import type { Account } from "../accounts/useAccount";
 import { ACCOUNT_ICONS } from "./AccountBadge";
-import { ChatsIcon, SettingsIcon } from "./Icons";
+import { ChatsIcon, SettingsIcon, StickerIcon } from "./Icons";
 import { OwnAvatar } from "./OwnAvatar";
 
-export type SidebarView = "chats" | "settings";
+export type SidebarView = "chats" | "settings" | "stickers";
 export type Connection = "demo" | "online" | "offline" | "unlinked";
 
 export interface RailAccount {
@@ -23,6 +23,8 @@ interface NavRailProps {
   onSelectAccount: (account: AccountId) => void;
   /** The accounts whose own profile picture is shown, above Settings. */
   profiles: Account[];
+  /** Shows the sticker library's own button, under the accounts. */
+  stickers?: boolean;
 }
 
 const CONNECTION: Record<Connection, { color: string; label: string }> = {
@@ -69,7 +71,7 @@ function UnreadBadge({ count }: { count: number }) {
   );
 }
 
-export function NavRail({ view, onChange, accounts, active, onSelectAccount, profiles }: NavRailProps) {
+export function NavRail({ view, onChange, accounts, active, onSelectAccount, profiles, stickers }: NavRailProps) {
   const linked = accounts.filter((a) => a.connection !== "unlinked");
   // One dot for the shared list: red as soon as any linked account is down.
   const overall: Connection =
@@ -113,6 +115,14 @@ export function NavRail({ view, onChange, accounts, active, onSelectAccount, pro
             );
           })
         )}
+        {stickers ? (
+          <>
+            <span className="my-1 h-px w-8 bg-(--divider)" aria-hidden />
+            <RailButton active={view === "stickers"} label="Stickers and GIFs" onClick={() => onChange("stickers")}>
+              <StickerIcon size={22} />
+            </RailButton>
+          </>
+        ) : null}
       </div>
       <div className="flex flex-col items-center gap-3">
         {active === null ? (

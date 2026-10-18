@@ -706,6 +706,14 @@ impl WaManager {
         })
     }
 
+    pub fn move_in_pack(&self, pack_id: &str, id: &str, to: usize) -> Result<(), String> {
+        self.with_stickers(|lib| {
+            let result = lib.move_in_pack(pack_id, id, to);
+            let ok = result.is_ok();
+            (result, ok)
+        })
+    }
+
     pub fn remove_from_pack(&self, pack_id: &str, id: &str) -> Result<(), String> {
         self.with_stickers(|lib| {
             let result = lib.remove_from_pack(pack_id, id);

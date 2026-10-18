@@ -389,6 +389,8 @@ export class TauriBackend implements ChatBackend {
         renamePack: (id, name) => this.invoke("wa_rename_pack", { id, name }),
         addToPack: (packId, t) => this.invoke("wa_add_to_pack", { packId, ...target(t) }),
         removeFromPack: (packId, id) => this.invoke("wa_remove_from_pack", { packId, id }),
+        moveInPack: (packId, id, to) => this.invoke("wa_move_in_pack", { packId, id, to }),
+        info: () => invoke("stickers_info"),
         addNewSticker: async (packId, picture) => {
           await this.invoke("wa_add_new_sticker", new Uint8Array(await picture.arrayBuffer()), { headers: { "x-pack": packId } });
         },
@@ -656,18 +658,14 @@ export class TauriBackend implements ChatBackend {
 }
 
 /**
- * Signal's stickers: WhatsApp's library (the account the host picks for it),
- * whose favorites and packs are made into Signal packs to send from.
+ * The app's sticker library as a shelf of its own, for the sticker manager:
+ * WhatsApp's commands, run by whichever account the host picks for it.
  */
-function signalStickers(signal: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>): StickerShelf {
+export function libraryShelf(): StickerShelf {
   const library = <T,>(cmd: string, args?: InvokeArgs, options?: { headers: Record<string, string> }) =>
     invoke<T>(cmd, args, { headers: { "x-wa-account": "stickers", ...options?.headers } });
   const target = (t: { id: string } | { chatId: string; messageId: string }) =>
     "id" in t ? { id: t.id, chatId: null, messageId: null } : { id: null, chatId: t.chatId, messageId: t.messageId };
-  const on = (events: string[], listener: () => void) => {
-    const pending = events.map((event) => listen(event, () => listener()));
-    return () => pending.forEach((p) => void p.then((unlisten) => unlisten()));
-  };
   return {
     library: () => library("wa_sticker_library"),
     fileUrl: async (id) => fileUrl(await library<string>("wa_library_media", { id }), "media"),
@@ -679,10 +677,30 @@ function signalStickers(signal: <T>(cmd: string, args?: Record<string, unknown>)
     renamePack: (id, name) => library("wa_rename_pack", { id, name }),
     addToPack: (packId, t) => library("wa_add_to_pack", { packId, ...target(t) }),
     removeFromPack: (packId, id) => library("wa_remove_from_pack", { packId, id }),
+    moveInPack: (packId, id, to) => library("wa_move_in_pack", { packId, id, to }),
+    info: () => invoke("stickers_info"),
     addNewSticker: async (packId, picture) => {
       await library("wa_add_new_sticker", new Uint8Array(await picture.arrayBuffer()), { headers: { "x-pack": packId } });
     },
     addFoundSticker: (packId, pick) => library("wa_add_klipy_sticker", { packId, pick }),
+    subscribe: (listener) => {
+      const pending = listen("stickers://changed", () => listener());
+      return () => void pending.then((unlisten) => unlisten());
+    },
+  };
+}
+
+/**
+ * Signal's stickers: WhatsApp's library (the account the host picks for it),
+ * whose favorites and packs are made into Signal packs to send from.
+ */
+function signalStickers(signal: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>): StickerShelf {
+  const on = (events: string[], listener: () => void) => {
+    const pending = events.map((event) => listen(event, () => listener()));
+    return () => pending.forEach((p) => void p.then((unlisten) => unlisten()));
+  };
+  return {
+    ...libraryShelf(),
     subscribe: (listener) => on(["stickers://changed", "signal://stickers"], listener),
     libraryOnly: true,
     network: {

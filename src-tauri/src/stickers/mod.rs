@@ -405,6 +405,20 @@ impl Library {
         Ok(())
     }
 
+    /// Moves a sticker of one of our packs to place `to` in it.
+    pub fn move_in_pack(&mut self, id: &str, hash: &str, to: usize) -> Result<(), String> {
+        let pack = self.own_pack(id)?;
+        let from = pack.stickers.iter().position(|h| h == hash).ok_or("That sticker isn't in the pack.")?;
+        let sticker = pack.stickers.remove(from);
+        pack.stickers.insert(to.min(pack.stickers.len()), sticker);
+        Ok(())
+    }
+
+    /// How much the library holds.
+    pub fn counts(&self) -> (usize, usize, usize) {
+        (self.stickers.len(), self.packs.len(), self.gifs.len())
+    }
+
     /// A collection to take elsewhere: `favorites` or a pack, as its name,
     /// publisher, and stickers (hash and emojis) in the order shown.
     pub fn collection(&self, source: &str) -> Option<Collection> {
@@ -629,9 +643,33 @@ impl Central {
         Ok(name)
     }
 
+    /// What the library holds, and the bytes its kept files take.
+    pub fn info(&self) -> InfoDto {
+        let (stickers, packs, gifs) = crate::account::lock(&self.library).counts();
+        let bytes = std::fs::read_dir(self.files())
+            .map(|entries| entries.flatten().filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum())
+            .unwrap_or(0);
+        InfoDto { stickers, packs, gifs, bytes }
+    }
+
     pub fn read(&self, name: &str) -> Result<Vec<u8>, String> {
         crate::vault::get().read(&self.files().join(name)).map_err(|e| format!("The file could not be read: {e}"))
     }
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct InfoDto {
+    pub stickers: usize,
+    pub packs: usize,
+    pub gifs: usize,
+    /// On disk, encrypted.
+    pub bytes: u64,
+}
+
+#[tauri::command]
+pub fn stickers_info(central: tauri::State<'_, std::sync::Arc<Central>>) -> InfoDto {
+    central.info()
 }
 
 /// A library file's name: `st-` and its hash in hex, with its type's extension.
@@ -697,6 +735,20 @@ mod tests {
         lib.note_sent(file("x"), 3);
         assert!(lib.set_favorite("x", None, true, 4));
         assert_eq!(lib.to_dto().favorites[0].id, "x");
+    }
+
+    #[test]
+    fn own_packs_reorder() {
+        let mut lib = Library::default();
+        let id = lib.create_pack("Mine", 1);
+        for h in ["a", "b", "c"] {
+            lib.add_to_pack(&id, file(h)).unwrap();
+        }
+        // Each lands first: c b a.
+        lib.move_in_pack(&id, "a", 0).unwrap();
+        lib.move_in_pack(&id, "c", 9).unwrap();
+        let order: Vec<String> = lib.to_dto().packs[0].stickers.iter().map(|s| s.id.clone()).collect();
+        assert_eq!(order, ["a", "b", "c"]);
     }
 
     #[test]

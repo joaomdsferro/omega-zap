@@ -125,7 +125,7 @@ function Spinner() {
 /* ---------------------------------------------------------------- Stickers */
 
 /** The library, kept up to date with the phone; null while it loads or where there is none. */
-function useLibrary(stickers: StickerShelf | undefined, onError: (e: unknown) => void) {
+export function useLibrary(stickers: StickerShelf | undefined, onError: (e: unknown) => void) {
   const [library, setLibrary] = useState<StickerLibrary | null>(null);
   useEffect(() => {
     if (!stickers) return;
@@ -146,7 +146,7 @@ function useLibrary(stickers: StickerShelf | undefined, onError: (e: unknown) =>
 }
 
 /** A library file's address once it comes near; null while it loads, "failed" when it can't. */
-function useShelfUrl(stickers: StickerShelf, id: string, wanted: boolean, blob = false) {
+export function useShelfUrl(stickers: StickerShelf, id: string, wanted: boolean, blob = false) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     if (!wanted) return;
@@ -172,7 +172,7 @@ function useShelfUrl(stickers: StickerShelf, id: string, wanted: boolean, blob =
   return url;
 }
 
-function StickerImage({ stickers, id, className }: { stickers: StickerShelf; id: string; className: string }) {
+export function StickerImage({ stickers, id, className }: { stickers: StickerShelf; id: string; className: string }) {
   const box = useRef<HTMLSpanElement>(null);
   const url = useShelfUrl(stickers, id, useNear(box, "200px 0px"));
   return (
@@ -583,7 +583,7 @@ function StickerTab({ stickers, onSend, onError, pasteInto }: {
 }
 
 /** The library's packs as they stand on another network, by source; empty where there is none. */
-function useNetworkPacks(network: StickerNetwork | undefined, onError: (e: unknown) => void) {
+export function useNetworkPacks(network: StickerNetwork | undefined, onError: (e: unknown) => void) {
   const [packs, setPacks] = useState<Map<string, NetworkPack>>(() => new Map());
   useEffect(() => {
     if (!network) return;
@@ -707,7 +707,7 @@ function SmallButton({ label, onClick, children }: { label: string; onClick: () 
   );
 }
 
-function NameInput({ initial, label, onDone }: { initial: string; label: string; onDone: (name: string | null) => void }) {
+export function NameInput({ initial, label, onDone }: { initial: string; label: string; onDone: (name: string | null) => void }) {
   const [name, setName] = useState(initial);
   return (
     <input
@@ -731,7 +731,7 @@ function NameInput({ initial, label, onDone }: { initial: string; label: string;
 }
 
 /** Making stickers, packs, and WhatsApp's sticker store. */
-function AddStickers({ stickers, onPicture, onError, onBack }: {
+export function AddStickers({ stickers, onPicture, onError, onBack }: {
   stickers: StickerShelf;
   /** A picture chosen or pasted, to make into a sticker. */
   onPicture: (picture: Blob) => void;

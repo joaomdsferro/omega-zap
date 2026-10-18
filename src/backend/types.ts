@@ -517,6 +517,10 @@ export interface StickerShelf {
   renamePack(id: string, name: string): Promise<void>;
   addToPack(packId: string, target: StickerTarget): Promise<void>;
   removeFromPack(packId: string, id: string): Promise<void>;
+  /** Moves a sticker of one of our packs to place `to` in it. */
+  moveInPack?(packId: string, id: string, to: number): Promise<void>;
+  /** What the library holds and takes on disk. */
+  info?(): Promise<LibraryInfo>;
   /** Makes a sticker from a picture and puts it in one of our packs. */
   addNewSticker(packId: string, picture: Blob): Promise<void>;
   /** Puts a sticker found by search in one of our packs. */
@@ -532,6 +536,14 @@ export interface StickerShelf {
   libraryOnly?: boolean;
   /** Where the library is another network's: its packs made into this one's (Signal). */
   network?: StickerNetwork;
+}
+
+export interface LibraryInfo {
+  stickers: number;
+  packs: number;
+  gifs: number;
+  /** On disk, encrypted. */
+  bytes: number;
 }
 
 /** Favorites or a pack of the library, as it stands on another network. */
