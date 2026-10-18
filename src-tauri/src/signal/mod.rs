@@ -135,6 +135,10 @@ enum BridgeEvent {
         history: bool,
     },
     Typing { chat: String, is_group: bool, sender: String, active: bool },
+    /// The phone's blocked list: people by ACI, groups by chat id.
+    Blocked { ids: Vec<String>, groups: Vec<String> },
+    /// A message request answered on another device.
+    Responded { chat: String, action: String },
     ProfileKey { id: String },
     Alias { pni: String, aci: String },
     Avatar { id: u64, picture: Option<String>, error: Option<String> },
@@ -714,12 +718,13 @@ impl SignalManager {
     pub fn mark_read(self: &Arc<Self>, chat_id: &str) {
         // Opening a chat asks for this every time; one with nothing unread
         // changes nothing, and marking it dirty would redraw the chat list.
-        let read = {
+        let (read, quiet) = {
             let mut store = lock(&self.store);
             if !store.has_unread(chat_id) {
                 return;
             }
-            store.mark_read(chat_id)
+            let quiet = store.is_request(chat_id) || store.is_blocked(chat_id);
+            (store.mark_read(chat_id), quiet)
         };
         self.mark_dirty();
         let messages: Vec<serde_json::Value> = read
@@ -731,7 +736,7 @@ impl SignalManager {
         }
         let mgr = self.clone();
         tauri::async_runtime::spawn(async move {
-            let command = serde_json::json!({ "cmd": "read", "messages": messages, "ts": now_ms() });
+            let command = serde_json::json!({ "cmd": "read", "messages": messages, "ts": now_ms(), "quiet": quiet });
             if let Err(e) = mgr.request(command, SEND_TIMEOUT).await {
                 log::warn!("signal: read receipts not sent: {e}");
             }
@@ -1068,6 +1073,12 @@ impl SignalManager {
     /// state, so that counts as typing, as in Signal's apps.
     pub async fn set_typing(&self, chat_id: &str, state: &str) -> Result<(), String> {
         writable(chat_id)?;
+        {
+            let store = lock(&self.store);
+            if store.is_request(chat_id) || store.is_blocked(chat_id) {
+                return Ok(());
+            }
+        }
         let command = serde_json::json!({
             "cmd": "typing",
             "chat": chat_id,
@@ -1075,6 +1086,54 @@ impl SignalManager {
             "ts": now_ms(),
         });
         self.request(command, SEND_TIMEOUT).await.map(|_| ()).map_err(|e| format!("Typing not sent: {e}"))
+    }
+
+    /// Blocks or unblocks a person or a group, on the phone too.
+    pub async fn set_blocked(&self, id: &str, blocked: bool) -> Result<(), String> {
+        writable(id)?;
+        let command = serde_json::json!({ "cmd": "block", "target": id, "blocked": blocked, "ts": now_ms() });
+        self.request(command, SEND_TIMEOUT)
+            .await
+            .map_err(|e| format!("They were not {}: {e}", if blocked { "blocked" } else { "unblocked" }))?;
+        let mut store = lock(&self.store);
+        store.set_blocked(id, blocked);
+        if blocked {
+            store.set_request(id, false);
+        }
+        drop(store);
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// Answers a message request: `accept` lets them see we read their
+    /// messages and gives them our name and picture, `delete` removes the
+    /// chat, `block` blocks them. Our other devices are told each.
+    pub async fn respond_request(&self, chat_id: &str, action: &str) -> Result<(), String> {
+        if action == "block" {
+            self.set_blocked(chat_id, true).await?;
+        }
+        let command = serde_json::json!({ "cmd": "respond", "chat": chat_id, "action": action, "ts": now_ms() });
+        let sent = self.request(command, SEND_TIMEOUT).await;
+        match action {
+            "accept" => {
+                sent.map_err(|e| format!("The request was not accepted: {e}"))?;
+                lock(&self.store).set_request(chat_id, false);
+                self.mark_dirty();
+            }
+            // Gone here either way; the phone just isn't told.
+            "delete" => {
+                if let Err(e) = sent {
+                    log::warn!("signal: message request deletion not synced: {e}");
+                }
+                self.delete_chat(chat_id);
+            }
+            _ => {
+                if let Err(e) = sent {
+                    log::warn!("signal: message request answer not synced: {e}");
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Deletes a message here, or for everyone when `for_everyone` and it is
@@ -1384,6 +1443,8 @@ impl SignalManager {
                 let mut store = lock(&self.store);
                 if saved {
                     store.set_contact_name(&id, &name);
+                    // Someone in the phone's contacts is no stranger.
+                    store.set_request(&id, false);
                 } else {
                     store.set_push_name(&id, &name);
                 }
@@ -1450,9 +1511,29 @@ impl SignalManager {
                 };
                 // History arrives in bulk and was already seen on the phone.
                 let mut store = lock(&self.store);
+                // Signal drops what blocked people and groups send.
+                if !from_me
+                    && let Some(sender) = incoming.sender.as_deref()
+                    && (store.is_blocked(sender) || store.is_blocked(&incoming.chat))
+                {
+                    return;
+                }
+                // Someone we don't know writing first is a message request, as
+                // in Signal. Only for chats that start now: older ones were
+                // answered, or not, on the phone, which doesn't say.
+                let request = !from_me
+                    && !history
+                    && !is_group
+                    && incoming.chat != release_notes::CHAT_ID
+                    && !store.has_chat(&incoming.chat)
+                    && incoming.sender.as_deref().is_some_and(|s| !store.is_saved_contact(s));
+                let chat = incoming.chat.clone();
                 if let Some(dto) = store.ingest(incoming, !history)
                     && !history
                 {
+                    if request {
+                        store.set_request(&chat, true);
+                    }
                     // As on the phone, a new message brings an archived chat
                     // back, unless it is muted.
                     store.unarchive_unless_muted(&dto.chat_id);
@@ -1488,6 +1569,9 @@ impl SignalManager {
                 }
             }
             BridgeEvent::Reaction { chat, sender, target_author, target_ts, emoji, remove, history } => {
+                if lock(&self.store).is_blocked(&sender) {
+                    return;
+                }
                 let id = self.message_id(&target_author, target_ts);
                 self.recall(&chat, &id);
                 let (changed, notice) = {
@@ -1537,6 +1621,9 @@ impl SignalManager {
             }
             BridgeEvent::Typing { chat, is_group, sender, active } => {
                 let store = lock(&self.store);
+                if store.is_blocked(&sender) || store.is_blocked(&chat) {
+                    return;
+                }
                 let chat_id = store.canonical(&chat);
                 let typing = crate::wa::TypingDto {
                     who: is_group.then(|| store.display_name(&sender)),
@@ -1547,6 +1634,31 @@ impl SignalManager {
                 drop(store);
                 let _ = self.app.emit("signal://typing", typing);
             }
+            BridgeEvent::Blocked { ids, groups } => {
+                if lock(&self.store).set_blocklist(ids.into_iter().chain(groups)) {
+                    self.mark_dirty();
+                }
+            }
+            BridgeEvent::Responded { chat, action } => match action.as_str() {
+                "accept" => {
+                    if lock(&self.store).set_request(&chat, false) {
+                        self.mark_dirty();
+                    }
+                }
+                "block" => {
+                    let mut store = lock(&self.store);
+                    store.set_blocked(&chat, true);
+                    store.set_request(&chat, false);
+                    drop(store);
+                    self.mark_dirty();
+                }
+                "block_and_delete" => {
+                    lock(&self.store).set_blocked(&chat, true);
+                    self.delete_chat(&chat);
+                }
+                "delete" | "spam" => self.delete_chat(&chat),
+                _ => {}
+            },
             BridgeEvent::ProfileKey { id } => {
                 // Keys also arrive while the bridge replays history, before it
                 // is connected: the sync that "connected" starts picks those up.
@@ -1599,6 +1711,8 @@ mod tests {
             r#"{"event":"done","id":3,"error":null}"#,
             r#"{"event":"profile_key","id":"9d0652a3-dcc3-4d11-975f-74d61598733f"}"#,
             r#"{"event":"typing","chat":"g.00ff","isGroup":true,"sender":"9d0652a3-dcc3-4d11-975f-74d61598733f","active":true}"#,
+            r#"{"event":"blocked","ids":["9d0652a3-dcc3-4d11-975f-74d61598733f"],"groups":["g.00ff"]}"#,
+            r#"{"event":"responded","chat":"9d0652a3-dcc3-4d11-975f-74d61598733f","action":"accept"}"#,
             r#"{"event":"avatar","id":4,"picture":"profiles/AbC_-d","error":null}"#,
             r#"{"event":"avatar","id":5,"picture":null,"error":"Signal answered 429"}"#,
             r#"{"event":"reaction","chat":"x","sender":"y","targetAuthor":"x","targetTs":1,"emoji":"👍","remove":false,"history":true}"#,

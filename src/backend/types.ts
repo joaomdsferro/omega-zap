@@ -167,6 +167,8 @@ export interface Chat {
   lists?: string[];
   /** We blocked them. */
   blocked?: boolean;
+  /** A message request: someone we don't know wrote first (Signal). */
+  request?: boolean;
   /** A group we are no longer in. */
   left?: boolean;
   /** Its messages were cleared: none are coming from the phone. */
@@ -342,6 +344,9 @@ export type BackendEvent =
 
 /** What we are doing in the message box, for the other side to see. */
 export type TypingState = "typing" | "recording" | "paused";
+
+/** How a message request is answered. */
+export type RequestAnswer = "accept" | "delete" | "block";
 
 /** Who sees our last seen, online and read receipts, as WhatsApp names the values. */
 export interface Privacy {
@@ -591,6 +596,8 @@ export interface ChatBackend {
   changeMembers?(id: string, change: MemberChange, members: string[]): Promise<GroupInfo>;
   /** Blocks someone, or unblocks them. */
   setBlocked?(id: string, blocked: boolean): Promise<void>;
+  /** Answers a message request. */
+  respondRequest?(chatId: string, action: RequestAnswer): Promise<void>;
   /** Deletes a chat and its messages. */
   deleteChat?(chatId: string): Promise<void>;
   /** Empties a chat of its messages, keeping it in the list; starred ones stay when `keepStarred`. */

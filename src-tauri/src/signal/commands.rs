@@ -162,6 +162,16 @@ pub async fn signal_set_typing(mgr: Mgr<'_>, chat_id: String, state: String) -> 
 }
 
 #[tauri::command]
+pub async fn signal_set_blocked(mgr: Mgr<'_>, id: String, blocked: bool) -> Result<(), String> {
+    mgr.set_blocked(&id, blocked).await
+}
+
+#[tauri::command]
+pub async fn signal_respond_request(mgr: Mgr<'_>, chat_id: String, action: String) -> Result<(), String> {
+    mgr.respond_request(&chat_id, &action).await
+}
+
+#[tauri::command]
 pub fn signal_lists(mgr: Mgr<'_>) -> Vec<ListDto> {
     mgr.lists()
 }

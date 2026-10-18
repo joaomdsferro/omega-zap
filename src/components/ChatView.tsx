@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Chat, Contact, GroupInfo as Group, GroupMember, MemberChange, Mention, Message, OutgoingLink, OutgoingMedia, Person, PersonDetails, PinNote, Pins, StarredMessage, StickerLibrary, StickerShelf, TypingState, VoiceRecorder } from "../backend";
+import type { Chat, Contact, GroupInfo as Group, GroupMember, MemberChange, Mention, Message, OutgoingLink, OutgoingMedia, Person, PersonDetails, PinNote, Pins, StarredMessage, StickerLibrary, StickerShelf, TypingState, RequestAnswer, VoiceRecorder } from "../backend";
 import { ContactInfo } from "./ContactInfo";
 import { GroupInfo } from "./GroupInfo";
 import { listenForFileDrops } from "../lib/dropped";
@@ -82,6 +82,8 @@ interface ChatViewProps {
   onOpenChatId?: (id: string) => void;
   onStarred?: () => void;
   onMuteChat?: (chatId: string, muted: boolean) => Promise<void>;
+  /** Answers this chat's message request. */
+  onRespondRequest?: (action: RequestAnswer) => void;
   /** Asks to block or unblock someone; settles once it is done, failing when cancelled. */
   onBlock?: (person: { id: string; name: string }, blocked: boolean) => Promise<void>;
   /** Asks to empty this chat of its messages. */
@@ -119,7 +121,7 @@ interface ChatViewProps {
   pinsTick?: number;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onSendMedia, stickers, voice, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, onVote, onMessageNumber, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, completeHistory, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onBlock, onClearChat, onDeleteChat, onExitGroup, onEditGroup, onChangeMembers, loadContacts, groupTick, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onSendMedia, stickers, voice, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, onVote, onMessageNumber, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, completeHistory, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onRespondRequest, onBlock, onClearChat, onDeleteChat, onExitGroup, onEditGroup, onChangeMembers, loadContacts, groupTick, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
   const [personId, setPersonId] = useState<string | null>(null);
   const closePerson = useCallback(() => setPersonId(null), []);
   const loadShownPerson = useCallback(() => loadPerson!(personId!), [loadPerson, personId]);
@@ -988,6 +990,8 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
         <div className="flex min-h-15.5 shrink-0 items-center justify-center border-l border-(--divider) bg-(--panel-header-bg) px-4 py-3 text-center">
           <span className="text-[14px] text-(--text-secondary)">Only Signal can send messages here.</span>
         </div>
+      ) : chat.request && !chat.blocked && onRespondRequest ? (
+        <RequestBar name={chat.name} onAnswer={onRespondRequest} />
       ) : chat.blocked ? (
         <div className="flex min-h-15.5 shrink-0 items-center justify-center gap-1 border-l border-(--divider) bg-(--panel-header-bg) px-4 py-3 text-center">
           <span className="text-[14px] text-(--text-secondary)">You blocked this contact.</span>
@@ -1238,4 +1242,28 @@ function pinLines(notes: PinNote[], after: Message | undefined, upTo: Message | 
         </button>
       </div>
     ));
+}
+
+/** In place of the message box while someone we don't know waits to be let in, as in Signal. */
+function RequestBar({ name, onAnswer }: { name: string; onAnswer: (action: RequestAnswer) => void }) {
+  const button = "rounded-full px-5 py-1.5 text-[14px] font-medium";
+  return (
+    <div className="flex shrink-0 flex-col items-center gap-3 border-l border-(--divider) bg-(--panel-header-bg) px-4 py-3 text-center">
+      <p className="max-w-130 text-[14px] text-(--text-secondary)">
+        Let <span className="font-medium text-(--text-primary)">{name}</span> message you and share your name and photo with them? They won't know
+        you've seen their messages until you accept.
+      </p>
+      <div className="flex flex-wrap justify-center gap-2">
+        <button type="button" onClick={() => onAnswer("block")} className={`${button} bg-(--hover-bg) hover:brightness-95`}>
+          <span className="text-(--danger)">Block</span>
+        </button>
+        <button type="button" onClick={() => onAnswer("delete")} className={`${button} bg-(--hover-bg) hover:brightness-95`}>
+          <span className="text-(--danger)">Delete</span>
+        </button>
+        <button type="button" onClick={() => onAnswer("accept")} className={`${button} bg-(--accent) hover:brightness-110`}>
+          <span className="text-(--on-accent)">Accept</span>
+        </button>
+      </div>
+    </div>
+  );
 }

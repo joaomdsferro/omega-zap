@@ -48,7 +48,13 @@ Everything Omega Zap does today, network by network. For what is still missing, 
   phone both ways; on Signal they change this computer only. Cleared messages don't come back when
   history is fetched again.
 - **Block.** Block or unblock someone from the chat menu, the list's right-click menu or their contact
-  info. A blocked chat shows **Unblock** in place of the message box. WhatsApp only.
+  info. A blocked chat shows **Unblock** in place of the message box. On both networks the block
+  reaches your phone, and blocks made on the phone show here; nothing from a blocked person (or
+  blocked Signal group) arrives.
+- **Message requests** (Signal). Someone you don't know writing first lands as a request: the
+  message box makes way for **Accept**, **Delete** and **Block**, and they aren't told you read
+  their messages, nor see you typing, until you accept or reply. Answers given on the phone apply
+  here too. Chats from before this computer was linked are never requests.
 - **Exit group.** From the chat menu, the list or group info. Only the group's admins are told. The
   chat stays, read-only, until you delete it. WhatsApp only.
 - **Pinned messages.** Messages pinned in a WhatsApp chat show in a bar over the conversation, one at a

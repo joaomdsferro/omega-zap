@@ -17,6 +17,7 @@ import {
   type OutgoingLink,
   type OutgoingMedia,
   type PrivacyCategory,
+  type RequestAnswer,
   type StarredMessage,
 } from "./backend";
 import { ChatView } from "./components/ChatView";
@@ -918,6 +919,35 @@ function Shell() {
     });
   }
 
+  /** Answers a message request; blocking and deleting ask first. */
+  function respondRequest(chat: Chat, action: RequestAnswer) {
+    const backend = backendFor(chat.account);
+    if (!backend?.respondRequest) return;
+    const run = async () => {
+      await backend.respondRequest!(chat.id, action);
+      if (action === "delete") {
+        setChatsBy((prev) => {
+          const list = prev.get(backend);
+          return list ? new Map(prev).set(backend, list.filter((c) => c.id !== chat.id)) : prev;
+        });
+        if (selectedRef.current?.account === chat.account && selectedRef.current.id === chat.id) setSelected(null);
+      } else {
+        patchChat(backend, chat.id, { request: undefined, blocked: action === "block" || chat.blocked });
+      }
+    };
+    if (action === "accept") return void run().catch((e) => setError(String(e)));
+    void ask({
+      title: action === "block" ? `Block ${chat.name}?` : "Delete this chat?",
+      body:
+        action === "block"
+          ? "They will no longer be able to call you or send you messages. They won't be told."
+          : "The chat and its messages are deleted. They won't be told.",
+      confirmLabel: action === "block" ? "Block" : "Delete",
+      danger: true,
+      onConfirm: run,
+    }).catch(() => {});
+  }
+
   function askClearChat(chat: Pick<Chat, "account" | "id">) {
     const backend = backendFor(chat.account);
     if (!backend?.clearChat) return;
@@ -1374,6 +1404,7 @@ function Shell() {
             ?.setTyping?.(key.slice(at + 1), state)
             .catch(() => {});
         }}
+        onRespondRequest={selectedBackend?.respondRequest ? (action) => respondRequest(selectedChat, action) : undefined}
         onBlock={selectedBackend?.setBlocked ? (person, blocked) => askBlock(selectedChat.account, person, blocked) : undefined}
         onClearChat={selectedBackend?.clearChat ? () => askClearChat(selectedChat) : undefined}
         onDeleteChat={selectedBackend?.deleteChat ? (id, isGroup) => askDeleteChat({ account: selectedChat.account, id, isGroup }) : undefined}

@@ -38,6 +38,7 @@ import type {
   VoiceRecorder,
   OutgoingMedia,
   TypingState,
+  RequestAnswer,
 } from "./types";
 
 interface RawChat {
@@ -59,6 +60,7 @@ interface RawChat {
   blocked: boolean;
   left: boolean;
   cleared: boolean;
+  request?: boolean;
 }
 
 interface RawContact {
@@ -200,6 +202,7 @@ function toChat(raw: RawChat, account: AccountId): Chat {
     favorite: raw.favorite,
     lists: raw.lists,
     blocked: raw.blocked || undefined,
+    request: raw.request || undefined,
     left: raw.left || undefined,
     cleared: raw.cleared || undefined,
   };
@@ -304,6 +307,7 @@ export class TauriBackend implements ChatBackend {
   privacy?: () => Promise<Privacy>;
   setPrivacy?: (category: PrivacyCategory, value: string) => Promise<void>;
   setBlocked?: (id: string, blocked: boolean) => Promise<void>;
+  respondRequest?: (chatId: string, action: RequestAnswer) => Promise<void>;
   leaveGroup?: (id: string) => Promise<void>;
   editGroup?: (id: string, changes: { name?: string; description?: string }) => Promise<GroupInfo>;
   changeMembers?: (id: string, change: MemberChange, members: string[]) => Promise<GroupInfo>;
@@ -418,7 +422,11 @@ export class TauriBackend implements ChatBackend {
         toGroupInfo(await this.invoke<RawGroupInfo>("wa_change_members", { id, change, members }), account);
     } else {
       this.groupInfo = async (id) => toGroupInfo(await this.invoke<RawGroupInfo>(`${this.prefix}_group_info`, { id }), account);
-      if (account === "signal") this.setTyping = (chatId, state) => this.invoke("signal_set_typing", { chatId, state });
+      if (account === "signal") {
+        this.setTyping = (chatId, state) => this.invoke("signal_set_typing", { chatId, state });
+        this.setBlocked = (id, blocked) => this.invoke("signal_set_blocked", { id, blocked });
+        this.respondRequest = (chatId, action) => this.invoke("signal_respond_request", { chatId, action });
+      }
     }
   }
 

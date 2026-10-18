@@ -498,6 +498,9 @@ struct StoredChat {
     left: bool,
     /// Only the group's admins may change its name, description and picture.
     info_locked: bool,
+    /// A message request: someone we don't know wrote first, and we haven't
+    /// answered. Signal only.
+    request: bool,
 }
 
 /// A message pinned in a chat for everyone in it, or unpinned.
@@ -610,6 +613,8 @@ pub struct ChatSummary {
     pub left: bool,
     /// Its messages were cleared: none are coming from the phone.
     pub cleared: bool,
+    /// A message request, waiting to be accepted, deleted or blocked.
+    pub request: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -1712,6 +1717,10 @@ impl ChatStore {
         }
         let chat = self.chats.entry(chat_id.clone()).or_default();
         chat.is_group |= incoming.is_group;
+        // Writing in a chat answers its message request.
+        if message.from_me {
+            chat.request = false;
+        }
         if let Some(known) = chat.messages.iter_mut().find(|m| m.id == message.id) {
             if known.deleted.is_some() {
                 return None;
@@ -2221,6 +2230,36 @@ impl ChatStore {
         let changed = blocked != self.blocked;
         self.blocked = blocked;
         changed
+    }
+
+    pub fn is_blocked(&self, jid: &str) -> bool {
+        self.blocked.contains(&self.canonical(jid))
+    }
+
+    /// Whether a chat is here at all, messages or not.
+    pub fn has_chat(&self, jid: &str) -> bool {
+        self.chats.contains_key(&self.canonical(jid))
+    }
+
+    /// Whether the phone's contact list names them.
+    pub fn is_saved_contact(&self, jid: &str) -> bool {
+        self.contact_names.contains_key(&self.canonical(jid))
+    }
+
+    pub fn is_request(&self, jid: &str) -> bool {
+        self.chats.get(&self.canonical(jid)).is_some_and(|c| c.request)
+    }
+
+    /// Marks a chat as a message request, or answered. Returns whether it changed.
+    pub fn set_request(&mut self, jid: &str, request: bool) -> bool {
+        let jid = self.canonical(jid);
+        match self.chats.get_mut(&jid) {
+            Some(chat) if chat.request != request => {
+                chat.request = request;
+                true
+            }
+            _ => false,
+        }
     }
 
     pub fn set_blocked(&mut self, jid: &str, blocked: bool) {
@@ -2970,6 +3009,7 @@ impl ChatStore {
                     blocked: self.blocked.contains(id),
                     left: chat.left,
                     cleared: self.cleared.contains_key(id),
+                    request: chat.request,
                 }
             })
             .collect();
@@ -3608,6 +3648,21 @@ mod tests {
         assert_eq!(ids, ["a", "b", "c", "d", "d", "a"], "every pin and unpin keeps its line, in order");
         assert!(!notes[4].pinned && notes[5].pinned);
         assert!(!notes[1].by_me && notes[1].by.is_some() && notes[0].by_me);
+    }
+
+    #[test]
+    fn writing_answers_a_message_request() {
+        let mut store = ChatStore::default();
+        let id = "9d0652a3-dcc3-4d11-975f-74d61598733f";
+        assert!(!store.has_chat(id));
+        store.ingest(incoming(id, "a", 1, false), true);
+        assert!(store.set_request(id, true));
+        assert!(store.list_chats()[0].request);
+        store.ingest(incoming(id, "b", 2, true), false);
+        assert!(!store.is_request(id), "our reply answers it");
+        assert!(!store.set_request("unknown", true), "only chats that exist");
+        store.set_blocklist([id.to_string()]);
+        assert!(store.is_blocked(id));
     }
 
     #[test]

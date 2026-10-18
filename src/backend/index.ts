@@ -30,6 +30,7 @@ export type {
   ReplyQuote,
   StarredMessage,
   TypingState,
+  RequestAnswer,
   LibrarySticker,
   StickerPack,
   StickerLibrary,

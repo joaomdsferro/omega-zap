@@ -7,9 +7,11 @@ mod avatars;
 mod history;
 mod linking;
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -25,7 +27,7 @@ use presage::libsignal_service::push_service::PushService;
 use presage::libsignal_service::sender::AttachmentSpec;
 use presage::libsignal_service::utils::parse_service_id_with_fallback;
 use presage::libsignal_service::prelude::{ProfileKey, Uuid};
-use presage::libsignal_service::proto::sync_message::{Content as SyncContent, Sent};
+use presage::libsignal_service::proto::sync_message::{Blocked, Content as SyncContent, MessageRequestResponse, Sent, message_request_response, request};
 use presage::libsignal_service::proto::{ReceiptMessage, SyncMessage, TypingMessage, receipt_message, sync_message, typing_message};
 use presage::libsignal_service::prelude::{GroupMasterKey, GroupSecretParams};
 use presage::libsignal_service::protocol::ServiceId;
@@ -132,7 +134,15 @@ enum Command {
     },
     /// Marks messages read on our other devices and, when the account sends
     /// read receipts, tells the people who wrote them.
-    Read { id: u64, messages: Vec<ReadRef>, ts: u64 },
+    /// `quiet` tells only our other devices: a message request or a blocked
+    /// person isn't told we read them.
+    Read {
+        id: u64,
+        messages: Vec<ReadRef>,
+        ts: u64,
+        #[serde(default)]
+        quiet: bool,
+    },
     /// Downloads an attachment and writes it, decrypted, to `path`.
     Media { id: u64, media: Media, path: PathBuf },
     /// Writes the picture of a chat, or our own, to `path` unless it is still
@@ -140,6 +150,12 @@ enum Command {
     Avatar { id: u64, target: String, have: Option<String>, path: PathBuf },
     /// Tells the chat we started or stopped typing.
     Typing { id: u64, chat: String, active: bool, ts: u64 },
+    /// Blocks or unblocks a person (an ACI) or a group (a chat id), by
+    /// sending the phone the whole list as it now is.
+    Block { id: u64, target: String, blocked: bool, ts: u64 },
+    /// Answers a message request: `accept`, `delete`, `block` or
+    /// `block_and_delete`, as our other devices are told.
+    Respond { id: u64, chat: String, action: String, ts: u64 },
 }
 
 /// Where an attachment lives, the key that decrypts it, and what it is.
@@ -285,6 +301,12 @@ enum Event {
     /// Someone started or stopped typing. Signal's apps forget a start after
     /// 15 seconds unless it is said again.
     Typing { chat: String, is_group: bool, sender: String, active: bool },
+    /// Who the account blocks, as the phone listed them: people by ACI and
+    /// the groups this computer knows, by chat id.
+    Blocked { ids: Vec<String>, groups: Vec<String> },
+    /// A message request was answered on another device: `accept`, `delete`,
+    /// `block`, `block_and_delete` or `spam`.
+    Responded { chat: String, action: &'static str },
     /// Someone's profile key arrived, so their picture can be fetched now.
     ProfileKey { id: String },
     /// A phone-number identity (PNI) and an account (ACI) are the same
@@ -645,6 +667,9 @@ struct Receiver {
     groups: HashSet<[u8; 32]>,
     /// Group master keys by the group id typing messages name groups with.
     group_ids: HashMap<[u8; 32], [u8; 32]>,
+    /// The blocked list as the phone last sent it, kept whole (groups this
+    /// computer doesn't know included) so a change from here keeps the rest.
+    blocklist: Rc<RefCell<Option<Blocked>>>,
     /// Senders whose profile key was looked at in this session.
     keyed: HashSet<Uuid>,
     /// PNIs already reported as belonging to an account.
@@ -845,6 +870,33 @@ impl Receiver {
                 TYPING_INDICATORS.store(on, Ordering::Relaxed);
             }
         }
+        if let Some(SyncContent::Blocked(blocked)) = &sync.content {
+            let mut ids: Vec<String> = blocked.acis.clone();
+            ids.extend(blocked.acis_binary.iter().filter_map(|b| Some(Uuid::from_slice(b).ok()?.to_string())));
+            let groups = blocked
+                .group_ids
+                .iter()
+                .filter_map(|id| <[u8; 32]>::try_from(id.as_slice()).ok())
+                .filter_map(|id| self.group_ids.get(&id))
+                .map(|key| chat_id(&Thread::Group(*key)))
+                .collect();
+            *self.blocklist.borrow_mut() = Some(blocked.clone());
+            emit(Event::Blocked { ids, groups });
+        }
+        if let Some(SyncContent::MessageRequestResponse(response)) = &sync.content
+            && let Some(chat) = self.request_chat(response)
+        {
+            use message_request_response::Type;
+            let action = match response.r#type() {
+                Type::Accept => "accept",
+                Type::Delete => "delete",
+                Type::Block => "block",
+                Type::BlockAndDelete => "block_and_delete",
+                Type::Spam | Type::BlockAndSpam => "spam",
+                Type::Unknown => return,
+            };
+            emit(Event::Responded { chat, action });
+        }
         let messages: Vec<ReadRef> = sync
             .read
             .iter()
@@ -858,6 +910,15 @@ impl Receiver {
         if !messages.is_empty() {
             emit(Event::Read { messages });
         }
+    }
+
+    /// The chat a message request answer is about.
+    fn request_chat(&self, response: &MessageRequestResponse) -> Option<String> {
+        if let Some(id) = response.group_id.as_deref() {
+            let key = self.group_ids.get(&<[u8; 32]>::try_from(id).ok()?)?;
+            return Some(chat_id(&Thread::Group(*key)));
+        }
+        aci(&response.thread_aci, &response.thread_aci_binary)
     }
 
     /// Someone typing, in a chat with them or in a group, which typing
@@ -994,6 +1055,12 @@ impl Receiver {
                     if !caught_up {
                         caught_up = true;
                         self.announce_me().await;
+                        // presage asks for neither; the phone answers both.
+                        for kind in [request::Type::Blocked, request::Type::Configuration] {
+                            if let Err(e) = request_sync(&mut self.manager, self.me, kind).await {
+                                eprintln!("signal: could not ask the phone for {kind:?}: {e}");
+                            }
+                        }
                     }
                     if !asked_for_contacts {
                         asked_for_contacts = true;
@@ -1078,6 +1145,100 @@ async fn send_typing(manager: &mut Signal, chat: &str, active: bool, ts: u64) ->
         .map_err(|_| "Signal did not answer in time.".to_string())?
 }
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// Sends our other devices a sync message, within the send timeout.
+async fn sync_to_self(manager: &mut Signal, me: Uuid, sync: SyncMessage, ts: u64) -> Result<(), String> {
+    let sending = manager.send_message(ServiceId::Aci(me.into()), sync, ts);
+    tokio::time::timeout(SEND_TIMEOUT, sending)
+        .await
+        .map_err(|_| "Signal did not answer in time.".to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Asks the phone to send something it keeps, such as the blocked list.
+async fn request_sync(manager: &mut Signal, me: Uuid, kind: request::Type) -> Result<(), String> {
+    let sync = SyncMessage {
+        content: Some(SyncContent::Request(sync_message::Request { r#type: Some(kind as i32) })),
+        ..SyncMessage::with_padding(&mut rand::rng())
+    };
+    sync_to_self(manager, me, sync, now_ms()).await
+}
+
+/// The group id the protocol names a group chat with.
+fn group_id_of(chat: &str) -> Option<[u8; 32]> {
+    let key: [u8; 32] = hex::decode(chat.strip_prefix(GROUP_PREFIX)?).ok()?.try_into().ok()?;
+    Some(group_id(key))
+}
+
+/// Blocks or unblocks someone, or a group, by sending the phone the whole
+/// list. Without the phone's list first, sending ours would undo what it has.
+async fn block(
+    manager: &mut Signal,
+    me: Uuid,
+    blocklist: &RefCell<Option<Blocked>>,
+    target: &str,
+    blocked: bool,
+    ts: u64,
+) -> Result<(), String> {
+    let mut list = blocklist
+        .borrow()
+        .clone()
+        .ok_or("Signal hasn't sent your blocked list yet. Try again in a moment.")?;
+    if let Some(id) = group_id_of(target) {
+        list.group_ids.retain(|known| known.as_slice() != id);
+        if blocked {
+            list.group_ids.push(id.to_vec());
+        }
+    } else {
+        let uuid: Uuid = target.parse().map_err(|_| "Unknown chat.")?;
+        list.acis.retain(|known| known.parse::<Uuid>().ok() != Some(uuid));
+        list.acis_binary.retain(|known| Uuid::from_slice(known).ok() != Some(uuid));
+        if blocked {
+            list.acis.push(uuid.to_string());
+            list.acis_binary.push(uuid.as_bytes().to_vec());
+        }
+    }
+    let sync = SyncMessage { content: Some(SyncContent::Blocked(list.clone())), ..SyncMessage::with_padding(&mut rand::rng()) };
+    sync_to_self(manager, me, sync, ts).await?;
+    *blocklist.borrow_mut() = Some(list);
+    Ok(())
+}
+
+/// Answers a message request on our other devices. Accepting also gives the
+/// person our profile key, so they see our name and picture, as Signal does.
+async fn respond(manager: &mut Signal, me: Uuid, chat: &str, action: &str, ts: u64) -> Result<(), String> {
+    use message_request_response::Type;
+    let kind = match action {
+        "accept" => Type::Accept,
+        "delete" => Type::Delete,
+        "block" => Type::Block,
+        "block_and_delete" => Type::BlockAndDelete,
+        _ => return Err(format!("Unknown answer: {action}")),
+    };
+    let mut response = MessageRequestResponse { r#type: Some(kind as i32), ..Default::default() };
+    if let Some(id) = group_id_of(chat) {
+        response.group_id = Some(id.to_vec());
+    } else {
+        let uuid: Uuid = chat.parse().map_err(|_| "Unknown chat.")?;
+        response.thread_aci = Some(uuid.to_string());
+        response.thread_aci_binary = Some(uuid.as_bytes().to_vec());
+    }
+    let sync = SyncMessage { content: Some(SyncContent::MessageRequestResponse(response)), ..SyncMessage::with_padding(&mut rand::rng()) };
+    sync_to_self(manager, me, sync, ts).await?;
+    if kind == Type::Accept {
+        // presage puts our profile key in every data message it sends.
+        let message = DataMessage { flags: Some(FLAG_PROFILE_KEY_UPDATE), ..Default::default() };
+        send(manager, chat, message, ts + 1).await?;
+    }
+    Ok(())
+}
+
 /// A file the app asked to send.
 struct OutgoingFile {
     path: PathBuf,
@@ -1133,7 +1294,7 @@ async fn send_file(manager: &mut Signal, chat: &str, file: OutgoingFile, ts: u64
     Ok(media)
 }
 
-async fn mark_read(manager: &mut Signal, me: Uuid, messages: Vec<ReadRef>, ts: u64) -> Result<(), String> {
+async fn mark_read(manager: &mut Signal, me: Uuid, messages: Vec<ReadRef>, ts: u64, quiet: bool) -> Result<(), String> {
     let sending = async {
         let sync = SyncMessage {
             read: messages
@@ -1150,7 +1311,7 @@ async fn mark_read(manager: &mut Signal, me: Uuid, messages: Vec<ReadRef>, ts: u
             .send_message(ServiceId::Aci(me.into()), sync, ts)
             .await
             .map_err(|e| e.to_string())?;
-        if !READ_RECEIPTS.load(Ordering::Relaxed) {
+        if quiet || !READ_RECEIPTS.load(Ordering::Relaxed) {
             return Ok(());
         }
         let mut by_sender: HashMap<Uuid, Vec<u64>> = HashMap::new();
@@ -1225,6 +1386,7 @@ async fn session(
             }
         });
     }
+    let blocklist = Rc::new(RefCell::new(None));
     let receiver = Receiver {
         manager: manager.clone(),
         me,
@@ -1232,6 +1394,7 @@ async fn session(
         named: HashSet::new(),
         groups: HashSet::new(),
         group_ids: HashMap::new(),
+        blocklist: blocklist.clone(),
         keyed: HashSet::new(),
         aliased: HashSet::new(),
     };
@@ -1309,10 +1472,10 @@ async fn session(
                     emit(Event::Done { id, error });
                 }
                 // On its own task: a busy group has many people to tell.
-                Some(Command::Read { id, messages, ts }) => {
+                Some(Command::Read { id, messages, ts, quiet }) => {
                     let mut manager = sender.clone();
                     tokio::task::spawn_local(async move {
-                        let error = mark_read(&mut manager, me, messages, ts).await.err();
+                        let error = mark_read(&mut manager, me, messages, ts, quiet).await.err();
                         emit(Event::Done { id, error });
                     });
                 }
@@ -1346,6 +1509,14 @@ async fn session(
                         let error = send_typing(&mut manager, &chat, active, ts).await.err();
                         emit(Event::Done { id, error });
                     });
+                }
+                Some(Command::Block { id, target, blocked, ts }) => {
+                    let error = block(&mut sender, me, &blocklist, &target, blocked, ts).await.err();
+                    emit(Event::Done { id, error });
+                }
+                Some(Command::Respond { id, chat, action, ts }) => {
+                    let error = respond(&mut sender, me, &chat, &action, ts).await.err();
+                    emit(Event::Done { id, error });
                 }
                 Some(Command::Link) => {}
                 None => std::process::exit(0),
@@ -1399,7 +1570,9 @@ async fn run(path: String) {
                         | Command::Read { id, .. }
                         | Command::Media { id, .. }
                         | Command::Avatar { id, .. }
-                        | Command::Typing { id, .. },
+                        | Command::Typing { id, .. }
+                        | Command::Block { id, .. }
+                        | Command::Respond { id, .. },
                     ) => emit(Event::Done { id, error: Some("Signal is not linked.".into()) }),
                     None => return,
                 }
