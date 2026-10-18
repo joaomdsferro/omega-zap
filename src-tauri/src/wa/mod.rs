@@ -1754,7 +1754,11 @@ impl WaManager {
                 let mut store = lock(&mgr.store);
                 for group in groups {
                     let metadata = whatsapp_rust::features::GroupMetadata::from(group);
-                    store.set_group_participants(&metadata.id.to_non_ad_string(), &members_of(&metadata));
+                    let id = metadata.id.to_non_ad_string();
+                    if let Some(subject) = &metadata.subject {
+                        store.name_listed_group(&id, subject);
+                    }
+                    store.set_group_participants(&id, &members_of(&metadata));
                 }
                 store.set_participants_synced();
             }

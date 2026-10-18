@@ -1589,7 +1589,21 @@ impl ChatStore {
 
     /// Whether the members of every group are due a lookup: once a day.
     pub fn participants_due(&self) -> bool {
-        self.participants_synced_ms < now_ms() - 24 * 3_600_000
+        self.participants_synced_ms < now_ms() - 24 * 3_600_000 || self.chats.values().any(|c| c.is_group && c.name.is_none())
+    }
+
+    /// Names a group we already list from the server's list of our groups:
+    /// one joined without history, or before it was renamed, has no name otherwise.
+    pub fn name_listed_group(&mut self, group: &str, subject: &str) -> bool {
+        let subject = subject.trim();
+        let group = self.canonical(group);
+        match self.chats.get_mut(&group) {
+            Some(chat) if !subject.is_empty() && chat.name.as_deref() != Some(subject) => {
+                chat.name = Some(subject.to_string());
+                true
+            }
+            _ => false,
+        }
     }
 
     pub fn set_participants_synced(&mut self) {
@@ -3940,6 +3954,23 @@ mod tests {
         assert_eq!(changed.len(), 1);
         assert_eq!(changed[0].chat_id, "someone");
         assert_eq!(store.list_chats().iter().find(|c| c.id == "g.ab").unwrap().name, "Crew");
+    }
+
+    #[test]
+    fn listed_groups_get_their_name() {
+        let mut store = ChatStore::default();
+        let mut message = incoming("crew@g.us", "7", 7, true);
+        message.is_group = true;
+        store.ingest(message, false);
+        store.set_participants_synced();
+        assert!(store.participants_due());
+
+        assert!(store.name_listed_group("crew@g.us", " Crew "));
+        assert!(!store.name_listed_group("crew@g.us", "Crew"));
+        assert!(!store.name_listed_group("other@g.us", "Other"));
+        assert!(!store.participants_due());
+        assert_eq!(store.list_chats().iter().find(|c| c.id == "crew@g.us").unwrap().name, "Crew");
+        assert!(store.list_chats().iter().all(|c| c.id != "other@g.us"));
     }
 
     #[test]
