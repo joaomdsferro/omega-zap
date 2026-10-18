@@ -134,6 +134,10 @@ export interface Message {
   place?: Place;
   contacts?: ContactCard[];
   poll?: Poll;
+  /** Not a message: the chat's disappearing-message timer changed to this many seconds (0 is off). */
+  timer?: number;
+  /** Seconds it lasts once seen, in a chat with disappearing messages. */
+  expiresIn?: number;
 }
 
 export interface Chat {
@@ -169,6 +173,8 @@ export interface Chat {
   blocked?: boolean;
   /** A message request: someone we don't know wrote first (Signal). */
   request?: boolean;
+  /** The disappearing-message timer, in seconds, when it is on. */
+  disappearing?: number;
   /** A group we are no longer in. */
   left?: boolean;
   /** Its messages were cleared: none are coming from the phone. */
@@ -598,6 +604,8 @@ export interface ChatBackend {
   setBlocked?(id: string, blocked: boolean): Promise<void>;
   /** Answers a message request. */
   respondRequest?(chatId: string, action: RequestAnswer): Promise<void>;
+  /** Sets the disappearing-message timer, in seconds (0 turns it off); returns the line saying so. */
+  setDisappearing?(chatId: string, secs: number): Promise<Message>;
   /** Deletes a chat and its messages. */
   deleteChat?(chatId: string): Promise<void>;
   /** Empties a chat of its messages, keeping it in the list; starred ones stay when `keepStarred`. */

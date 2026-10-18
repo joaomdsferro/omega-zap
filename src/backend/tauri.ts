@@ -61,6 +61,7 @@ interface RawChat {
   left: boolean;
   cleared: boolean;
   request?: boolean;
+  expireSecs?: number;
 }
 
 interface RawContact {
@@ -108,6 +109,8 @@ interface RawMessage {
   place?: Place;
   contacts?: ContactCard[];
   poll?: Poll;
+  timer?: number;
+  expiresIn?: number;
 }
 
 interface RawGroupRef {
@@ -203,6 +206,7 @@ function toChat(raw: RawChat, account: AccountId): Chat {
     lists: raw.lists,
     blocked: raw.blocked || undefined,
     request: raw.request || undefined,
+    disappearing: raw.expireSecs || undefined,
     left: raw.left || undefined,
     cleared: raw.cleared || undefined,
   };
@@ -256,6 +260,8 @@ function toMessage(raw: RawMessage): Message {
     place: raw.place,
     contacts: raw.contacts,
     poll: raw.poll,
+    timer: raw.timer,
+    expiresIn: raw.expiresIn,
   };
 }
 
@@ -308,6 +314,7 @@ export class TauriBackend implements ChatBackend {
   setPrivacy?: (category: PrivacyCategory, value: string) => Promise<void>;
   setBlocked?: (id: string, blocked: boolean) => Promise<void>;
   respondRequest?: (chatId: string, action: RequestAnswer) => Promise<void>;
+  setDisappearing?: (chatId: string, secs: number) => Promise<Message>;
   leaveGroup?: (id: string) => Promise<void>;
   editGroup?: (id: string, changes: { name?: string; description?: string }) => Promise<GroupInfo>;
   changeMembers?: (id: string, change: MemberChange, members: string[]) => Promise<GroupInfo>;
@@ -426,6 +433,7 @@ export class TauriBackend implements ChatBackend {
         this.setTyping = (chatId, state) => this.invoke("signal_set_typing", { chatId, state });
         this.setBlocked = (id, blocked) => this.invoke("signal_set_blocked", { id, blocked });
         this.respondRequest = (chatId, action) => this.invoke("signal_respond_request", { chatId, action });
+        this.setDisappearing = async (chatId, secs) => toMessage(await this.invoke<RawMessage>("signal_set_disappearing", { chatId, secs }));
       }
     }
   }

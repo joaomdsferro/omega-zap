@@ -156,6 +156,11 @@ enum Command {
     /// Answers a message request: `accept`, `delete`, `block` or
     /// `block_and_delete`, as our other devices are told.
     Respond { id: u64, chat: String, action: String, ts: u64 },
+    /// Sets a chat's disappearing-message timer, in seconds (0 turns it off).
+    Timer { id: u64, chat: String, secs: u32, ts: u64 },
+    /// Deletes stored messages of a chat that disappeared, named by when
+    /// they were sent.
+    Forget { id: u64, chat: String, timestamps: Vec<u64> },
 }
 
 /// Where an attachment lives, the key that decrypts it, and what it is.
@@ -277,7 +282,16 @@ enum Event {
         history: bool,
         /// How far one of our own messages got, when the history says.
         delivery: Option<&'static str>,
+        /// Seconds it lasts once seen (sent, for ours), in a chat with
+        /// disappearing messages.
+        expires_in: Option<u32>,
+        /// When its countdown started, when the history says.
+        expire_start: Option<u64>,
     },
+    /// The disappearing-message timer of a chat, in seconds (0 is off).
+    /// `note` is a change someone made, shown in the conversation; without it,
+    /// it only says what the timer is.
+    Timer { chat: String, is_group: bool, sender: String, from_me: bool, ts: u64, secs: u32, note: bool, history: bool },
     /// Someone took back a message they sent.
     Delete { chat: String, sender: String, target_ts: u64, history: bool },
     /// Someone changed what a message they sent says. `target_ts` names the
@@ -803,6 +817,18 @@ impl Receiver {
                 history: self.history,
             });
         }
+        if message.flags.unwrap_or(0) & FLAG_EXPIRATION_TIMER_UPDATE != 0 {
+            return emit(Event::Timer {
+                chat: chat_id(thread),
+                is_group: matches!(thread, Thread::Group(_)),
+                sender: sender.raw_uuid().to_string(),
+                from_me,
+                ts,
+                secs: message.expire_timer.unwrap_or(0),
+                note: true,
+                history: self.history,
+            });
+        }
         let Some((kind, text, media_label)) = describe(message) else { return };
         let text = text.map(|text| with_mentions(&with_markers(&text, &looks(&message.body_ranges)), &mentions(&message.body_ranges)));
         if let Thread::Group(key) = thread {
@@ -830,6 +856,8 @@ impl Receiver {
             attachments: pointers(message).into_iter().filter_map(|(a, kind)| media_of(a, kind)).collect(),
             history: self.history,
             delivery: None,
+            expires_in: message.expire_timer.filter(|secs| *secs > 0),
+            expire_start: None,
         });
         // After the message, so the chat it belongs to exists by then.
         if !from_me && !self.history {
@@ -1168,6 +1196,14 @@ async fn request_sync(manager: &mut Signal, me: Uuid, kind: request::Type) -> Re
         ..SyncMessage::with_padding(&mut rand::rng())
     };
     sync_to_self(manager, me, sync, now_ms()).await
+}
+
+/// The thread presage files a chat's messages under.
+fn thread_named(chat: &str) -> Option<Thread> {
+    match chat.strip_prefix(GROUP_PREFIX) {
+        Some(key) => Some(Thread::Group(hex::decode(key).ok()?.try_into().ok()?)),
+        None => Some(Thread::Contact(ServiceId::Aci(chat.parse::<Uuid>().ok()?.into()))),
+    }
 }
 
 /// The group id the protocol names a group chat with.
@@ -1514,6 +1550,37 @@ async fn session(
                     let error = block(&mut sender, me, &blocklist, &target, blocked, ts).await.err();
                     emit(Event::Done { id, error });
                 }
+                Some(Command::Timer { id, chat, secs, ts }) => {
+                    let error = if chat.starts_with(GROUP_PREFIX) {
+                        // A group's timer is a change to the group itself.
+                        Some("A group's timer can only be changed from your phone for now.".into())
+                    } else {
+                        // presage counts the timer's version up when one is given.
+                        let message = DataMessage {
+                            flags: Some(FLAG_EXPIRATION_TIMER_UPDATE),
+                            expire_timer: Some(secs),
+                            ..Default::default()
+                        };
+                        send(&mut sender, &chat, message, ts).await.err()
+                    };
+                    emit(Event::Done { id, error });
+                }
+                Some(Command::Forget { id, chat, timestamps }) => {
+                    let error = match thread_named(&chat) {
+                        Some(thread) => {
+                            let mut store = sender.store().clone();
+                            let mut error = None;
+                            for ts in timestamps {
+                                if let Err(e) = store.delete_message(&thread, ts).await {
+                                    error = Some(e.to_string());
+                                }
+                            }
+                            error
+                        }
+                        None => Some("Unknown chat.".into()),
+                    };
+                    emit(Event::Done { id, error });
+                }
                 Some(Command::Respond { id, chat, action, ts }) => {
                     let error = respond(&mut sender, me, &chat, &action, ts).await.err();
                     emit(Event::Done { id, error });
@@ -1572,7 +1639,9 @@ async fn run(path: String) {
                         | Command::Avatar { id, .. }
                         | Command::Typing { id, .. }
                         | Command::Block { id, .. }
-                        | Command::Respond { id, .. },
+                        | Command::Respond { id, .. }
+                        | Command::Timer { id, .. }
+                        | Command::Forget { id, .. },
                     ) => emit(Event::Done { id, error: Some("Signal is not linked.".into()) }),
                     None => return,
                 }

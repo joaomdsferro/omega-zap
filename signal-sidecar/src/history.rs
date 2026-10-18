@@ -288,6 +288,45 @@ async fn read(
             }
             Some(proto::frame::Item::Chat(chat)) => {
                 chats.insert(chat.id, chat.recipientId);
+                let target = match recipients.get(&chat.recipientId) {
+                    Some(Recipient::Contact(id)) => Some((id.clone(), false)),
+                    Some(Recipient::Group(id)) => Some((id.clone(), true)),
+                    _ => None,
+                };
+                if let (Some((id, is_group)), Some(ms)) = (target, chat.expirationTimerMs.filter(|ms| *ms > 0)) {
+                    // What the timer is now: newer than any message here.
+                    emit(Event::Timer {
+                        chat: id,
+                        is_group,
+                        sender: me.clone(),
+                        from_me: true,
+                        ts: crate::now_ms(),
+                        secs: (ms / 1000) as u32,
+                        note: false,
+                        history: true,
+                    });
+                }
+            }
+            Some(proto::frame::Item::ChatItem(item)) if timer_change(&item).is_some() => {
+                let (chat, is_group) = match chats.get(&item.chatId).and_then(|id| recipients.get(id)) {
+                    Some(Recipient::Contact(id)) => (id.clone(), false),
+                    Some(Recipient::Group(id)) => (id.clone(), true),
+                    _ => continue,
+                };
+                let (sender, from_me) = match recipients.get(&item.authorId) {
+                    Some(Recipient::Contact(id)) => (id.clone(), false),
+                    _ => (me.clone(), true),
+                };
+                emit(Event::Timer {
+                    chat,
+                    is_group,
+                    sender,
+                    from_me,
+                    ts: item.dateSent,
+                    secs: timer_change(&item).unwrap_or(0),
+                    note: true,
+                    history: true,
+                });
             }
             Some(proto::frame::Item::ChatItem(item)) => {
                 use proto::chat_item::DirectionalDetails;
@@ -373,6 +412,8 @@ async fn read(
                         .unwrap_or_default(),
                     history: true,
                     delivery,
+                    expires_in: item.expiresInMs.filter(|ms| *ms > 0).map(|ms| (ms / 1000) as u32),
+                    expire_start: item.expireStartDate.filter(|ms| *ms > 0),
                 });
                 edit.into_iter().for_each(&mut *emit);
                 reactions.into_iter().for_each(&mut *emit);
@@ -381,6 +422,19 @@ async fn read(
         }
     }
     Ok(messages)
+}
+
+/// The new timer, in seconds, when the item is a change of a chat's
+/// disappearing-message timer.
+fn timer_change(item: &proto::ChatItem) -> Option<u32> {
+    use proto::chat_update_message::Update;
+    match &item.item {
+        Some(proto::chat_item::Item::UpdateMessage(update)) => match &update.update {
+            Some(Update::ExpirationTimerChange(change)) => Some((change.expiresInMs / 1000) as u32),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// How far an outgoing message got with whoever got it furthest, which is

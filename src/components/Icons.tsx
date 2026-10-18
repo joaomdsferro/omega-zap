@@ -306,6 +306,15 @@ export const BlockedIcon = (p: IconProps) => (
   </Svg>
 );
 
+/** Disappearing messages: a clock face whose rim fades into dots, as Signal draws it. */
+export const TimerIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3a9 9 0 1 1-8.5 6" />
+    <path d="M12 7.5V12l3 2" />
+    <path d="M4.6 6.4h.01M7 4.2h.01" strokeWidth={2.4} />
+  </Svg>
+);
+
 export const MuteIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M11 5 6 9H3v6h3l5 4zM22 9l-6 6M16 9l6 6" />

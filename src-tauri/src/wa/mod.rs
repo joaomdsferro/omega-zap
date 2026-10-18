@@ -791,6 +791,8 @@ impl WaManager {
             starred: false,
             deleted: None,
             edited_ms: None,
+            expires_in: None,
+            expires_at_ms: None,
         };
         let incoming = store::Incoming {
             chat: chat_id.to_string(),

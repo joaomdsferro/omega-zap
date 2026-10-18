@@ -463,6 +463,7 @@ pub fn run() {
             signal::commands::signal_react,
             signal::commands::signal_set_typing,
             signal::commands::signal_set_blocked,
+            signal::commands::signal_set_disappearing,
             signal::commands::signal_respond_request,
             signal::commands::signal_lists,
             signal::commands::signal_set_favorite,

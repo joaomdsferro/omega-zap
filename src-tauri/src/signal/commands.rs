@@ -162,6 +162,11 @@ pub async fn signal_set_typing(mgr: Mgr<'_>, chat_id: String, state: String) -> 
 }
 
 #[tauri::command]
+pub async fn signal_set_disappearing(mgr: Mgr<'_>, chat_id: String, secs: u32) -> Result<MessageDto, String> {
+    mgr.set_disappearing(&chat_id, secs).await
+}
+
+#[tauri::command]
 pub async fn signal_set_blocked(mgr: Mgr<'_>, id: String, blocked: bool) -> Result<(), String> {
     mgr.set_blocked(&id, blocked).await
 }

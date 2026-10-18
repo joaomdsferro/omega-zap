@@ -51,6 +51,11 @@ Everything Omega Zap does today, network by network. For what is still missing, 
   info. A blocked chat shows **Unblock** in place of the message box. On both networks the block
   reaches your phone, and blocks made on the phone show here; nothing from a blocked person (or
   blocked Signal group) arrives.
+- **Disappearing messages** (Signal). A chat with a timer shows it beside its name, and each message
+  that will go carries a small timer. Yours count down from sending, theirs from when you read them
+  (here or on the phone), and then they're wiped from this computer. **⋮ → Disappearing messages**
+  sets the timer of a chat with one person, from 30 seconds to 4 weeks, or turns it off; a group's
+  timer is still changed from the phone. Changes show as a line in the conversation.
 - **Message requests** (Signal). Someone you don't know writing first lands as a request: the
   message box makes way for **Accept**, **Delete** and **Block**, and they aren't told you read
   their messages, nor see you typing, until you accept or reply. Answers given on the phone apply
@@ -160,5 +165,5 @@ Everything Omega Zap does today, network by network. For what is still missing, 
 - Editing captions from this computer; Signal pinned messages
 - An app lock (a password for the stored data)
 - More than one account per network, WhatsApp Business, Telegram
-- Signal: starting a chat by phone number (saved contacts work), fetching history
+- Signal: changing a group's disappearing-message timer, starting a chat by phone number (saved contacts work), fetching history
   older than the link

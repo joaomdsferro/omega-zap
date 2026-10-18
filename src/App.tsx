@@ -1405,6 +1405,15 @@ function Shell() {
             .catch(() => {});
         }}
         onRespondRequest={selectedBackend?.respondRequest ? (action) => respondRequest(selectedChat, action) : undefined}
+        onSetDisappearing={
+          selectedBackend?.setDisappearing
+            ? async (secs) => {
+                const note = await selectedBackend.setDisappearing!(selectedChat.id, secs);
+                patchChat(selectedBackend, selectedChat.id, { disappearing: secs || undefined });
+                if (messagesOf.current === `${selectedChat.account}:${selectedChat.id}`) setMessages((prev) => upsert(prev, note));
+              }
+            : undefined
+        }
         onBlock={selectedBackend?.setBlocked ? (person, blocked) => askBlock(selectedChat.account, person, blocked) : undefined}
         onClearChat={selectedBackend?.clearChat ? () => askClearChat(selectedChat) : undefined}
         onDeleteChat={selectedBackend?.deleteChat ? (id, isGroup) => askDeleteChat({ account: selectedChat.account, id, isGroup }) : undefined}

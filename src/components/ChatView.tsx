@@ -3,7 +3,8 @@ import type { Chat, Contact, GroupInfo as Group, GroupMember, MemberChange, Ment
 import { ContactInfo } from "./ContactInfo";
 import { GroupInfo } from "./GroupInfo";
 import { listenForFileDrops } from "../lib/dropped";
-import { formatDayLabel, formatMessageTime, sameDay } from "../lib/format";
+import { formatDayLabel, formatMessageTime, sameDay, timerLabel, timerShort } from "../lib/format";
+import { DisappearingDialog } from "./DisappearingDialog";
 import { AccountBadge } from "./AccountBadge";
 import { Avatar } from "./Avatar";
 import { Composer } from "./Composer";
@@ -18,7 +19,7 @@ import { canForward } from "./ForwardDialog";
 import { MessageBubble } from "./MessageBubble";
 import { PinnedBar } from "./PinnedBar";
 import { PinDialog } from "./PinDialog";
-import { BlockedIcon, CheckIcon, ChevronDownIcon, ClearIcon, CloseIcon, ExitIcon, ForwardIcon, InfoIcon, MoreIcon, MuteIcon, PinIcon, SelectIcon, StarIcon, TrashIcon } from "./Icons";
+import { BlockedIcon, CheckIcon, ChevronDownIcon, ClearIcon, CloseIcon, ExitIcon, ForwardIcon, InfoIcon, MoreIcon, MuteIcon, PinIcon, SelectIcon, StarIcon, TimerIcon, TrashIcon } from "./Icons";
 import { PopupMenu, type MenuEntry } from "./PopupMenu";
 import { ChatSearch, searchChat } from "./ChatSearch";
 import { searchWords } from "../lib/search";
@@ -82,6 +83,8 @@ interface ChatViewProps {
   onOpenChatId?: (id: string) => void;
   onStarred?: () => void;
   onMuteChat?: (chatId: string, muted: boolean) => Promise<void>;
+  /** Sets the chat's disappearing-message timer, in seconds (0 turns it off). */
+  onSetDisappearing?: (secs: number) => Promise<void>;
   /** Answers this chat's message request. */
   onRespondRequest?: (action: RequestAnswer) => void;
   /** Asks to block or unblock someone; settles once it is done, failing when cancelled. */
@@ -121,7 +124,7 @@ interface ChatViewProps {
   pinsTick?: number;
 }
 
-export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onSendMedia, stickers, voice, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, onVote, onMessageNumber, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, completeHistory, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onRespondRequest, onBlock, onClearChat, onDeleteChat, onExitGroup, onEditGroup, onChangeMembers, loadContacts, groupTick, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
+export function ChatView({ chat, messages, subtitle, showAccount, canSend, cannotSendReason, onSend, canAttach, onSendMedia, stickers, voice, onError, loadMedia, openMedia, loadLinkThumbnail, onReact, onStar, onForward, onDelete, onEdit, onVote, onMessageNumber, focusMessageId, onFocused, onLoadOlder, historyTick, searchMessages, completeHistory, loadPerson, loadPersonDetails, onMessagePerson, onOpenChatId, onStarred, onMuteChat, onSetDisappearing, onRespondRequest, onBlock, onClearChat, onDeleteChat, onExitGroup, onEditGroup, onChangeMembers, loadContacts, groupTick, onTyping, loadPinned, onPin, pinsTick, loadGroup, loadGroupDetails }: ChatViewProps) {
   const [personId, setPersonId] = useState<string | null>(null);
   const closePerson = useCallback(() => setPersonId(null), []);
   const loadShownPerson = useCallback(() => loadPerson!(personId!), [loadPerson, personId]);
@@ -420,6 +423,8 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
   /** The chat's menu, open at a point. */
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => setMenuAt(null), [chatKey]);
+  /** The chat whose disappearing-message timer is being picked. */
+  const [timerFor, setTimerFor] = useState<string | null>(null);
   const blockPerson = onBlock && !chat.isGroup ? (blocked: boolean) => void onBlock({ id: chat.id, name: chat.name }, blocked).catch(() => {}) : undefined;
   const menuItems: MenuEntry[] = [
     ...((chat.isGroup ? loadGroup : loadPerson)
@@ -428,6 +433,10 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
     ...(startSelecting ? [{ label: "Select messages", icon: <SelectIcon size={18} />, onSelect: () => setPicked({ chatKey, ids: new Set() }) }] : []),
     ...(onMuteChat
       ? [{ label: chat.muted ? "Unmute notifications" : "Mute notifications", icon: <MuteIcon size={18} />, onSelect: () => void onMuteChat(chat.id, !chat.muted).catch(() => {}) }]
+      : []),
+    // A group's timer is a change to the group, which only the phone makes for now.
+    ...(onSetDisappearing && !chat.isGroup && !chat.request
+      ? [{ label: "Disappearing messages", icon: <TimerIcon size={18} />, onSelect: () => setTimerFor(chatKey) }]
       : []),
     "separator",
     ...(onClearChat ? [{ label: "Clear chat", icon: <ClearIcon size={18} />, onSelect: onClearChat }] : []),
@@ -694,7 +703,18 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
             group={chat.isGroup}
           />
           <div className="min-w-0">
-            <h2 className="truncate text-[16px] leading-5.25 text-(--text-primary)">{chat.name}</h2>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <h2 className="truncate text-[16px] leading-5.25 text-(--text-primary)">{chat.name}</h2>
+              {chat.disappearing ? (
+                <span
+                  className="flex shrink-0 items-center gap-0.5 text-[12px] text-(--text-secondary) tabular-nums"
+                  title={`Disappearing messages: ${timerLabel(chat.disappearing)}`}
+                >
+                  <TimerIcon size={14} />
+                  {timerShort(chat.disappearing)}
+                </span>
+              ) : null}
+            </div>
             <p className="truncate text-[13px] leading-5 text-(--text-secondary)">{subtitle}</p>
           </div>
         </button>
@@ -729,6 +749,9 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
         </span>
       </header>
       {menuAt ? <PopupMenu x={menuAt.x} y={menuAt.y} label={`Options for ${chat.name}`} items={menuItems} onClose={() => setMenuAt(null)} /> : null}
+      {timerFor === chatKey && onSetDisappearing ? (
+        <DisappearingDialog current={chat.disappearing} onSet={onSetDisappearing} onClose={() => setTimerFor(null)} />
+      ) : null}
       <PinnedBar pins={pins} chatKey={chatKey} onJump={setJumpTo} />
       {searchOpen ? <ChatSearch query={searchQuery} onQuery={setSearchQuery} found={searchFound} historyMissing={historyMissing} onJump={setJumpTo} onClose={() => setSearching(null)} /> : null}
 
@@ -765,6 +788,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                 <Fragment key={message.id}>
                   {pinLines(notes, day[index - 1], album ? album[album.length - 1] : message, setJumpTo)}
                   {(() => {
+                if (message.timer !== undefined) return <TimerLine message={message} name={chat.isGroup ? message.author : chat.name} />;
                 const prev = day[index - 1];
                 if (album) {
                   const tail = !prev || prev.fromMe !== message.fromMe || (!message.fromMe && prev.author !== message.author);
@@ -1264,6 +1288,28 @@ function RequestBar({ name, onAnswer }: { name: string; onAnswer: (action: Reque
           <span className="text-(--on-accent)">Accept</span>
         </button>
       </div>
+    </div>
+  );
+}
+
+/** A change of the chat's disappearing-message timer, in the conversation, as Signal shows it. */
+function TimerLine({ message, name }: { message: Message; name?: string }) {
+  const who = message.fromMe ? "You" : (name ?? "Someone");
+  const what = message.timer ? `set disappearing messages to ${timerLabel(message.timer)}` : "turned off disappearing messages";
+  return (
+    <div className="my-2 flex justify-center px-4">
+      <span
+        className="flex max-w-full items-center gap-1.5 rounded-[7.5px] bg-(--day-chip-bg) px-3 py-1.25 text-[12.5px] text-(--day-chip-text)"
+        style={{ boxShadow: "var(--bubble-shadow)" }}
+      >
+        <TimerIcon size={14} className="shrink-0" />
+        <span className="truncate">
+          {who} {what}
+        </span>
+        <time dateTime={message.sentAt} className="shrink-0 tabular-nums opacity-75">
+          {formatMessageTime(message.sentAt)}
+        </time>
+      </span>
     </div>
   );
 }

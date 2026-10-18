@@ -251,6 +251,10 @@ pub struct Content {
     /// "@all" in the text mentions everyone in the group (WhatsApp).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mentions_all: bool,
+    /// Not a message but a change of the chat's disappearing-message timer
+    /// to this many seconds (0 is off), shown as a line in the conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timer: Option<u32>,
 }
 
 /// What search looks at in a message: its text and, for a file, its name.
@@ -303,6 +307,16 @@ fn is_zero(n: &u32) -> bool {
 }
 
 impl Content {
+    /// What is left of a message that disappeared.
+    pub fn wiped() -> Self {
+        Self { text: None, ..Self::text("", None) }
+    }
+
+    /// A line saying the chat's disappearing-message timer changed.
+    pub fn timer(secs: u32) -> Self {
+        Self { text: None, timer: Some(secs), ..Self::text("", None) }
+    }
+
     pub fn text(text: impl Into<String>, reply_to: Option<ReplyRef>) -> Self {
         Self {
             kind: MsgKind::Text,
@@ -320,6 +334,7 @@ impl Content {
             contacts: Vec::new(),
             poll: None,
             mentions_all: false,
+            timer: None,
         }
     }
 
@@ -340,6 +355,7 @@ impl Content {
             contacts: Vec::new(),
             poll: None,
             mentions_all: false,
+            timer: None,
         }
     }
 
@@ -426,6 +442,13 @@ pub struct StoredMessage {
     /// When its sender last changed what it says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edited_ms: Option<i64>,
+    /// How long it lasts once seen, in seconds, in a chat with disappearing
+    /// messages; sent counts as seen for ours.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_in: Option<u32>,
+    /// When it disappears: set once its countdown starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at_ms: Option<i64>,
 }
 
 /// How a message was deleted. Kept rather than dropped, so a history replay
@@ -501,6 +524,10 @@ struct StoredChat {
     /// A message request: someone we don't know wrote first, and we haven't
     /// answered. Signal only.
     request: bool,
+    /// The disappearing-message timer, in seconds; 0 is off.
+    expire_secs: u32,
+    /// When the timer was last set, so an older message doesn't undo it.
+    expire_set_ms: i64,
 }
 
 /// A message pinned in a chat for everyone in it, or unpinned.
@@ -615,6 +642,8 @@ pub struct ChatSummary {
     pub cleared: bool,
     /// A message request, waiting to be accepted, deleted or blocked.
     pub request: bool,
+    /// The disappearing-message timer, in seconds; 0 is off.
+    pub expire_secs: u32,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -708,6 +737,23 @@ pub struct MessageDto {
     pub contacts: Vec<ContactCard>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub poll: Option<PollDto>,
+    /// A change of the chat's disappearing-message timer, in seconds (0 is off).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timer: Option<u32>,
+    /// Seconds it lasts once seen, in a chat with disappearing messages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_in: Option<u32>,
+    /// When it disappears, once its countdown started.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+}
+
+/// A disappearing-message timer in words, as Signal names its choices.
+pub fn timer_label(secs: u32) -> String {
+    const UNITS: [(u32, &str); 5] = [(604_800, "week"), (86_400, "day"), (3_600, "hour"), (60, "minute"), (1, "second")];
+    let (size, unit) = UNITS.iter().copied().find(|(size, _)| secs >= *size && secs % size == 0).unwrap_or((1, "second"));
+    let n = secs / size;
+    if n == 1 { format!("1 {unit}") } else { format!("{n} {unit}s") }
 }
 
 /// A poll as the UI shows it.
@@ -996,6 +1042,10 @@ pub struct ChatStore {
     /// People we blocked, as the server last listed them.
     #[serde(default)]
     blocked: HashSet<String>,
+    /// Messages in the history database that ran out before this time are
+    /// to be wiped there on the next save.
+    #[serde(skip)]
+    expire_db_before: Option<i64>,
     /// What WhatsApp's own chat is called here: the app it belongs to.
     #[serde(skip)]
     official_name: &'static str,
@@ -1039,6 +1089,7 @@ impl Default for ChatStore {
             cleared: HashMap::new(),
             purged: Vec::new(),
             blocked: HashSet::new(),
+            expire_db_before: None,
             official_name: "",
         }
     }
@@ -1721,6 +1772,20 @@ impl ChatStore {
         if message.from_me {
             chat.request = false;
         }
+        if let Some(secs) = message.content.timer.or(message.expires_in)
+            && message.ts_ms >= chat.expire_set_ms
+        {
+            chat.expire_secs = secs;
+            chat.expire_set_ms = message.ts_ms;
+        }
+        // Ours count down from sending; others' from being read, which a
+        // message that comes already read was.
+        if let Some(secs) = message.expires_in
+            && message.expires_at_ms.is_none()
+            && (message.from_me || !count_unread)
+        {
+            message.expires_at_ms = Some(message.ts_ms + secs as i64 * 1000);
+        }
         if let Some(known) = chat.messages.iter_mut().find(|m| m.id == message.id) {
             if known.deleted.is_some() {
                 return None;
@@ -2230,6 +2295,55 @@ impl ChatStore {
         let changed = blocked != self.blocked;
         self.blocked = blocked;
         changed
+    }
+
+    /// Sets a chat's disappearing-message timer as of `at_ms`, unless it was
+    /// set later already. Returns whether it changed.
+    pub fn set_timer(&mut self, jid: &str, is_group: bool, secs: u32, at_ms: i64) -> bool {
+        let jid = self.canonical(jid);
+        if is_hidden_chat(&jid) {
+            return false;
+        }
+        let chat = self.chats.entry(jid).or_default();
+        chat.is_group |= is_group;
+        if at_ms < chat.expire_set_ms {
+            return false;
+        }
+        chat.expire_set_ms = at_ms;
+        std::mem::replace(&mut chat.expire_secs, secs) != secs
+    }
+
+    /// Wipes the messages whose time ran out, keeping each as a hidden
+    /// tombstone so a replay doesn't bring it back. Returns the chats they
+    /// were in, with when each was sent; older ones in the history database
+    /// go on the next save.
+    pub fn sweep_expired(&mut self, now: i64) -> Vec<(String, Vec<i64>)> {
+        let mut touched = Vec::new();
+        for (id, chat) in &mut self.chats {
+            let mut gone = Vec::new();
+            for m in chat.messages.iter_mut().filter(|m| m.deleted.is_none() && m.expires_at_ms.is_some_and(|at| at <= now)) {
+                m.deleted = Some(Deletion::ForMe);
+                m.content = Content::wiped();
+                m.reactions.clear();
+                m.starred = false;
+                gone.push(m.ts_ms);
+            }
+            if !gone.is_empty() {
+                touched.push((id.clone(), gone));
+            }
+        }
+        self.expire_db_before = Some(now);
+        touched
+    }
+
+    /// When the next message here disappears, if one is counting down.
+    pub fn next_expiry(&self) -> Option<i64> {
+        self.chats
+            .values()
+            .flat_map(|c| &c.messages)
+            .filter(|m| m.deleted.is_none())
+            .filter_map(|m| m.expires_at_ms)
+            .min()
     }
 
     pub fn is_blocked(&self, jid: &str) -> bool {
@@ -2904,6 +3018,12 @@ impl ChatStore {
         };
         let unread = std::mem::take(&mut stored.unread) as usize;
         stored.marked_unread = false;
+        let now = now_ms();
+        for m in stored.messages.iter_mut().filter(|m| !m.from_me && m.expires_at_ms.is_none()) {
+            if let Some(secs) = m.expires_in {
+                m.expires_at_ms = Some(now + secs as i64 * 1000);
+            }
+        }
         stored
             .messages
             .iter()
@@ -2980,6 +3100,7 @@ impl ChatStore {
                 let last = chat.messages.iter().rev().find(|m| m.deleted != Some(Deletion::ForMe));
                 let preview = last.map(|m| self.with_mentions(&deleted_or_preview(m)).0).unwrap_or_default();
                 let last_message = match last {
+                    Some(m) if m.content.timer.is_some() => self.timer_line(m),
                     Some(m) if chat.is_group && !m.from_me => match &m.author_jid {
                         Some(author) => format!("{}: {preview}", self.display_name(author)),
                         None => preview,
@@ -3010,6 +3131,7 @@ impl ChatStore {
                     left: chat.left,
                     cleared: self.cleared.contains_key(id),
                     request: chat.request,
+                    expire_secs: chat.expire_secs,
                 }
             })
             .collect();
@@ -3119,6 +3241,18 @@ impl ChatStore {
             place: m.content.place.clone(),
             contacts: m.content.contacts.clone(),
             poll: m.content.poll.as_ref().map(|poll| self.poll_dto(poll)),
+            timer: m.content.timer,
+            expires_in: m.expires_in.filter(|_| m.deleted.is_none()),
+            expires_at: m.expires_at_ms.filter(|_| m.deleted.is_none()),
+        }
+    }
+
+    /// A timer change as the chat list says it.
+    fn timer_line(&self, m: &StoredMessage) -> String {
+        let who = if m.from_me { "You".to_string() } else { m.author_jid.as_deref().map_or("Someone".into(), |a| self.display_name(a)) };
+        match m.content.timer {
+            Some(0) | None => format!("{who} turned off disappearing messages"),
+            Some(secs) => format!("{who} set disappearing messages to {}", timer_label(secs)),
         }
     }
 
@@ -3221,6 +3355,8 @@ mod tests {
                 starred: false,
                 deleted: None,
                 edited_ms: None,
+                expires_in: None,
+                expires_at_ms: None,
             },
         }
     }
@@ -3648,6 +3784,36 @@ mod tests {
         assert_eq!(ids, ["a", "b", "c", "d", "d", "a"], "every pin and unpin keeps its line, in order");
         assert!(!notes[4].pinned && notes[5].pinned);
         assert!(!notes[1].by_me && notes[1].by.is_some() && notes[0].by_me);
+    }
+
+    #[test]
+    fn disappearing_messages_count_down_from_reading_and_go() {
+        let mut store = ChatStore::default();
+        let id = "9d0652a3-dcc3-4d11-975f-74d61598733f";
+        let mut note = incoming(id, "t", 10, true);
+        note.message.content = Content::timer(60);
+        store.ingest(note, false);
+        assert_eq!(store.list_chats()[0].expire_secs, 60);
+        assert!(!store.set_timer(id, false, 0, 5), "an older timer doesn't undo a newer one");
+
+        let mut theirs = incoming(id, "a", 20, false);
+        theirs.message.expires_in = Some(60);
+        store.ingest(theirs, true);
+        let mut ours = incoming(id, "b", 30, true);
+        ours.message.expires_in = Some(60);
+        store.ingest(ours, false);
+        assert_eq!(store.next_expiry(), Some(30 + 60_000), "ours count from sending, theirs wait to be read");
+
+        store.mark_read(id);
+        let read_at = store.find_message(id, "a").unwrap().1.expires_at_ms.unwrap();
+        assert!(read_at > now_ms());
+        assert_eq!(store.sweep_expired(read_at - 1), vec![(id.to_string(), vec![30])]);
+        let (_, gone) = store.find_message(id, "b").unwrap();
+        assert!(gone.deleted == Some(Deletion::ForMe) && gone.content.text.is_none(), "wiped, kept as a tombstone");
+        assert_eq!(store.messages(id).len(), 2, "the timer line and theirs, still counting");
+        assert_eq!(timer_label(604_800), "1 week");
+        assert_eq!(timer_label(8 * 3600), "8 hours");
+        assert_eq!(timer_label(30), "30 seconds");
     }
 
     #[test]

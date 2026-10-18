@@ -570,6 +570,8 @@ pub fn live(message: &wa::Message, info: &MessageInfo) -> Option<Incoming> {
             starred: false,
             deleted: None,
             edited_ms: None,
+            expires_in: None,
+            expires_at_ms: None,
         },
     })
 }
@@ -617,6 +619,8 @@ pub fn history(chat_id: &str, item: &wa::HistorySyncMsg) -> Option<Incoming> {
             starred: web.starred.unwrap_or(false),
             deleted: None,
             edited_ms: None,
+            expires_in: None,
+            expires_at_ms: None,
         },
     })
 }

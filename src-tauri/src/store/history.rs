@@ -69,11 +69,13 @@ pub struct Changes {
     added: Vec<Row>,
     /// Chats cleared or deleted: their messages up to a time go.
     purged: Vec<Purge>,
+    /// Wipe the stored messages whose time ran out before this.
+    expire_before: Option<i64>,
 }
 
 impl Changes {
     pub fn is_empty(&self) -> bool {
-        self.meta.is_none() && self.chats.is_empty() && self.gone.is_empty() && self.messages.is_empty() && self.added.is_empty() && self.purged.is_empty()
+        self.meta.is_none() && self.chats.is_empty() && self.gone.is_empty() && self.messages.is_empty() && self.added.is_empty() && self.purged.is_empty() && self.expire_before.is_none()
     }
 }
 
@@ -210,6 +212,7 @@ impl HistoryDb {
         let chats = std::mem::take(&mut store.chats);
         let evicted = std::mem::take(&mut store.evicted);
         out.purged = std::mem::take(&mut store.purged);
+        out.expire_before = store.expire_db_before.take();
         let meta = serde_json::to_string(&*store);
         store.chats = chats;
         match meta {
@@ -294,6 +297,17 @@ impl HistoryDb {
                         .bind::<Text, _>(&purge.chat)
                         .bind::<BigInt, _>(purge.before_ms)
                         .execute(conn)?;
+                }
+                if let Some(before) = changes.expire_before {
+                    // As `sweep_expired` leaves them: a hidden, empty tombstone.
+                    let wiped = serde_json::to_string(&super::Content::wiped()).unwrap_or_else(|_| "{}".into());
+                    diesel::sql_query(
+                        "UPDATE messages SET deleted = 1, folded = '', data = json_set(data, '$.deleted', 'forMe', '$.content', json(?), '$.reactions', json('[]')) \
+                         WHERE deleted = 0 AND json_extract(data, '$.expires_at_ms') <= ?",
+                    )
+                    .bind::<Text, _>(&wiped)
+                    .bind::<BigInt, _>(before)
+                    .execute(conn)?;
                 }
                 for (id, data) in &changes.chats {
                     diesel::sql_query("INSERT INTO chats (id, data) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET data = excluded.data")
@@ -549,6 +563,8 @@ mod tests {
                 starred: false,
                 deleted: None,
                 edited_ms: None,
+                expires_in: None,
+                expires_at_ms: None,
             },
         }
     }
@@ -590,6 +606,34 @@ mod tests {
         let found = db.search(&[vec!["message".into()], vec!["7".into()]], Some(chat), 1000).unwrap();
         assert!(found.iter().any(|(_, m)| m.id == "m0007"));
         assert!(found.iter().all(|(_, m)| m.content.text.as_deref().unwrap().contains('7')));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn disappeared_messages_on_disk_are_wiped_but_kept() {
+        let dir = temp_dir("expire");
+        let chat = "351900000000@s.whatsapp.net";
+        let mut store = ChatStore::default();
+        let mut db = open(&dir);
+        for n in 0..=MAX_MESSAGES_PER_CHAT {
+            let mut message = incoming(chat, &format!("m{n:04}"), 10 + n as i64, "secret");
+            message.message.expires_in = Some(1);
+            message.message.expires_at_ms = Some(1_000 + n as i64);
+            store.ingest(message, false);
+        }
+        let changes = db.changes(&mut store);
+        db.write(changes).unwrap();
+        // m0000 is on disk only; m0001 is due too but still in memory.
+        store.sweep_expired(1_001);
+        let changes = db.changes(&mut store);
+        db.write(changes).unwrap();
+        for id in ["m0000", "m0001"] {
+            let gone = db.message(chat, id).unwrap().expect("kept as a tombstone");
+            assert_eq!(gone.deleted, Some(super::super::Deletion::ForMe), "{id}");
+            assert!(gone.content.text.is_none(), "{id}");
+        }
+        assert_eq!(db.message(chat, "m0002").unwrap().unwrap().content.text.as_deref(), Some("secret"));
+        assert!(db.search(&[vec!["secret".into()]], Some(chat), 1000).unwrap().iter().all(|(_, m)| m.id != "m0000"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

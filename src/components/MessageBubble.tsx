@@ -3,7 +3,7 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { isWhatsApp, type AccountId } from "../accounts/accounts";
 import type { DeliveryStatus, LinkPreview, Message, ReplyQuote } from "../backend";
 import { authorColor } from "../lib/avatar";
-import { formatMessageTime, formatVoiceDuration } from "../lib/format";
+import { formatMessageTime, formatVoiceDuration, timerLabel } from "../lib/format";
 import { URL_PATTERN, fetchLinkPreview, isPlayable, readyLinkPreview } from "../lib/links";
 import { useSettings } from "../settings/settings";
 import { Attachments } from "./Attachments";
@@ -29,6 +29,7 @@ import {
   SelectIcon,
   SmileIcon,
   StarIcon,
+  TimerIcon,
   Ticks,
   TrashIcon,
 } from "./Icons";
@@ -112,6 +113,7 @@ function Meta({ message, account, pinned }: { message: Message; account: Account
       {pinned ? <PinIcon size={11} aria-label="Pinned" aria-hidden={false} role="img" /> : null}
       {message.edited ? <span>Edited</span> : null}
       {message.starred ? <StarIcon size={11} filled aria-label="Starred" aria-hidden={false} role="img" /> : null}
+      {message.expiresIn ? <TimerIcon size={11} aria-label={`Disappears ${timerLabel(message.expiresIn)} after it's seen`} aria-hidden={false} role="img" /> : null}
       <time dateTime={message.sentAt}>{formatMessageTime(message.sentAt)}</time>
       {message.fromMe && message.status ? (
         <>

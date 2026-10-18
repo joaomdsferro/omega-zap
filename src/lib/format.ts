@@ -58,3 +58,28 @@ export function formatVoiceDuration(seconds: number): string {
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
+
+const TIMER_UNITS: [number, string, string][] = [
+  [604_800, "week", "w"],
+  [86_400, "day", "d"],
+  [3_600, "hour", "h"],
+  [60, "minute", "m"],
+  [1, "second", "s"],
+];
+
+function timerUnit(seconds: number): [number, string, string] {
+  const [size, unit, short] = TIMER_UNITS.find(([size]) => seconds >= size && seconds % size === 0) ?? TIMER_UNITS[4];
+  return [seconds / size, unit, short];
+}
+
+/** A disappearing-message timer in words: "1 week", "8 hours". */
+export function timerLabel(seconds: number): string {
+  const [n, unit] = timerUnit(seconds);
+  return `${n} ${unit}${n === 1 ? "" : "s"}`;
+}
+
+/** The same, as short as Signal puts it beside a chat's name: "1w", "8h". */
+export function timerShort(seconds: number): string {
+  const [n, , short] = timerUnit(seconds);
+  return `${n}${short}`;
+}

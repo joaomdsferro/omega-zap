@@ -729,6 +729,8 @@ impl TgManager {
                 starred: false,
                 deleted: None,
                 edited_ms: message.edit_date().filter(|_| !message.edit_hide()).map(|at| at.timestamp_millis()),
+                expires_in: None,
+                expires_at_ms: None,
             },
         })
     }

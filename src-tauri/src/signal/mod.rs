@@ -37,6 +37,8 @@ pub const AVATAR_DIR: &str = "avatars";
 const SEND_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long after sending a message Signal lets it be edited.
 const EDIT_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
+/// How often disappearing messages are looked for when none is due sooner.
+const EXPIRY_SWEEP_MS: i64 = 60 * 60 * 1000;
 const MEDIA_TIMEOUT: Duration = Duration::from_secs(150);
 /// Uploading a file of up to 100 MB, then sending the message.
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(600);
@@ -101,6 +103,24 @@ enum BridgeEvent {
         /// How far one of our own messages got, when the history says.
         #[serde(default)]
         delivery: Option<Delivery>,
+        /// Seconds it lasts once seen, in a chat with disappearing messages.
+        #[serde(default)]
+        expires_in: Option<u32>,
+        /// When its countdown started, when the history says.
+        #[serde(default)]
+        expire_start: Option<i64>,
+    },
+    /// A chat's disappearing-message timer; `note` when someone changed it.
+    Timer {
+        chat: String,
+        is_group: bool,
+        sender: String,
+        from_me: bool,
+        ts: i64,
+        secs: u32,
+        note: bool,
+        #[serde(default)]
+        history: bool,
     },
     History { state: String, percent: Option<u32>, error: Option<String> },
     Receipt { ids: Vec<String>, delivery: Delivery },
@@ -167,6 +187,8 @@ pub struct SignalManager {
     save_dirty: AtomicBool,
     /// Wakes the refresh / save loop, which otherwise sleeps.
     wake: tokio::sync::Notify,
+    /// Wakes the disappearing-message loop when a countdown may have started.
+    expiry: tokio::sync::Notify,
     avatars_running: AtomicBool,
     next_request: AtomicU64,
     /// Commands the bridge has yet to answer. Only some answers carry a value.
@@ -233,6 +255,35 @@ fn media_file_name(media: &MediaRef) -> String {
 }
 
 /// Refuses the "Signal" chat, which only Signal writes to.
+/// A line saying someone set a chat's disappearing-message timer; `sender`
+/// is `None` for us.
+fn timer_note(chat: &str, is_group: bool, sender: Option<String>, id: String, ts: i64, secs: u32) -> Incoming {
+    let from_me = sender.is_none();
+    Incoming {
+        chat: chat.to_string(),
+        is_group,
+        sender,
+        push_name: None,
+        lid_pn_pairs: Vec::new(),
+        message: StoredMessage {
+            from_me,
+            id,
+            ts_ms: ts,
+            author_jid: None,
+            content: Content::timer(secs),
+            status: None,
+            reactions: Vec::new(),
+            wire: None,
+            read_by: Vec::new(),
+            starred: false,
+            deleted: None,
+            edited_ms: None,
+            expires_in: None,
+            expires_at_ms: None,
+        },
+    }
+}
+
 fn writable(chat_id: &str) -> Result<(), String> {
     if chat_id == release_notes::CHAT_ID {
         return Err("Only Signal can send messages here.".into());
@@ -267,6 +318,7 @@ impl SignalManager {
             chats_dirty: AtomicBool::new(false),
             save_dirty: AtomicBool::new(false),
             wake: tokio::sync::Notify::new(),
+            expiry: tokio::sync::Notify::new(),
             avatars_running: AtomicBool::new(false),
             next_request: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
@@ -296,6 +348,32 @@ impl SignalManager {
                     if last_save.elapsed() >= SAVE_INTERVAL && mgr.save_dirty.swap(false, Ordering::AcqRel) {
                         mgr.save_now();
                         last_save = Instant::now();
+                    }
+                }
+            }
+        });
+
+        // Disappearing messages go when their time runs out, sleeping till
+        // the next one is due; at least hourly, for those only on disk.
+        let mgr = self.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                let touched = lock(&mgr.store).sweep_expired(crate::store::now_ms());
+                for (chat, sent) in touched {
+                    let _ = mgr.app.emit("signal://cleared", &chat);
+                    // Signal's own copy goes too, as Signal's apps delete theirs.
+                    let command = serde_json::json!({ "cmd": "forget", "chat": chat, "timestamps": sent });
+                    if let Err(e) = mgr.request(command, SEND_TIMEOUT).await {
+                        log::info!("signal: disappeared messages left in the session store: {e}");
+                    }
+                }
+                mgr.mark_dirty();
+                loop {
+                    let next = lock(&mgr.store).next_expiry();
+                    let wait = next.map_or(EXPIRY_SWEEP_MS, |at| (at - crate::store::now_ms()).clamp(0, EXPIRY_SWEEP_MS));
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(wait as u64)) => break,
+                        _ = mgr.expiry.notified() => {}
                     }
                 }
             }
@@ -726,6 +804,8 @@ impl SignalManager {
             let quiet = store.is_request(chat_id) || store.is_blocked(chat_id);
             (store.mark_read(chat_id), quiet)
         };
+        // Reading starts the countdown of disappearing messages.
+        self.expiry.notify_one();
         self.mark_dirty();
         let messages: Vec<serde_json::Value> = read
             .iter()
@@ -921,6 +1001,8 @@ impl SignalManager {
                     starred: false,
                     deleted: None,
                     edited_ms: None,
+                    expires_in: None,
+                    expires_at_ms: None,
                 },
             };
             added.extend(store.ingest(incoming, true));
@@ -1088,6 +1170,23 @@ impl SignalManager {
         self.request(command, SEND_TIMEOUT).await.map(|_| ()).map_err(|e| format!("Typing not sent: {e}"))
     }
 
+    /// Sets a chat's disappearing-message timer, in seconds (0 turns it off),
+    /// and returns the line saying so.
+    pub async fn set_disappearing(&self, chat_id: &str, secs: u32) -> Result<MessageDto, String> {
+        writable(chat_id)?;
+        let ts = now_ms();
+        let command = serde_json::json!({ "cmd": "timer", "chat": chat_id, "secs": secs, "ts": ts });
+        self.request(command, SEND_TIMEOUT)
+            .await
+            .map_err(|e| format!("The timer was not changed: {e}"))?;
+        let is_group = chat_id.starts_with("g.");
+        let dto = lock(&self.store)
+            .ingest(timer_note(chat_id, is_group, None, ts.to_string(), ts, secs), false)
+            .ok_or("The timer was changed but could not be shown.")?;
+        self.mark_dirty();
+        Ok(dto)
+    }
+
     /// Blocks or unblocks a person or a group, on the phone too.
     pub async fn set_blocked(&self, id: &str, blocked: bool) -> Result<(), String> {
         writable(id)?;
@@ -1244,11 +1343,14 @@ impl SignalManager {
                 starred: false,
                 deleted: None,
                 edited_ms: None,
+                expires_in: None,
+                expires_at_ms: None,
             },
         };
         let dto = lock(&self.store)
             .ingest(incoming, false)
             .ok_or("The message was sent but could not be shown.")?;
+        self.expiry.notify_one();
         self.mark_dirty();
         Ok(dto)
     }
@@ -1464,7 +1566,7 @@ impl SignalManager {
                 drop(store);
                 self.mark_dirty();
             }
-            BridgeEvent::Message { chat, is_group, sender, from_me, ts, kind, text, media_label, quote, attachments, history, delivery } => {
+            BridgeEvent::Message { chat, is_group, sender, from_me, ts, kind, text, media_label, quote, attachments, history, delivery, expires_in, expire_start } => {
                 let reply_to = quote.map(|q| ReplyRef {
                     id: q.author.as_deref().zip(q.ts).map(|(author, ts)| self.message_id(author, ts)),
                     author_jid: q.author,
@@ -1486,6 +1588,7 @@ impl SignalManager {
                     contacts: Vec::new(),
                     poll: None,
                     mentions_all: false,
+                    timer: None,
                 };
                 let id = if from_me { ts.to_string() } else { self.message_id(&sender, ts) };
                 let incoming = Incoming {
@@ -1507,6 +1610,8 @@ impl SignalManager {
                         starred: false,
                         deleted: None,
                         edited_ms: None,
+                        expires_in,
+                        expires_at_ms: expire_start.zip(expires_in).map(|(start, secs)| start + secs as i64 * 1000),
                     },
                 };
                 // History arrives in bulk and was already seen on the phone.
@@ -1528,6 +1633,9 @@ impl SignalManager {
                     && !store.has_chat(&incoming.chat)
                     && incoming.sender.as_deref().is_some_and(|s| !store.is_saved_contact(s));
                 let chat = incoming.chat.clone();
+                if incoming.message.expires_in.is_some() {
+                    self.expiry.notify_one();
+                }
                 if let Some(dto) = store.ingest(incoming, !history)
                     && !history
                 {
@@ -1617,6 +1725,7 @@ impl SignalManager {
                     }
                 }
                 drop(store);
+                self.expiry.notify_one();
                 self.mark_dirty();
             }
             BridgeEvent::Typing { chat, is_group, sender, active } => {
@@ -1633,6 +1742,25 @@ impl SignalManager {
                 };
                 drop(store);
                 let _ = self.app.emit("signal://typing", typing);
+            }
+            BridgeEvent::Timer { chat, is_group, sender, from_me, ts, secs, note, history } => {
+                if !from_me && lock(&self.store).is_blocked(&sender) {
+                    return;
+                }
+                if !note {
+                    if lock(&self.store).set_timer(&chat, is_group, secs, ts) {
+                        self.mark_dirty();
+                    }
+                    return;
+                }
+                let id = if from_me { ts.to_string() } else { self.message_id(&sender, ts) };
+                let dto = lock(&self.store).ingest(timer_note(&chat, is_group, (!from_me).then_some(sender), id, ts, secs), false);
+                if let Some(dto) = dto
+                    && !history
+                {
+                    let _ = self.app.emit("signal://message", dto);
+                }
+                self.mark_dirty();
             }
             BridgeEvent::Blocked { ids, groups } => {
                 if lock(&self.store).set_blocklist(ids.into_iter().chain(groups)) {
