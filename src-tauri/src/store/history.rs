@@ -365,6 +365,26 @@ impl HistoryDb {
         Ok(rows.into_iter().next().and_then(|Data { data }| serde_json::from_str(&data).ok()))
     }
 
+    /// Messages carrying the WhatsApp file whose hash is `sha256`, newest
+    /// first, as (chat, message id).
+    pub fn with_file(&mut self, sha256: &str, limit: usize) -> Result<Vec<(String, String)>, String> {
+        #[derive(QueryableByName)]
+        struct Found {
+            #[diesel(sql_type = Text)]
+            chat: String,
+            #[diesel(sql_type = Text)]
+            id: String,
+        }
+        let rows = diesel::sql_query(
+            "SELECT chat, id FROM messages WHERE deleted = 0 AND json_extract(data, '$.content.wa_media.sha256') = ? ORDER BY ts_ms DESC LIMIT ?",
+        )
+        .bind::<Text, _>(sha256)
+        .bind::<BigInt, _>(limit as i64)
+        .load::<Found>(&mut self.conn)
+        .map_err(failed("find a file"))?;
+        Ok(rows.into_iter().map(|f| (f.chat, f.id)).collect())
+    }
+
     /// Messages with one of each of `terms` (folded) in them, newest first.
     /// Only `chat`'s, when given.
     pub fn search(&mut self, terms: &[Vec<String>], chat: Option<&str>, limit: usize) -> Result<Vec<(String, StoredMessage)>, String> {
@@ -524,6 +544,14 @@ impl History {
             .flatten()
     }
 
+    /// Saved messages carrying the WhatsApp file with this hash, newest first.
+    pub fn with_file(&self, sha256: &str, limit: usize) -> Vec<(String, String)> {
+        self.with_db(|db| db.with_file(sha256, limit))
+            .and_then(|found| found)
+            .inspect_err(|e| log::warn!("{e}"))
+            .unwrap_or_default()
+    }
+
     /// Saved messages with one of each of `terms` (`ChatStore::search_terms`)
     /// in them, newest first; only `chat`'s when given.
     pub fn search(&self, terms: &[Vec<String>], chat: Option<&str>, limit: usize) -> Vec<(String, StoredMessage)> {
@@ -634,6 +662,35 @@ mod tests {
         }
         assert_eq!(db.message(chat, "m0002").unwrap().unwrap().content.text.as_deref(), Some("secret"));
         assert!(db.search(&[vec!["secret".into()]], Some(chat), 1000).unwrap().iter().all(|(_, m)| m.id != "m0000"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn messages_are_found_by_the_file_they_carry() {
+        let dir = temp_dir("file");
+        let chat = "351900000000@s.whatsapp.net";
+        let mut store = ChatStore::default();
+        let mut db = open(&dir);
+        for (id, ts, hash) in [("a", 10, "c3RpY2tlcg=="), ("b", 20, "c3RpY2tlcg=="), ("c", 30, "b3RoZXI=")] {
+            let mut message = incoming(chat, id, ts, "");
+            message.message.content.wa_media = Some(crate::store::CdnRef {
+                path: "/v/x".into(),
+                key: "a2V5".into(),
+                sha256: hash.into(),
+                enc_sha256: "ZW5j".into(),
+                size: 1,
+                mime: Some("image/webp".into()),
+                width: 512,
+                height: 512,
+                kind: Some("sticker".into()),
+                file_name: None,
+            });
+            store.ingest(message, false);
+        }
+        let changes = db.changes(&mut store);
+        db.write(changes).unwrap();
+        let found = db.with_file("c3RpY2tlcg==", 5).unwrap();
+        assert_eq!(found, [(chat.to_string(), "b".to_string()), (chat.to_string(), "a".to_string())]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

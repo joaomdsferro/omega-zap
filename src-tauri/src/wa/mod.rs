@@ -251,6 +251,9 @@ pub struct WaManager {
     stickers: Mutex<stickers::Library>,
     /// WhatsApp's sticker store's list of packs, and when it was fetched.
     sticker_store: tokio::sync::Mutex<Option<(Instant, Vec<whatsapp_rust::sticker_pack::StickerPack>)>>,
+    /// When each store pack was last fetched again for stickers whose
+    /// address expired; held while one is, so a panel full of them asks once.
+    pack_refreshes: tokio::sync::Mutex<HashMap<String, Instant>>,
     /// Expired files the phone did not send again, by message id, and when it
     /// last failed: not asked for again for a while.
     reupload_failed: Mutex<HashMap<String, Instant>>,
@@ -260,7 +263,7 @@ pub struct WaManager {
 }
 
 /// How long a file the phone did not send again is left alone before asking again.
-const REUPLOAD_RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
+pub(super) const REUPLOAD_RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
 
 /// How long the window can be out of focus before we show as offline, so
 /// a menu or a quick switch doesn't flicker it.
@@ -337,6 +340,7 @@ impl WaManager {
             announced: std::sync::atomic::AtomicU8::new(0),
             stickers: Mutex::new(if linked { stickers::Library::load(&dir) } else { stickers::Library::default() }),
             sticker_store: tokio::sync::Mutex::new(None),
+            pack_refreshes: tokio::sync::Mutex::new(HashMap::new()),
             reupload_failed: Mutex::new(HashMap::new()),
             reuploads: tokio::sync::Semaphore::new(3),
             dir,

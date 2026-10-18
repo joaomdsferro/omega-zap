@@ -181,11 +181,6 @@ fn encode_animated(frames: &[(RgbaImage, u32)]) -> Result<Vec<u8>, String> {
 
 /// What Signal takes for one sticker in a pack.
 const SIGNAL_MAX: usize = 300 * 1024;
-/// The longest an animated sticker plays on Signal.
-const SIGNAL_ANIMATION_MS: u32 = 3000;
-/// An animation longer than Signal's limit plays at most this much quicker;
-/// past that, its end is cut.
-const SIGNAL_SPEEDUP: f64 = 2.0;
 /// The sides an animated sticker shrinks through until it fits.
 const SIGNAL_SIDES: [u32; 4] = [SIDE, 384, 320, 256];
 
@@ -197,8 +192,10 @@ pub struct SignalSticker {
 }
 
 /// A sticker as Signal's packs take it: a still WebP as it is when it fits,
-/// an animated one made into an APNG of at most 3 seconds and 300 KB, as
-/// Signal asks. One that can't be made to fit keeps its first frame.
+/// an animated one made into an APNG within Signal's 300 KB, at the speed it
+/// had. (Signal's creator also asks for 3 seconds at most, which only it
+/// checks; playing longer ones quicker looked wrong.) One that can't be made
+/// to fit keeps its first frame.
 pub fn for_signal(bytes: &[u8]) -> Result<SignalSticker, String> {
     let format = image::guess_format(bytes).map_err(|_| "That file is not a picture.".to_string())?;
     let frames = match format {
@@ -218,7 +215,6 @@ pub fn for_signal(bytes: &[u8]) -> Result<SignalSticker, String> {
         _ => Vec::new(),
     };
     if frames.len() > 1 {
-        let frames = signal_timing(frames);
         if let Some(bytes) = SIGNAL_SIDES.iter().find_map(|&side| apng_within(&frames, side, SIGNAL_MAX)) {
             return Ok(SignalSticker { bytes, mime: "image/png" });
         }
@@ -227,24 +223,6 @@ pub fn for_signal(bytes: &[u8]) -> Result<SignalSticker, String> {
     }
     let made = make(bytes)?;
     Ok(SignalSticker { bytes: made.bytes, mime: "image/webp" })
-}
-
-/// An animation played quicker, then cut, to last at most Signal's limit.
-fn signal_timing(frames: Vec<(RgbaImage, u32)>) -> Vec<(RgbaImage, u32)> {
-    let total: u32 = frames.iter().map(|(_, ms)| ms).sum();
-    let speed = (f64::from(total) / f64::from(SIGNAL_ANIMATION_MS)).clamp(1.0, SIGNAL_SPEEDUP);
-    let mut out: Vec<(RgbaImage, u32)> = Vec::new();
-    let mut at = 0u32;
-    for (frame, ms) in frames {
-        let ms = ((f64::from(ms) / speed).round() as u32).max(1);
-        if at >= SIGNAL_ANIMATION_MS {
-            break;
-        }
-        let ms = ms.min(SIGNAL_ANIMATION_MS - at);
-        at += ms;
-        out.push((frame, ms));
-    }
-    out
 }
 
 /// The animation as a palette APNG at `side` pixels, when it fits in `max`
@@ -435,8 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn signal_gets_an_animated_sticker_as_a_short_apng_within_its_size() {
-        // Five seconds: played quicker, to three.
+    fn signal_gets_an_animated_sticker_as_an_apng_within_its_size_at_its_speed() {
         let made = for_signal(&animated_webp(50, 100)).unwrap();
         assert_eq!(made.mime, "image/png");
         assert!(made.bytes.len() <= SIGNAL_MAX, "{} bytes", made.bytes.len());
@@ -451,7 +428,8 @@ mod tests {
                 n / d
             })
             .sum();
-        assert!(total <= SIGNAL_ANIMATION_MS, "{total} ms");
+        // Five seconds, as made: frames may merge, never quicken.
+        assert_eq!(total, 5000);
         // Every frame draws the whole picture once composed.
         let last = frames.last().unwrap().buffer();
         assert_eq!(last.dimensions().0, last.dimensions().1);

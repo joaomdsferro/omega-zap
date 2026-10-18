@@ -18,7 +18,7 @@ use whatsapp_rust::prelude::*;
 use whatsapp_rust::waproto::buffa::MessageField;
 use whatsapp_rust::{AppStateResyncMode, UploadOptions, WAPatchName, schemas, sticker_pack};
 
-use super::{MEDIA_DIR, WaManager, cdn_file_name, convert};
+use super::{CdnError, MEDIA_DIR, REUPLOAD_RETRY_AFTER, WaManager, cdn_file_name, convert};
 use crate::account::{lock, secure_dir};
 use crate::store::{CdnRef, MessageDto, StoredMessage, now_ms};
 
@@ -282,6 +282,26 @@ impl Library {
                 true
             }
         }
+    }
+
+    /// The store pack a sticker came with, if any.
+    pub fn store_pack_of(&self, hash: &str) -> Option<String> {
+        self.packs.iter().find(|p| p.store && p.stickers.iter().any(|h| h == hash)).map(|p| p.id.clone())
+    }
+
+    /// Newer addresses for stickers already kept; others are left out.
+    /// Returns whether any changed.
+    pub fn refresh_files(&mut self, files: impl IntoIterator<Item = CdnRef>) -> bool {
+        let mut changed = false;
+        for file in files {
+            if let Some(entry) = self.stickers.get(&file.sha256)
+                && entry.file.path != file.path
+            {
+                self.entry(file);
+                changed = true;
+            }
+        }
+        changed
     }
 
     pub fn has_pack(&self, id: &str) -> bool {
@@ -638,7 +658,15 @@ impl WaManager {
     /// A library sticker's or GIF's file, downloaded if needed: its name in the media folder.
     pub async fn library_media(&self, id: &str) -> Result<String, String> {
         let (file, media_type) = self.library_file(id).ok_or("That sticker is gone.")?;
-        let name = self.fetch_cdn(file, MEDIA_DIR, "wa", media_type).await?;
+        let name = match self.fetch_cdn(file.clone(), MEDIA_DIR, "wa", media_type).await {
+            // Gone from WhatsApp's CDN: favorites and recents keep the address
+            // they had when first seen, which expires after a few weeks.
+            Err(CdnError::Rejected(e)) if media_type == MediaType::Sticker => self.recover_sticker(id, &file).await.map_err(|why| {
+                log::info!("whatsapp: expired sticker not recovered ({e}): {why}");
+                why
+            })?,
+            other => other?,
+        };
         if media_type == MediaType::Sticker
             && lock(&self.stickers).sticker(id).is_some_and(|s| s.animated.is_none())
             && let Ok(bytes) = crate::vault::get().read(&self.dir.join(MEDIA_DIR).join(&name))
@@ -656,6 +684,53 @@ impl WaManager {
     /// The emojis a library sticker goes with.
     pub fn sticker_emojis(&self, id: &str) -> Vec<String> {
         lock(&self.stickers).sticker(id).map(|s| s.emojis.clone()).unwrap_or_default()
+    }
+
+    /// A sticker whose address expired, fetched from a fresh one: a store
+    /// pack's own list has them, and otherwise the phone that sent a message
+    /// with it can put it back on the CDN.
+    async fn recover_sticker(&self, id: &str, file: &CdnRef) -> Result<String, String> {
+        let pack = lock(&self.stickers).store_pack_of(id);
+        if let Some(pack) = pack {
+            self.refresh_store_pack(&pack).await;
+            let fresh = lock(&self.stickers).sticker(id).map(|s| s.file.clone());
+            if let Some(fresh) = fresh.filter(|f| f.path != file.path)
+                && let Ok(name) = self.fetch_cdn(fresh, MEDIA_DIR, "wa", MediaType::Sticker).await
+            {
+                return Ok(name);
+            }
+        }
+        for (chat, message) in self.history.with_file(id, 3) {
+            if let Ok(name) = self.fetch_media(&chat, &message).await {
+                let path = lock(&self.store).wa_media(&chat, &message).map(|f| f.path);
+                if let Some(path) = path {
+                    self.with_stickers(|lib| {
+                        let changed = lib.refresh_files([CdnRef { path, ..file.clone() }]);
+                        ((), changed)
+                    });
+                }
+                return Ok(name);
+            }
+        }
+        Err("This sticker expired on WhatsApp, and no phone sent it again.".into())
+    }
+
+    /// Fetches a store pack's list again, for its stickers' current
+    /// addresses; at most once an hour.
+    async fn refresh_store_pack(&self, pack_id: &str) {
+        let mut refreshed = self.pack_refreshes.lock().await;
+        if refreshed.get(pack_id).is_some_and(|at| at.elapsed() < REUPLOAD_RETRY_AFTER) {
+            return;
+        }
+        refreshed.insert(pack_id.to_string(), Instant::now());
+        let Ok(client) = self.connected_client().await else { return };
+        match client.fetch_sticker_pack(pack_id, &locale()).await {
+            Ok(pack) => {
+                let files: Vec<CdnRef> = pack.stickers.iter().filter_map(store_sticker).collect();
+                self.with_stickers(|lib| ((), lib.refresh_files(files)));
+            }
+            Err(e) => log::info!("whatsapp: sticker pack {pack_id} could not be fetched again: {e}"),
+        }
     }
 
     /// A library sticker's or GIF's plain bytes, downloaded if needed.
