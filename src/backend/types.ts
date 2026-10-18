@@ -134,6 +134,8 @@ export interface Message {
   place?: Place;
   contacts?: ContactCard[];
   poll?: Poll;
+  /** A sticker pack shared in the chat (WhatsApp), which can be added to the library. */
+  stickerPack?: SharedStickerPack;
   /** Not a message: the chat's disappearing-message timer changed to this many seconds (0 is off). */
   timer?: number;
   /** Seconds it lasts once seen, in a chat with disappearing messages. */
@@ -489,6 +491,14 @@ export interface VoiceRecorder {
   onError(listener: (message: string) => void): () => void;
 }
 
+export interface SharedStickerPack {
+  id: string;
+  name: string;
+  publisher: string;
+  /** Stickers that can be added here. */
+  count: number;
+}
+
 /** A sticker in the library, or the one in a message. */
 export type StickerTarget = { id: string } | { chatId: string; messageId: string };
 
@@ -511,6 +521,8 @@ export interface StickerShelf {
   addNewSticker(packId: string, picture: Blob): Promise<void>;
   /** Puts a sticker found by search in one of our packs. */
   addFoundSticker(packId: string, pick: StickerPick): Promise<void>;
+  /** Adds the sticker pack shared in a message as a pack of ours; returns its id. */
+  addSharedPack?(chatId: string, messageId: string): Promise<string>;
   /** Called whenever the library changes, here or on the phone. */
   subscribe(listener: () => void): () => void;
   /**

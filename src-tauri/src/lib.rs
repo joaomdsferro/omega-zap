@@ -417,6 +417,7 @@ pub fn run() {
             wa::commands::wa_set_sticker_favorite,
             wa::commands::wa_message_sticker,
             wa::commands::wa_sticker_store,
+            wa::commands::wa_add_shared_pack,
             wa::commands::wa_install_pack,
             wa::commands::wa_remove_pack,
             wa::commands::wa_create_pack,

@@ -153,6 +153,44 @@ pub struct Reaction {
     pub emoji: String,
 }
 
+/// A WhatsApp sticker pack shared in a message: its stickers come in one zip.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SharedPack {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub publisher: String,
+    /// In the pack's order.
+    pub stickers: Vec<SharedSticker>,
+    /// The zip; `None` when the message came without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zip: Option<CdnRef>,
+}
+
+/// One sticker of a shared pack: its file's name in the zip.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SharedSticker {
+    pub file: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub emojis: Vec<String>,
+    #[serde(default)]
+    pub animated: bool,
+    /// Lottie stickers can't be drawn here.
+    #[serde(default)]
+    pub lottie: bool,
+}
+
+/// A shared sticker pack as the UI shows it.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedPackDto {
+    pub id: String,
+    pub name: String,
+    pub publisher: String,
+    /// The stickers that can be added here.
+    pub count: usize,
+}
+
 /// A place shared in a message.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Place {
@@ -255,6 +293,8 @@ pub struct Content {
     /// to this many seconds (0 is off), shown as a line in the conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timer: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sticker_pack: Option<SharedPack>,
 }
 
 /// What search looks at in a message: its text and, for a file, its name.
@@ -335,6 +375,7 @@ impl Content {
             poll: None,
             mentions_all: false,
             timer: None,
+            sticker_pack: None,
         }
     }
 
@@ -356,13 +397,14 @@ impl Content {
             poll: None,
             mentions_all: false,
             timer: None,
+            sticker_pack: None,
         }
     }
 
     /// A WhatsApp photo or file stored before its download reference was
     /// kept, so it cannot be fetched until history sends the message again.
     pub fn lacks_wa_file(&self) -> bool {
-        const NO_FILE: [&str; 5] = ["Location", "Live location", "Contact", "Contacts", "Poll"];
+        const NO_FILE: [&str; 6] = ["Location", "Live location", "Contact", "Contacts", "Poll", "Sticker pack"];
         self.wa_media.is_none()
             && self.attachments.is_empty()
             && match self.kind {
@@ -746,6 +788,8 @@ pub struct MessageDto {
     /// When it disappears, once its countdown started.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sticker_pack: Option<SharedPackDto>,
 }
 
 /// A disappearing-message timer in words, as Signal names its choices.
@@ -2726,6 +2770,10 @@ impl ChatStore {
         self.find_message(chat, id)?.1.content.attachments.get(index).cloned()
     }
 
+    pub fn sticker_pack(&self, chat: &str, id: &str) -> Option<SharedPack> {
+        self.find_message(chat, id)?.1.content.sticker_pack.clone()
+    }
+
     pub fn wa_media(&self, chat: &str, id: &str) -> Option<CdnRef> {
         self.find_message(chat, id)?.1.content.wa_media.clone()
     }
@@ -3244,6 +3292,12 @@ impl ChatStore {
             timer: m.content.timer,
             expires_in: m.expires_in.filter(|_| m.deleted.is_none()),
             expires_at: m.expires_at_ms.filter(|_| m.deleted.is_none()),
+            sticker_pack: m.content.sticker_pack.as_ref().filter(|_| m.deleted.is_none()).map(|p| SharedPackDto {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                publisher: p.publisher.clone(),
+                count: p.stickers.iter().filter(|s| !s.lottie).count(),
+            }),
         }
     }
 

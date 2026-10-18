@@ -4,7 +4,7 @@ use whatsapp_rust::waproto::whatsapp::web_message_info::Status as WebStatus;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
-use super::store::{CardPhone, Content, ContactCard, Delivery, Incoming, LinkPreview, MsgKind, Place, Poll, ReplyRef, StoredMessage, CdnRef};
+use super::store::{CardPhone, Content, ContactCard, Delivery, Incoming, LinkPreview, MsgKind, Place, Poll, ReplyRef, SharedPack, SharedSticker, StoredMessage, CdnRef};
 
 fn non_empty(text: &Option<String>) -> Option<String> {
     text.as_ref().filter(|t| !t.trim().is_empty()).cloned()
@@ -200,6 +200,43 @@ pub fn content(message: &wa::Message) -> Option<Content> {
         let mut c = Content::media(MsgKind::Media, "Sticker", None);
         with_context(&mut c, &sticker.context_info);
         c.wa_media = file_ref(fields!(sticker), Some("sticker"), sticker.width, sticker.height);
+        return Some(c);
+    }
+    if let Some(pack) = base.sticker_pack_message.as_option() {
+        let mut c = Content::media(MsgKind::Media, "Sticker pack", non_empty(&pack.caption));
+        with_context(&mut c, &pack.context_info);
+        let zip = (|| {
+            Some(CdnRef {
+                path: non_empty(&pack.direct_path)?,
+                key: encoded(&pack.media_key)?,
+                sha256: encoded(&pack.file_sha256)?,
+                enc_sha256: encoded(&pack.file_enc_sha256)?,
+                size: pack.file_length.unwrap_or_default(),
+                mime: Some("application/zip".into()),
+                width: 0,
+                height: 0,
+                kind: Some("sticker_pack".into()),
+                file_name: None,
+            })
+        })();
+        c.sticker_pack = Some(SharedPack {
+            id: non_empty(&pack.sticker_pack_id).unwrap_or_default(),
+            name: non_empty(&pack.name).unwrap_or_else(|| "Sticker pack".into()),
+            publisher: non_empty(&pack.publisher).unwrap_or_default(),
+            stickers: pack
+                .stickers
+                .iter()
+                .filter_map(|s| {
+                    Some(SharedSticker {
+                        file: non_empty(&s.file_name)?,
+                        emojis: s.emojis.clone(),
+                        animated: s.is_animated == Some(true),
+                        lottie: s.is_lottie == Some(true),
+                    })
+                })
+                .collect(),
+            zip,
+        });
         return Some(c);
     }
     if let Some(location) = base.location_message.as_option() {

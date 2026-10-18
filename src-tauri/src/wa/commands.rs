@@ -503,3 +503,8 @@ pub async fn wa_send_klipy_sticker(
 pub async fn wa_add_klipy_sticker(mgr: Mgr<'_>, pack_id: String, pick: crate::klipy::StickerPick) -> Result<(), String> {
     mgr.add_klipy_sticker(&pack_id, pick).await
 }
+
+#[tauri::command]
+pub async fn wa_add_shared_pack(mgr: Mgr<'_>, chat_id: String, message_id: String) -> Result<String, String> {
+    mgr.add_shared_pack(&chat_id, &message_id).await
+}

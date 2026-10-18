@@ -44,6 +44,10 @@ libwebp-sys2 = { version = "0.2.0", features = ["static"] }
 # Animated stickers for Signal are APNG, in a palette so they fit its size.
 # The versions image already links.
 png = "0.18"
+# Sticker packs shared in a chat come as a zip. The version png already links.
+flate2 = "1"
+# A shared pack's stickers are uploaded a few at a time. Already built.
+futures = "0.3"
 color_quant = "1.1"
 # Voice messages: the microphone (ALSA on Linux, Core Audio on macOS) and
 # Opus, built in (static, with cmake), so nothing is needed on the system.

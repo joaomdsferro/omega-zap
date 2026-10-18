@@ -133,7 +133,9 @@ Everything Omega Zap does today, network by network. For what is still missing, 
 - **Stickers** (WhatsApp): the emoji panel's **Stickers** tab has Recent (what you sent, here or on
   the phone), Favorites (in sync with the phone both ways) and your packs. **+** (or **Ctrl+V** with the tab open) turns a picture or
   GIF into a sticker, makes a pack of your own, or adds packs from WhatsApp's sticker store. Packs
-  installed on the phone are not shared with linked devices, so they can't show here. Right-click a
+  installed on the phone are not shared with linked devices, so they can't show here on their own:
+  share a pack in a chat from the phone (e.g. to yourself) and its message has **Add to stickers**,
+  which makes it a pack here, with its name and order (and from there, one for Signal). Right-click a
   sticker, or open a sticker message's menu, to star it or add it to a pack. The search box finds
   stickers on KLIPY; they are made into WhatsApp stickers as they are sent.
 - **Your WhatsApp stickers on Signal**: in a Signal chat the **Stickers** tab shows the same library

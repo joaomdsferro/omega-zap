@@ -35,6 +35,7 @@ import type {
   ReactionCount,
   StarredMessage,
   StickerShelf,
+  SharedStickerPack,
   VoiceRecorder,
   OutgoingMedia,
   TypingState,
@@ -109,6 +110,7 @@ interface RawMessage {
   place?: Place;
   contacts?: ContactCard[];
   poll?: Poll;
+  stickerPack?: SharedStickerPack;
   timer?: number;
   expiresIn?: number;
 }
@@ -260,6 +262,7 @@ function toMessage(raw: RawMessage): Message {
     place: raw.place,
     contacts: raw.contacts,
     poll: raw.poll,
+    stickerPack: raw.stickerPack,
     timer: raw.timer,
     expiresIn: raw.expiresIn,
   };
@@ -390,6 +393,7 @@ export class TauriBackend implements ChatBackend {
           await this.invoke("wa_add_new_sticker", new Uint8Array(await picture.arrayBuffer()), { headers: { "x-pack": packId } });
         },
         addFoundSticker: (packId, pick) => this.invoke("wa_add_klipy_sticker", { packId, pick }),
+        addSharedPack: (chatId, messageId) => this.invoke<string>("wa_add_shared_pack", { chatId, messageId }),
         subscribe: (listener) => {
           const pending = listen(`${this.events}://stickers`, () => listener());
           return () => void pending.then((unlisten) => unlisten());

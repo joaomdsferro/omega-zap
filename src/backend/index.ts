@@ -35,6 +35,7 @@ export type {
   StickerPack,
   StickerLibrary,
   StickerShelf,
+  SharedStickerPack,
   StickerNetwork,
   NetworkPack,
   Microphone,

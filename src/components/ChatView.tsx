@@ -565,6 +565,19 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
     };
   }, [stickers]);
 
+  const addPack = useMemo(() => {
+    const add = stickers?.addSharedPack;
+    if (!add) return undefined;
+    return (message: Message) =>
+      add(message.chatId, message.id).then(
+        () => undefined,
+        (e: unknown) => {
+          reportError.current?.(String(e));
+          throw e;
+        },
+      );
+  }, [stickers]);
+
   // Files can be added while the account connects; they wait for Send.
   const attaching = Boolean(canAttach);
   const [dragging, setDragging] = useState(false);
@@ -839,6 +852,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                     onDelete={deleteOne}
                     onEdit={onEdit ? setEditing : undefined}
                     onVote={onVote}
+                    onAddPack={addPack}
                     onMessageContact={onMessageNumber}
                     onJumpTo={setJumpTo}
                     onOpenPerson={loadPerson ? setPersonId : undefined}

@@ -3434,6 +3434,8 @@ dependencies = [
  "color_quant",
  "cpal",
  "diesel",
+ "flate2",
+ "futures",
  "glass_pumpkin",
  "grammers-client",
  "grammers-session",

@@ -22,6 +22,11 @@ use super::{CdnError, MEDIA_DIR, REUPLOAD_RETRY_AFTER, WaManager, cdn_file_name,
 use crate::account::{lock, secure_dir};
 use crate::store::{CdnRef, MessageDto, StoredMessage, now_ms};
 
+/// The most a sticker in a shared pack's zip may take once unpacked.
+const ZIP_ENTRY_MAX: usize = 4 * 1024 * 1024;
+/// Stickers of a shared pack uploaded at once.
+const UPLOADS_AT_ONCE: usize = 4;
+
 /// Stickers and GIFs shown under Recent.
 pub const RECENT: usize = 32;
 /// The most stickers a pack holds, as on the phone.
@@ -445,6 +450,58 @@ impl Library {
                 .collect(),
         }
     }
+}
+
+/// The files in a zip, by name: stored or deflated, as WhatsApp packs them.
+/// No zip64: a sticker pack is far from needing it.
+pub fn unzip(bytes: &[u8]) -> Result<HashMap<String, Vec<u8>>, String> {
+    use std::io::Read as _;
+    let bad = || "The pack's file could not be read.".to_string();
+    let u16_at = |at: usize| bytes.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize).ok_or_else(bad);
+    let u32_at = |at: usize| bytes.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize).ok_or_else(bad);
+    // The end record is last, after a comment of up to 64 KB.
+    let floor = bytes.len().saturating_sub(22 + 65_535);
+    let end = (floor..bytes.len().saturating_sub(21))
+        .rev()
+        .find(|&at| bytes[at..].starts_with(&[0x50, 0x4b, 0x05, 0x06]))
+        .ok_or_else(bad)?;
+    let count = u16_at(end + 10)?;
+    let mut at = u32_at(end + 16)?;
+    let mut files = HashMap::new();
+    for _ in 0..count {
+        if u32_at(at)? != 0x0201_4b50 {
+            return Err(bad());
+        }
+        let method = u16_at(at + 10)?;
+        let packed = u32_at(at + 20)?;
+        let size = u32_at(at + 24)?;
+        let (name_len, extra_len, comment_len) = (u16_at(at + 28)?, u16_at(at + 30)?, u16_at(at + 32)?);
+        let local = u32_at(at + 42)?;
+        let name = String::from_utf8_lossy(bytes.get(at + 46..at + 46 + name_len).ok_or_else(bad)?).into_owned();
+        at += 46 + name_len + extra_len + comment_len;
+        if name.ends_with('/') || size > ZIP_ENTRY_MAX {
+            continue;
+        }
+        if u32_at(local)? != 0x0403_4b50 {
+            return Err(bad());
+        }
+        let start = local + 30 + u16_at(local + 26)? + u16_at(local + 28)?;
+        let data = bytes.get(start..start + packed).ok_or_else(bad)?;
+        let plain = match method {
+            0 => data.to_vec(),
+            8 => {
+                let mut out = Vec::with_capacity(size);
+                flate2::read::DeflateDecoder::new(data)
+                    .take(ZIP_ENTRY_MAX as u64)
+                    .read_to_end(&mut out)
+                    .map_err(|_| bad())?;
+                out
+            }
+            _ => continue,
+        };
+        files.insert(name, plain);
+    }
+    Ok(files)
 }
 
 /// Favorites or a pack, to take to another network.
@@ -992,6 +1049,67 @@ impl WaManager {
         self.with_stickers(|lib| ((), lib.remove_pack(id)));
     }
 
+    /// Adds the sticker pack shared in a message as a pack of ours: its zip
+    /// is unpacked and each sticker uploaded, so it can be sent, starred and
+    /// taken to Signal like any other. Returns the pack's id; adding it
+    /// again replaces it.
+    pub async fn add_shared_pack(&self, chat_id: &str, message_id: &str) -> Result<String, String> {
+        self.recall(chat_id, message_id);
+        let pack = lock(&self.store).sticker_pack(chat_id, message_id).ok_or("That message has no sticker pack.")?;
+        let zip = pack.zip.clone().ok_or("The pack came without its stickers.")?;
+        let name = match self.fetch_cdn(zip.clone(), MEDIA_DIR, "wa", MediaType::StickerPack).await {
+            // Gone from the CDN: the phone that shared it can put it back.
+            Err(CdnError::Rejected(_)) => {
+                let path = self.reupload_media(chat_id, message_id, &zip).await?;
+                self.fetch_cdn(CdnRef { path, ..zip.clone() }, MEDIA_DIR, "wa", MediaType::StickerPack).await?
+            }
+            other => other?,
+        };
+        let file = self.dir.join(MEDIA_DIR).join(&name);
+        let bytes = crate::vault::get().read(&file).map_err(|e| format!("The pack could not be read: {e}"))?;
+        // Only its stickers are kept, in the library.
+        let _ = std::fs::remove_file(&file);
+        let mut files = tauri::async_runtime::spawn_blocking(move || unzip(&bytes)).await.map_err(|e| e.to_string())??;
+        let wanted: Vec<(Vec<u8>, Vec<String>, bool)> = pack
+            .stickers
+            .iter()
+            .filter(|s| !s.lottie)
+            .filter_map(|s| Some((files.remove(&s.file)?, s.emojis.clone(), s.animated)))
+            .collect();
+        if wanted.is_empty() {
+            return Err("That pack has no stickers this app can show.".into());
+        }
+        use futures::StreamExt as _;
+        let uploaded: Vec<_> = futures::stream::iter(wanted)
+            .map(|(bytes, emojis, animated)| async move { self.upload_sticker(bytes).await.map(|(_, file)| (file, emojis, animated)) })
+            .buffered(UPLOADS_AT_ONCE)
+            .collect()
+            .await;
+        let failed = uploaded.iter().filter(|r| r.is_err()).count();
+        let stickers: Vec<(CdnRef, Vec<String>, bool)> = uploaded.into_iter().filter_map(Result::ok).collect();
+        if stickers.is_empty() {
+            return Err("The pack's stickers could not be uploaded.".into());
+        }
+        let id = format!("shared-{}", if pack.id.is_empty() { &zip.sha256 } else { &pack.id });
+        let entry = Pack {
+            id: id.clone(),
+            name: pack.name.clone(),
+            publisher: pack.publisher.clone(),
+            store: false,
+            tray: None,
+            stickers: Vec::new(),
+            added_ms: 0,
+        };
+        self.with_stickers(|lib| {
+            lib.install_pack(entry, stickers, now_ms());
+            ((), true)
+        });
+        if failed > 0 {
+            log::warn!("whatsapp: {failed} stickers of a shared pack were not uploaded");
+        }
+        Ok(id)
+    }
+
     pub fn create_pack(&self, name: &str) -> Result<String, String> {
         if name.trim().is_empty() {
             return Err("A pack needs a name.".into());
@@ -1238,6 +1356,56 @@ mod tests {
         lib.prune();
         assert!(lib.sticker("c").is_none());
         assert!(lib.sticker("a").is_some());
+    }
+
+    /// A zip of one file, stored (method 0) or deflated (8).
+    fn zip_of(name: &str, plain: &[u8], method: u16) -> Vec<u8> {
+        use std::io::Write as _;
+        let data = if method == 8 {
+            let mut deflate = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+            deflate.write_all(plain).unwrap();
+            deflate.finish().unwrap()
+        } else {
+            plain.to_vec()
+        };
+        let header = |zip: &mut Vec<u8>, central: bool| {
+            zip.extend(if central { 0x0201_4b50u32 } else { 0x0403_4b50 }.to_le_bytes());
+            if central {
+                zip.extend([20, 0]);
+            }
+            zip.extend([20, 0, 0, 0]);
+            zip.extend(method.to_le_bytes());
+            zip.extend([0u8; 8]);
+            zip.extend((data.len() as u32).to_le_bytes());
+            zip.extend((plain.len() as u32).to_le_bytes());
+            zip.extend((name.len() as u16).to_le_bytes());
+            zip.extend([0, 0]);
+            if central {
+                zip.extend([0u8; 10]);
+                zip.extend(0u32.to_le_bytes());
+            }
+            zip.extend(name.as_bytes());
+        };
+        let mut zip = Vec::new();
+        header(&mut zip, false);
+        zip.extend(&data);
+        let central = zip.len() as u32;
+        header(&mut zip, true);
+        let size = zip.len() as u32 - central;
+        zip.extend(0x0605_4b50u32.to_le_bytes());
+        zip.extend([0, 0, 0, 0, 1, 0, 1, 0]);
+        zip.extend(size.to_le_bytes());
+        zip.extend(central.to_le_bytes());
+        zip.extend([0, 0]);
+        zip
+    }
+
+    #[test]
+    fn a_shared_packs_zip_is_unpacked() {
+        let plain = b"RIFF deflated deflated deflated WEBP";
+        assert_eq!(unzip(&zip_of("a.webp", plain, 0)).unwrap()["a.webp"], plain);
+        assert_eq!(unzip(&zip_of("b.webp", plain, 8)).unwrap()["b.webp"], plain);
+        assert!(unzip(b"not a zip").is_err());
     }
 
     #[test]

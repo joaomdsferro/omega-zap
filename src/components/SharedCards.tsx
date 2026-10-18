@@ -1,8 +1,48 @@
-import type { ContactCard, Place } from "../backend";
+import { useState } from "react";
+import type { ContactCard, Place, SharedStickerPack } from "../backend";
 import { hueFor, initialsFor } from "../lib/avatar";
 import { Avatar } from "./Avatar";
 import { openExternal } from "./LinkCard";
-import { MapPinIcon } from "./Icons";
+import { CheckIcon, MapPinIcon, StickerIcon } from "./Icons";
+
+/** A sticker pack shared in the chat, to add to the library (and from there to Signal). */
+export function StickerPackCard({ pack, onAdd }: { pack: SharedStickerPack; onAdd?: () => Promise<void> }) {
+  const [state, setState] = useState<"idle" | "adding" | "added">("idle");
+  return (
+    <div className="mb-1 flex w-70 max-w-full items-center gap-3 rounded-md bg-(--quote-bg) px-3 py-2.5">
+      <StickerIcon size={30} className="shrink-0 text-(--icon)" />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-[14px] text-(--text-primary)">{pack.name}</span>
+        <span className="truncate text-[12px] text-(--text-secondary)">
+          {[pack.publisher, `${pack.count} sticker${pack.count === 1 ? "" : "s"}`].filter(Boolean).join(" · ")}
+        </span>
+      </span>
+      {onAdd && pack.count > 0 ? (
+        state === "added" ? (
+          <span className="flex shrink-0 items-center gap-0.5 text-[12px] text-(--accent)">
+            <CheckIcon size={14} />
+            Added
+          </span>
+        ) : (
+          <button
+            type="button"
+            disabled={state === "adding"}
+            onClick={() => {
+              setState("adding");
+              onAdd().then(
+                () => setState("added"),
+                () => setState("idle"),
+              );
+            }}
+            className="h-7 shrink-0 rounded-full bg-(--accent) px-3 text-[12px] font-medium text-white disabled:cursor-wait disabled:opacity-70"
+          >
+            {state === "adding" ? "Adding…" : "Add to stickers"}
+          </button>
+        )
+      ) : null}
+    </div>
+  );
+}
 
 /** Where a place opens: the page the sender picked, or a map at its spot. */
 export function placeUrl(place: Place): string {

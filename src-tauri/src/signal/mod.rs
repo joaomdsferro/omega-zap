@@ -1600,6 +1600,7 @@ impl SignalManager {
                     poll: None,
                     mentions_all: false,
                     timer: None,
+                    sticker_pack: None,
                 };
                 let id = if from_me { ts.to_string() } else { self.message_id(&sender, ts) };
                 let incoming = Incoming {
