@@ -263,12 +263,12 @@ const AWAY_AFTER: Duration = Duration::from_secs(10);
 /// Someone typing or recording in a chat, or stopping.
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct TypingDto {
-    chat_id: String,
+pub(crate) struct TypingDto {
+    pub(crate) chat_id: String,
     /// Who, in a group.
-    who: Option<String>,
-    recording: bool,
-    active: bool,
+    pub(crate) who: Option<String>,
+    pub(crate) recording: bool,
+    pub(crate) active: bool,
 }
 
 /// Whether someone is online, or when they last were.

@@ -461,6 +461,7 @@ pub fn run() {
             signal::commands::signal_fetch_media,
             signal::commands::signal_open_media,
             signal::commands::signal_react,
+            signal::commands::signal_set_typing,
             signal::commands::signal_lists,
             signal::commands::signal_set_favorite,
             signal::commands::signal_save_list,

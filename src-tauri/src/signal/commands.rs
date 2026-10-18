@@ -157,6 +157,11 @@ pub async fn signal_react(
 }
 
 #[tauri::command]
+pub async fn signal_set_typing(mgr: Mgr<'_>, chat_id: String, state: String) -> Result<(), String> {
+    mgr.set_typing(&chat_id, &state).await
+}
+
+#[tauri::command]
 pub fn signal_lists(mgr: Mgr<'_>) -> Vec<ListDto> {
     mgr.lists()
 }

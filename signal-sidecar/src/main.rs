@@ -26,7 +26,8 @@ use presage::libsignal_service::sender::AttachmentSpec;
 use presage::libsignal_service::utils::parse_service_id_with_fallback;
 use presage::libsignal_service::prelude::{ProfileKey, Uuid};
 use presage::libsignal_service::proto::sync_message::{Content as SyncContent, Sent};
-use presage::libsignal_service::proto::{ReceiptMessage, SyncMessage, receipt_message, sync_message};
+use presage::libsignal_service::proto::{ReceiptMessage, SyncMessage, TypingMessage, receipt_message, sync_message, typing_message};
+use presage::libsignal_service::prelude::{GroupMasterKey, GroupSecretParams};
 use presage::libsignal_service::protocol::ServiceId;
 use presage::libsignal_service::push_service::ServiceError;
 use presage::manager::Registered;
@@ -68,6 +69,9 @@ const REPLAY_WINDOW: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// Whether the account sends read receipts. Off until the phone's setting is
 /// known, so nobody is told by mistake.
 pub(crate) static READ_RECEIPTS: AtomicBool = AtomicBool::new(false);
+/// Whether the account shows and sends typing, as the phone's "Typing
+/// indicators" setting says. On, as in Signal, until the phone says otherwise.
+static TYPING_INDICATORS: AtomicBool = AtomicBool::new(true);
 
 #[derive(Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -134,6 +138,8 @@ enum Command {
     /// Writes the picture of a chat, or our own, to `path` unless it is still
     /// the one the app `have`s. Answered with an `avatar` event.
     Avatar { id: u64, target: String, have: Option<String>, path: PathBuf },
+    /// Tells the chat we started or stopped typing.
+    Typing { id: u64, chat: String, active: bool, ts: u64 },
 }
 
 /// Where an attachment lives, the key that decrypts it, and what it is.
@@ -276,6 +282,9 @@ enum Event {
     Receipt { ids: Vec<String>, delivery: &'static str },
     /// Messages that were read on another of our devices.
     Read { messages: Vec<ReadRef> },
+    /// Someone started or stopped typing. Signal's apps forget a start after
+    /// 15 seconds unless it is said again.
+    Typing { chat: String, is_group: bool, sender: String, active: bool },
     /// Someone's profile key arrived, so their picture can be fetched now.
     ProfileKey { id: String },
     /// A phone-number identity (PNI) and an account (ACI) are the same
@@ -300,6 +309,11 @@ fn emit(event: Event) {
 
 fn state(state: &'static str, error: Option<String>) {
     emit(Event::State { state, error });
+}
+
+/// The id a group goes by in typing messages, derived from its master key.
+fn group_id(key: [u8; 32]) -> [u8; 32] {
+    GroupSecretParams::derive_from_master_key(GroupMasterKey::new(key)).get_group_identifier()
 }
 
 fn chat_id(thread: &Thread) -> String {
@@ -629,6 +643,8 @@ struct Receiver {
     history: bool,
     named: HashSet<Uuid>,
     groups: HashSet<[u8; 32]>,
+    /// Group master keys by the group id typing messages name groups with.
+    group_ids: HashMap<[u8; 32], [u8; 32]>,
     /// Senders whose profile key was looked at in this session.
     keyed: HashSet<Uuid>,
     /// PNIs already reported as belonging to an account.
@@ -649,6 +665,7 @@ impl Receiver {
         let mut keys = Vec::new();
         for (key, group) in groups.flatten() {
             self.groups.insert(key);
+            self.group_ids.insert(group_id(key), key);
             keys.extend(group.members.iter().map(|m| (Uuid::from(m.aci), m.profile_key)));
             let members = group.members.iter().map(|m| Uuid::from(m.aci).to_string()).collect();
             emit(Event::Group { id: chat_id(&Thread::Group(key)), name: group.title, members });
@@ -690,6 +707,7 @@ impl Receiver {
         }
         if let Ok(Some(group)) = self.manager.store().group(key).await {
             self.groups.insert(key);
+            self.group_ids.insert(group_id(key), key);
             let keys = group.members.iter().map(|m| (Uuid::from(m.aci), m.profile_key)).collect();
             let members = group.members.iter().map(|m| Uuid::from(m.aci).to_string()).collect();
             emit(Event::Group { id: chat_id(&Thread::Group(key)), name: group.title, members });
@@ -819,10 +837,13 @@ impl Receiver {
     /// What our other devices report: the read receipt setting, and what was
     /// read there.
     fn synced(&self, sync: &SyncMessage) {
-        if let Some(SyncContent::Configuration(configuration)) = &sync.content
-            && let Some(on) = configuration.read_receipts
-        {
-            READ_RECEIPTS.store(on, Ordering::Relaxed);
+        if let Some(SyncContent::Configuration(configuration)) = &sync.content {
+            if let Some(on) = configuration.read_receipts {
+                READ_RECEIPTS.store(on, Ordering::Relaxed);
+            }
+            if let Some(on) = configuration.typing_indicators {
+                TYPING_INDICATORS.store(on, Ordering::Relaxed);
+            }
         }
         let messages: Vec<ReadRef> = sync
             .read
@@ -839,6 +860,25 @@ impl Receiver {
         }
     }
 
+    /// Someone typing, in a chat with them or in a group, which typing
+    /// messages name by its id rather than its key.
+    fn typing(&self, sender: ServiceId, typing: &TypingMessage) {
+        let uuid = sender.raw_uuid();
+        if self.history || uuid == self.me || !TYPING_INDICATORS.load(Ordering::Relaxed) {
+            return;
+        }
+        let thread = match typing.group_id.as_deref() {
+            Some(id) => match <[u8; 32]>::try_from(id).ok().and_then(|id| self.group_ids.get(&id)) {
+                Some(key) => Thread::Group(*key),
+                None => return,
+            },
+            None => Thread::Contact(sender),
+        };
+        let active = typing.action() == typing_message::Action::Started;
+        let is_group = matches!(thread, Thread::Group(_));
+        emit(Event::Typing { chat: chat_id(&thread), is_group, sender: uuid.to_string(), active });
+    }
+
     /// `stored_in` is the chat presage filed a stored message under.
     async fn content(&mut self, content: &Content, stored_in: Option<&Thread>) {
         // Someone who answers a chat we started by phone number proves their
@@ -851,6 +891,9 @@ impl Receiver {
         }
         if let ContentBody::SynchronizeMessage(sync) = &content.body {
             self.synced(sync);
+        }
+        if let ContentBody::TypingMessage(typing) = &content.body {
+            return self.typing(content.metadata.sender, typing);
         }
         // A message we sent from here is stored as our own data message, which
         // names no recipient: only the chat it was filed under says who.
@@ -1001,6 +1044,33 @@ async fn send_as(
                 .send_message(ServiceId::Aci(uuid.into()), wrap(message), ts)
                 .await
                 .map_err(|e| e.to_string())
+        }
+    };
+    tokio::time::timeout(SEND_TIMEOUT, sending)
+        .await
+        .map_err(|_| "Signal did not answer in time.".to_string())?
+}
+
+/// Tells a chat we started or stopped typing, unless the phone turned typing
+/// indicators off. In a group the message names the group by its id and goes
+/// to each member.
+async fn send_typing(manager: &mut Signal, chat: &str, active: bool, ts: u64) -> Result<(), String> {
+    if !TYPING_INDICATORS.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    let action = if active { typing_message::Action::Started } else { typing_message::Action::Stopped };
+    let mut typing = TypingMessage { timestamp: Some(ts), action: Some(action as i32), group_id: None };
+    let sending = async {
+        if let Some(key) = chat.strip_prefix(GROUP_PREFIX) {
+            let key: [u8; 32] = hex::decode(key)
+                .ok()
+                .and_then(|k| k.try_into().ok())
+                .ok_or("Unknown group.")?;
+            typing.group_id = Some(group_id(key).to_vec());
+            manager.send_message_to_group(&key, typing, ts).await.map_err(|e| e.to_string())
+        } else {
+            let uuid: Uuid = chat.parse().map_err(|_| "Unknown chat.")?;
+            manager.send_message(ServiceId::Aci(uuid.into()), typing, ts).await.map_err(|e| e.to_string())
         }
     };
     tokio::time::timeout(SEND_TIMEOUT, sending)
@@ -1161,6 +1231,7 @@ async fn session(
         history: false,
         named: HashSet::new(),
         groups: HashSet::new(),
+        group_ids: HashMap::new(),
         keyed: HashSet::new(),
         aliased: HashSet::new(),
     };
@@ -1268,6 +1339,14 @@ async fn session(
                         emit(Event::Avatar { id, picture, error });
                     });
                 }
+                // On its own task: typing must not wait behind a send, nor hold one up.
+                Some(Command::Typing { id, chat, active, ts }) => {
+                    let mut manager = sender.clone();
+                    tokio::task::spawn_local(async move {
+                        let error = send_typing(&mut manager, &chat, active, ts).await.err();
+                        emit(Event::Done { id, error });
+                    });
+                }
                 Some(Command::Link) => {}
                 None => std::process::exit(0),
             },
@@ -1319,7 +1398,8 @@ async fn run(path: String) {
                         | Command::React { id, .. }
                         | Command::Read { id, .. }
                         | Command::Media { id, .. }
-                        | Command::Avatar { id, .. },
+                        | Command::Avatar { id, .. }
+                        | Command::Typing { id, .. },
                     ) => emit(Event::Done { id, error: Some("Signal is not linked.".into()) }),
                     None => return,
                 }

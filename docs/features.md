@@ -73,12 +73,12 @@ Everything Omega Zap does today, network by network. For what is still missing, 
 
 ## Typing and online
 
-WhatsApp only, for now.
-
 - **Typing.** Someone typing or recording shows in the chat list, with a tinted row, a ring around their
   picture and pulsing dots, and in the chat's header. In a group it names who. It goes away when they
-  stop or their message arrives.
+  stop or their message arrives. On Signal too, unless **Typing indicators** is off on your phone,
+  which also stops yours being sent, as in Signal.
 - **Online and last seen** show in the header of the chat you have open, when the person shares them.
+  WhatsApp only: Signal doesn't share them.
 - **What others see of you.** "typing…" while you write, which **Settings → Privacy → Show when I'm
   typing** turns off. You show as online only while the Omega Zap window is in front, and go offline
   10 seconds after it loses focus or closes, so your phone keeps ringing while the app sits in the tray.
@@ -154,5 +154,5 @@ WhatsApp only, for now.
 - Editing captions from this computer; Signal pinned messages
 - An app lock (a password for the stored data)
 - More than one account per network, WhatsApp Business, Telegram
-- Signal: typing indicators, starting a chat by phone number (saved contacts work), fetching history
+- Signal: starting a chat by phone number (saved contacts work), fetching history
   older than the link

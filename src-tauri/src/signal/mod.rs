@@ -134,6 +134,7 @@ enum BridgeEvent {
         #[serde(default)]
         history: bool,
     },
+    Typing { chat: String, is_group: bool, sender: String, active: bool },
     ProfileKey { id: String },
     Alias { pni: String, aci: String },
     Avatar { id: u64, picture: Option<String>, error: Option<String> },
@@ -1063,6 +1064,19 @@ impl SignalManager {
         Ok(dto)
     }
 
+    /// Tells the chat we are typing or stopped. Signal has no "recording"
+    /// state, so that counts as typing, as in Signal's apps.
+    pub async fn set_typing(&self, chat_id: &str, state: &str) -> Result<(), String> {
+        writable(chat_id)?;
+        let command = serde_json::json!({
+            "cmd": "typing",
+            "chat": chat_id,
+            "active": state != "paused",
+            "ts": now_ms(),
+        });
+        self.request(command, SEND_TIMEOUT).await.map(|_| ()).map_err(|e| format!("Typing not sent: {e}"))
+    }
+
     /// Deletes a message here, or for everyone when `for_everyone` and it is
     /// ours. Returns what is left of it, if anything is shown.
     pub async fn delete_message(&self, chat_id: &str, message_id: &str, for_everyone: bool) -> Result<Option<MessageDto>, String> {
@@ -1521,6 +1535,18 @@ impl SignalManager {
                 drop(store);
                 self.mark_dirty();
             }
+            BridgeEvent::Typing { chat, is_group, sender, active } => {
+                let store = lock(&self.store);
+                let chat_id = store.canonical(&chat);
+                let typing = crate::wa::TypingDto {
+                    who: is_group.then(|| store.display_name(&sender)),
+                    chat_id,
+                    recording: false,
+                    active,
+                };
+                drop(store);
+                let _ = self.app.emit("signal://typing", typing);
+            }
             BridgeEvent::ProfileKey { id } => {
                 // Keys also arrive while the bridge replays history, before it
                 // is connected: the sync that "connected" starts picks those up.
@@ -1572,6 +1598,7 @@ mod tests {
             r#"{"event":"read","messages":[{"sender":"9d0652a3-dcc3-4d11-975f-74d61598733f","ts":1790000000000}]}"#,
             r#"{"event":"done","id":3,"error":null}"#,
             r#"{"event":"profile_key","id":"9d0652a3-dcc3-4d11-975f-74d61598733f"}"#,
+            r#"{"event":"typing","chat":"g.00ff","isGroup":true,"sender":"9d0652a3-dcc3-4d11-975f-74d61598733f","active":true}"#,
             r#"{"event":"avatar","id":4,"picture":"profiles/AbC_-d","error":null}"#,
             r#"{"event":"avatar","id":5,"picture":null,"error":"Signal answered 429"}"#,
             r#"{"event":"reaction","chat":"x","sender":"y","targetAuthor":"x","targetTs":1,"emoji":"👍","remove":false,"history":true}"#,
