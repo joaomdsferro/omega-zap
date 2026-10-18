@@ -41,6 +41,10 @@ diesel = { version = "2.3", default-features = false, features = ["sqlite"] }
 # Stickers are WebP; libwebp built in (static), so nothing is needed on the system.
 webp-animation = { version = "0.10.0", default-features = false, features = ["static"] }
 libwebp-sys2 = { version = "0.2.0", features = ["static"] }
+# Animated stickers for Signal are APNG, in a palette so they fit its size.
+# The versions image already links.
+png = "0.18"
+color_quant = "1.1"
 # Voice messages: the microphone (ALSA on Linux, Core Audio on macOS) and
 # Opus, built in (static, with cmake), so nothing is needed on the system.
 # Telegram (MTProto), in pure Rust. The session is kept as JSON and sealed by

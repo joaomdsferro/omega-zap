@@ -513,6 +513,36 @@ export interface StickerShelf {
   addFoundSticker(packId: string, pick: StickerPick): Promise<void>;
   /** Called whenever the library changes, here or on the phone. */
   subscribe(listener: () => void): () => void;
+  /**
+   * Only the library's stickers can be sent here: no GIFs, no search results
+   * and no new pictures (they are still kept in packs).
+   */
+  libraryOnly?: boolean;
+  /** Where the library is another network's: its packs made into this one's (Signal). */
+  network?: StickerNetwork;
+}
+
+/** Favorites or a pack of the library, as it stands on another network. */
+export interface NetworkPack {
+  /** `favorites` or the library pack's id. */
+  source: string;
+  title: string;
+  /** Stickers in it now (up to what a pack there holds). */
+  count: number;
+  /** How many of those the pack there has; 0 before it is made. */
+  onNetwork: number;
+  /** The link that adds the pack there, once made. */
+  url?: string;
+  uploading: boolean;
+}
+
+/** The library's packs made into another network's packs, which then show on the phone too. */
+export interface StickerNetwork {
+  name: string;
+  packs(): Promise<NetworkPack[]>;
+  /** Makes Favorites or a pack a pack there, replacing one made before, and adds it on the phone. */
+  upload(source: string): Promise<void>;
+  subscribe(listener: () => void): () => void;
 }
 
 export interface ChatBackend {

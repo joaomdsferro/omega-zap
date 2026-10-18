@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type MutableRefObject, type ReactNode } from "react";
 import type { AccountId } from "../accounts/accounts";
-import type { GifResult, LibrarySticker, OutgoingMedia, StickerLibrary, StickerPack, StickerResult, StickerShelf, StorePack } from "../backend";
+import type { GifResult, LibrarySticker, NetworkPack, OutgoingMedia, StickerLibrary, StickerNetwork, StickerPack, StickerResult, StickerShelf, StorePack } from "../backend";
 import { formatFileSize } from "../lib/format";
 import { klipyAvailable, searchGifs, searchStickers } from "../lib/gifs";
 import { GifVideo, useNear } from "./Attachments";
-import { BackIcon, ClockIcon, CloseIcon, CopyIcon, EditIcon, GifIcon, PlusIcon, SmileIcon, StarIcon, StickerIcon, TrashIcon } from "./Icons";
+import { BackIcon, CheckIcon, ClockIcon, CloseIcon, CopyIcon, EditIcon, GifIcon, PlusIcon, SmileIcon, StarIcon, StickerIcon, TrashIcon } from "./Icons";
 import { PopupMenu, type MenuEntry } from "./PopupMenu";
 import { EmojiGrid } from "./ReactionPicker";
 
@@ -41,7 +41,12 @@ interface MediaPanelProps {
 
 /** The composer's panel: emoji, and where the network takes them, GIFs and stickers. */
 export function MediaPanel({ account, onEmoji, onSend, stickers, onError, pasteInto }: MediaPanelProps) {
-  const [tab, setTab] = useState<PanelTab>(() => (onSend ? savedTab() : "emoji"));
+  // Where only the library's stickers can be sent, there are no GIFs.
+  const gifs = !stickers?.libraryOnly;
+  const [tab, setTab] = useState<PanelTab>(() => {
+    const saved = onSend ? savedTab() : "emoji";
+    return saved === "gif" && !gifs ? "stickers" : saved;
+  });
   const choose = (next: PanelTab) => {
     setTab(next);
     try {
@@ -55,7 +60,7 @@ export function MediaPanel({ account, onEmoji, onSend, stickers, onError, pasteI
     { id: "emoji", label: "Emoji", icon: <SmileIcon size={20} /> },
     { id: "gif", label: "GIFs", icon: <GifIcon size={20} /> },
     { id: "stickers", label: "Stickers", icon: <StickerIcon size={20} /> },
-  ];
+  ].filter((t) => gifs || t.id !== "gif") as { id: PanelTab; label: string; icon: ReactNode }[];
 
   return (
     <>
@@ -210,10 +215,13 @@ function StickerTab({ stickers, onSend, onError, pasteInto }: {
   // A picture chosen or pasted, waiting to be sent or put in a pack.
   const [picked, setPicked] = useState<{ picture: Blob; url: string } | null>(null);
   const [sendingPicked, setSendingPicked] = useState(false);
+  const libraryOnly = Boolean(stickers.libraryOnly);
+  const networkPacks = useNetworkPacks(stickers.network, onError);
+  const [addingAll, setAddingAll] = useState<{ done: number; total: number } | null>(null);
 
   useEffect(() => {
-    void klipyAvailable().then(setAvailable);
-  }, []);
+    if (!libraryOnly) void klipyAvailable().then(setAvailable);
+  }, [libraryOnly]);
 
   const pick = useCallback((picture: Blob) => {
     setAdding(false);
@@ -305,6 +313,16 @@ function StickerTab({ stickers, onSend, onError, pasteInto }: {
   }
 
   const searching = available && query.trim().length > 0;
+  // Packs the other network doesn't have yet, or not all of.
+  const behind = [...networkPacks.values()].filter((p) => !p.uploading && p.onNetwork < p.count);
+  async function addAll(network: StickerNetwork) {
+    setAddingAll({ done: 0, total: behind.length });
+    for (const [index, pack] of behind.entries()) {
+      await network.upload(pack.source).catch(onError);
+      setAddingAll({ done: index + 1, total: behind.length });
+    }
+    setAddingAll(null);
+  }
   function foundMenuFor(sticker: StickerResult): MenuEntry[] {
     const items: MenuEntry[] = [
       { label: "Send", icon: <StickerIcon size={20} />, onSelect: () => send(sticker.slug, { kind: "found-sticker", pick: sticker.send }) },
@@ -323,7 +341,7 @@ function StickerTab({ stickers, onSend, onError, pasteInto }: {
           url={picked.url}
           packs={ownPacks}
           busy={sendingPicked}
-          onSend={() => {
+          onSend={libraryOnly ? undefined : () => {
             const sent = picked;
             setSendingPicked(true);
             onSend({ kind: "new-sticker", picture: sent.picture })
@@ -350,7 +368,25 @@ function StickerTab({ stickers, onSend, onError, pasteInto }: {
           }}
         />
       ) : null}
-      <input
+      {stickers.network && (behind.length || addingAll) ? (
+        <div className="mx-2 mt-2 flex shrink-0 items-center gap-2 rounded-xl bg-(--hover-bg) px-3 py-2">
+          <p className="min-w-0 flex-1 text-[12px] leading-snug text-(--text-secondary)">
+            {addingAll
+              ? `Adding your stickers to ${stickers.network.name} and your phone… ${addingAll.done} of ${addingAll.total}`
+              : `${behind.length === 1 ? "1 pack isn't" : `${behind.length} packs aren't`} fully on ${stickers.network.name} yet. Until then, those stickers go as pictures.`}
+          </p>
+          {addingAll ? null : (
+            <button
+              type="button"
+              onClick={() => void addAll(stickers.network!)}
+              className="h-7 shrink-0 rounded-full bg-(--accent) px-3 text-[12px] font-medium text-white"
+            >
+              Add all
+            </button>
+          )}
+        </div>
+      ) : null}
+      {libraryOnly ? null : <input
         type="search"
         value={query}
         disabled={!available}
@@ -359,7 +395,7 @@ function StickerTab({ stickers, onSend, onError, pasteInto }: {
         title={available ? undefined : NO_KEY}
         aria-label="Search stickers"
         className="mx-2 mt-2 mb-1 h-8 shrink-0 rounded-full bg-(--hover-bg) px-3 text-[14px] outline-none placeholder:text-(--text-secondary) disabled:opacity-60"
-      />
+      />}
       {searching ? (
         <>
           <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
@@ -440,6 +476,9 @@ function StickerTab({ stickers, onSend, onError, pasteInto }: {
                       {section.pack?.publisher ? <span> · {section.pack.publisher}</span> : null}
                     </h3>
                   )}
+                  {stickers.network && networkPacks.get(section.id) ? (
+                    <NetworkStatus network={stickers.network} pack={networkPacks.get(section.id)!} onError={onError} />
+                  ) : null}
                   {section.pack && !section.pack.store ? (
                     <>
                       <SmallButton
@@ -543,12 +582,71 @@ function StickerTab({ stickers, onSend, onError, pasteInto }: {
   );
 }
 
+/** The library's packs as they stand on another network, by source; empty where there is none. */
+function useNetworkPacks(network: StickerNetwork | undefined, onError: (e: unknown) => void) {
+  const [packs, setPacks] = useState<Map<string, NetworkPack>>(() => new Map());
+  useEffect(() => {
+    if (!network) return;
+    let alive = true;
+    const load = () =>
+      network
+        .packs()
+        .then((list) => alive && setPacks(new Map(list.map((p) => [p.source, p]))))
+        .catch(onError);
+    load();
+    const stop = network.subscribe(load);
+    return () => {
+      alive = false;
+      stop();
+    };
+  }, [network, onError]);
+  return packs;
+}
+
+/** Whether a pack is on the other network: add it, update it, or copy its link. */
+function NetworkStatus({ network, pack, onError }: { network: StickerNetwork; pack: NetworkPack; onError: (e: unknown) => void }) {
+  if (pack.uploading) {
+    return (
+      <span className="flex shrink-0 items-center gap-1 px-1 text-[12px] text-(--text-secondary)">
+        <span className="block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+        Adding to {network.name}…
+      </span>
+    );
+  }
+  const missing = pack.count - pack.onNetwork;
+  if (pack.url && missing <= 0) {
+    const url = pack.url;
+    return (
+      <>
+        <span className="flex shrink-0 items-center gap-0.5 px-1 text-[12px] text-(--accent)" title={`On ${network.name} here and on your phone`}>
+          <CheckIcon size={14} />
+          On {network.name}
+        </span>
+        <SmallButton label={`Copy the ${network.name} link to ${pack.title}`} onClick={() => void navigator.clipboard.writeText(url).catch(onError)}>
+          <CopyIcon size={15} />
+        </SmallButton>
+      </>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => network.upload(pack.source).catch(onError)}
+      title={pack.url ? `${missing} sticker${missing === 1 ? " isn't" : "s aren't"} in the ${network.name} pack yet; it is made again with them` : `Makes it a ${network.name} pack, here and on your phone`}
+      className="h-6 shrink-0 rounded-full px-2 text-[12px] font-medium text-(--accent) hover:bg-(--hover-bg)"
+    >
+      {pack.url ? `Update on ${network.name}` : `Add to ${network.name}`}
+    </button>
+  );
+}
+
 /** A picture about to become a sticker: send it, or keep it in one of our packs. */
 function PickedSticker({ url, packs, busy, onSend, onAddTo, onCancel }: {
   url: string;
   packs: StickerPack[];
   busy: boolean;
-  onSend: () => void;
+  /** Absent where a new picture can only be kept in a pack. */
+  onSend?: () => void;
   onAddTo: (pack: StickerPack) => void;
   onCancel: () => void;
 }) {
@@ -559,9 +657,11 @@ function PickedSticker({ url, packs, busy, onSend, onAddTo, onCancel }: {
       <span className="flex min-w-0 flex-1 flex-col gap-1.5">
         <span className="text-[14px] text-(--text-primary)">New sticker</span>
         <span className="flex items-center gap-1">
-          <button type="button" disabled={busy} onClick={onSend} className="flex h-7 items-center justify-center rounded-full bg-(--accent) px-3 disabled:cursor-wait">
-            <span className="text-[13px] font-medium text-white">{busy ? "Sending…" : "Send"}</span>
-          </button>
+          {onSend ? (
+            <button type="button" disabled={busy} onClick={onSend} className="flex h-7 items-center justify-center rounded-full bg-(--accent) px-3 disabled:cursor-wait">
+              <span className="text-[13px] font-medium text-white">{busy ? "Sending…" : "Send"}</span>
+            </button>
+          ) : null}
           {packs.length ? (
             <button
               type="button"

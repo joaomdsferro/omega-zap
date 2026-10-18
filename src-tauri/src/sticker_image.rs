@@ -179,6 +179,195 @@ fn encode_animated(frames: &[(RgbaImage, u32)]) -> Result<Vec<u8>, String> {
     Ok(best)
 }
 
+/// What Signal takes for one sticker in a pack.
+const SIGNAL_MAX: usize = 300 * 1024;
+/// The longest an animated sticker plays on Signal.
+const SIGNAL_ANIMATION_MS: u32 = 3000;
+/// An animation longer than Signal's limit plays at most this much quicker;
+/// past that, its end is cut.
+const SIGNAL_SPEEDUP: f64 = 2.0;
+/// The sides an animated sticker shrinks through until it fits.
+const SIGNAL_SIDES: [u32; 4] = [SIDE, 384, 320, 256];
+
+/// A sticker as Signal takes it.
+pub struct SignalSticker {
+    pub bytes: Vec<u8>,
+    /// `image/webp`, or `image/png` for an animated one (APNG).
+    pub mime: &'static str,
+}
+
+/// A sticker as Signal's packs take it: a still WebP as it is when it fits,
+/// an animated one made into an APNG of at most 3 seconds and 300 KB, as
+/// Signal asks. One that can't be made to fit keeps its first frame.
+pub fn for_signal(bytes: &[u8]) -> Result<SignalSticker, String> {
+    let format = image::guess_format(bytes).map_err(|_| "That file is not a picture.".to_string())?;
+    let frames = match format {
+        ImageFormat::Gif => frames(GifDecoder::new(Cursor::new(bytes)).map_err(unreadable)?)?,
+        ImageFormat::WebP => {
+            let decoder = WebPDecoder::new(Cursor::new(bytes)).map_err(unreadable)?;
+            let (w, h) = decoder.dimensions();
+            if !decoder.has_animation() {
+                if w <= SIDE && h <= SIDE && bytes.len() <= SIGNAL_MAX {
+                    return Ok(SignalSticker { bytes: bytes.to_vec(), mime: "image/webp" });
+                }
+                Vec::new()
+            } else {
+                frames(decoder)?
+            }
+        }
+        _ => Vec::new(),
+    };
+    if frames.len() > 1 {
+        let frames = signal_timing(frames);
+        if let Some(bytes) = SIGNAL_SIDES.iter().find_map(|&side| apng_within(&frames, side, SIGNAL_MAX)) {
+            return Ok(SignalSticker { bytes, mime: "image/png" });
+        }
+        let still = encode_static(&frames[0].0)?;
+        return Ok(SignalSticker { bytes: still, mime: "image/webp" });
+    }
+    let made = make(bytes)?;
+    Ok(SignalSticker { bytes: made.bytes, mime: "image/webp" })
+}
+
+/// An animation played quicker, then cut, to last at most Signal's limit.
+fn signal_timing(frames: Vec<(RgbaImage, u32)>) -> Vec<(RgbaImage, u32)> {
+    let total: u32 = frames.iter().map(|(_, ms)| ms).sum();
+    let speed = (f64::from(total) / f64::from(SIGNAL_ANIMATION_MS)).clamp(1.0, SIGNAL_SPEEDUP);
+    let mut out: Vec<(RgbaImage, u32)> = Vec::new();
+    let mut at = 0u32;
+    for (frame, ms) in frames {
+        let ms = ((f64::from(ms) / speed).round() as u32).max(1);
+        if at >= SIGNAL_ANIMATION_MS {
+            break;
+        }
+        let ms = ms.min(SIGNAL_ANIMATION_MS - at);
+        at += ms;
+        out.push((frame, ms));
+    }
+    out
+}
+
+/// The animation as a palette APNG at `side` pixels, when it fits in `max`
+/// bytes. Fewer frames are tried before giving up on the size.
+fn apng_within(frames: &[(RgbaImage, u32)], side: u32, max: usize) -> Option<Vec<u8>> {
+    let mut frames: Vec<(RgbaImage, u32)> = frames
+        .iter()
+        .map(|(f, ms)| (if side == SIDE { f.clone() } else { imageops::resize(f, side, side, FilterType::Triangle) }, *ms))
+        .collect();
+    loop {
+        let bytes = encode_apng(&frames).ok()?;
+        if bytes.len() <= max {
+            return Some(bytes);
+        }
+        // At the smallest side, half the frames before giving up.
+        if side != SIGNAL_SIDES[SIGNAL_SIDES.len() - 1] || frames.len() < 8 {
+            return None;
+        }
+        frames = halve(&frames);
+    }
+}
+
+/// Alpha below this counts as transparent, so the palette isn't spent on
+/// the colours of invisible pixels.
+const CLEAR: u8 = 8;
+/// The palette entry kept for transparency.
+const CLEAR_INDEX: u8 = 255;
+
+/// The frames as one APNG on a shared 256-colour palette (one entry kept for
+/// transparency). Each frame after the first carries only the box that
+/// changed, drawn over the one before.
+fn encode_apng(frames: &[(RgbaImage, u32)]) -> Result<Vec<u8>, String> {
+    let fail = |e: png::EncodingError| format!("The animated sticker could not be made: {e}");
+    let (w, h) = frames[0].0.dimensions();
+    // Trained on every frame, a sample of each to keep it quick.
+    let mut sample = Vec::new();
+    let step = (frames.len() / 12).max(1);
+    for (frame, _) in frames.iter().step_by(step) {
+        sample.extend(frame.pixels().filter(|p| p[3] >= CLEAR).flat_map(|p| p.0));
+    }
+    if sample.is_empty() {
+        sample.extend([0, 0, 0, 255]);
+    }
+    let quant = color_quant::NeuQuant::new(10, 255, &sample);
+    let indexed: Vec<Vec<u8>> = frames
+        .iter()
+        .map(|(frame, _)| frame.pixels().map(|p| if p[3] < CLEAR { CLEAR_INDEX } else { quant.index_of(&p.0) as u8 }).collect())
+        .collect();
+    let map = quant.color_map_rgba();
+    let mut palette = Vec::with_capacity(256 * 3);
+    let mut alpha = Vec::with_capacity(256);
+    for rgba in map.chunks(4).chain(std::iter::once(&[0u8, 0, 0, 0][..])) {
+        palette.extend_from_slice(&rgba[..3]);
+        alpha.push(rgba[3]);
+    }
+
+    // Identical frames are one, showing for both.
+    let mut kept: Vec<(usize, u32)> = Vec::new();
+    for (i, (_, ms)) in frames.iter().enumerate() {
+        match kept.last_mut() {
+            Some((last, total)) if indexed[*last] == indexed[i] => *total += ms,
+            _ => kept.push((i, *ms)),
+        }
+    }
+
+    let mut out = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut out, w, h);
+        encoder.set_color(png::ColorType::Indexed);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_palette(palette);
+        encoder.set_trns(alpha);
+        encoder.set_compression(png::Compression::High);
+        encoder.set_animated(kept.len() as u32, 0).map_err(fail)?;
+        let mut writer = encoder.write_header().map_err(fail)?;
+        let mut previous: Option<&[u8]> = None;
+        for &(i, ms) in &kept {
+            let current = indexed[i].as_slice();
+            let (x, y, bw, bh) = match previous {
+                Some(before) => changed_box(before, current, w, h),
+                None => (0, 0, w, h),
+            };
+            writer.set_frame_dimension(bw, bh).map_err(fail)?;
+            writer.set_frame_position(x, y).map_err(fail)?;
+            writer.set_dispose_op(png::DisposeOp::None).map_err(fail)?;
+            writer.set_blend_op(png::BlendOp::Source).map_err(fail)?;
+            writer.set_frame_delay(ms.min(u16::MAX.into()) as u16, 1000).map_err(fail)?;
+            let mut data = Vec::with_capacity((bw * bh) as usize);
+            for row in y..y + bh {
+                let start = (row * w + x) as usize;
+                data.extend_from_slice(&current[start..start + bw as usize]);
+            }
+            writer.write_image_data(&data).map_err(fail)?;
+            previous = Some(current);
+        }
+        writer.finish().map_err(fail)?;
+    }
+    Ok(out)
+}
+
+/// The smallest box (x, y, width, height) holding every pixel that changed;
+/// one pixel when none did.
+fn changed_box(before: &[u8], after: &[u8], w: u32, h: u32) -> (u32, u32, u32, u32) {
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+    for y in 0..h {
+        let row = (y * w) as usize..((y + 1) * w) as usize;
+        let (a, b) = (&before[row.clone()], &after[row]);
+        if a == b {
+            continue;
+        }
+        let first = a.iter().zip(b).position(|(p, q)| p != q).unwrap_or(0) as u32;
+        let last = (w as usize - 1 - a.iter().rev().zip(b.iter().rev()).position(|(p, q)| p != q).unwrap_or(0)) as u32;
+        x0 = x0.min(first);
+        x1 = x1.max(last);
+        y0 = y0.min(y);
+        y1 = y1.max(y);
+    }
+    if x0 > x1 {
+        return (0, 0, 1, 1);
+    }
+    (x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +413,60 @@ mod tests {
         // A PNG is always made into one.
         let png = png(100, 100);
         assert_ne!(prepare(png.clone()).unwrap().bytes, png);
+    }
+
+    fn animated_webp(frames: u32, ms: i32) -> Vec<u8> {
+        let mut encoder = webp_animation::Encoder::new((SIDE, SIDE)).unwrap();
+        for i in 0..frames {
+            let picture = RgbaImage::from_fn(SIDE, SIDE, |x, y| {
+                let inside = (x as i64 - 256).pow(2) + (y as i64 - 256).pow(2) < 200i64.pow(2);
+                if inside { image::Rgba([(x / 2) as u8, (i * 20) as u8, (y / 2) as u8, 255]) } else { image::Rgba([0, 0, 0, 0]) }
+            });
+            encoder.add_frame(picture.as_raw(), i as i32 * ms).unwrap();
+        }
+        encoder.finalize(frames as i32 * ms).unwrap().to_vec()
+    }
+
+    #[test]
+    fn signal_takes_a_still_webp_as_it_is() {
+        let still = make(&png(300, 300)).unwrap().bytes;
+        let made = for_signal(&still).unwrap();
+        assert_eq!((made.mime, made.bytes == still), ("image/webp", true));
+    }
+
+    #[test]
+    fn signal_gets_an_animated_sticker_as_a_short_apng_within_its_size() {
+        // Five seconds: played quicker, to three.
+        let made = for_signal(&animated_webp(50, 100)).unwrap();
+        assert_eq!(made.mime, "image/png");
+        assert!(made.bytes.len() <= SIGNAL_MAX, "{} bytes", made.bytes.len());
+        let decoder = image::codecs::png::PngDecoder::new(Cursor::new(&made.bytes)).unwrap();
+        let apng = decoder.apng().unwrap();
+        let frames: Vec<_> = apng.into_frames().collect::<Result<_, _>>().unwrap();
+        assert!(frames.len() > 1);
+        let total: u32 = frames
+            .iter()
+            .map(|f| {
+                let (n, d) = f.delay().numer_denom_ms();
+                n / d
+            })
+            .sum();
+        assert!(total <= SIGNAL_ANIMATION_MS, "{total} ms");
+        // Every frame draws the whole picture once composed.
+        let last = frames.last().unwrap().buffer();
+        assert_eq!(last.dimensions().0, last.dimensions().1);
+        assert_eq!(last.get_pixel(0, 0)[3], 0);
+        assert_eq!(last.get_pixel(last.width() / 2, last.height() / 2)[3], 255);
+    }
+
+    #[test]
+    fn the_changed_box_holds_only_what_changed() {
+        let before = vec![0u8; 16];
+        let mut after = before.clone();
+        after[5] = 1; // (1, 1)
+        after[10] = 1; // (2, 2)
+        assert_eq!(changed_box(&before, &after, 4, 4), (1, 1, 2, 2));
+        assert_eq!(changed_box(&before, &before, 4, 4), (0, 0, 1, 1));
     }
 
     #[test]

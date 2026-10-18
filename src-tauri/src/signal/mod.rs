@@ -3,8 +3,9 @@
 
 pub mod commands;
 mod release_notes;
+mod stickers;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -164,6 +165,8 @@ enum BridgeEvent {
     Avatar { id: u64, picture: Option<String>, error: Option<String> },
     /// A file was uploaded and sent: where it now lives on Signal's CDN.
     Uploaded { id: u64, media: Option<serde_json::Value>, error: Option<String> },
+    /// A pack of stickers is on Signal: its id and key, hex.
+    Pack { id: u64, pack_id: Option<String>, pack_key: Option<String>, error: Option<String> },
     Done { id: u64, error: Option<String> },
 }
 
@@ -196,6 +199,10 @@ pub struct SignalManager {
     /// When Signal's release notes were last read, and whether they are being read.
     notes_checked_ms: AtomicI64,
     notes_running: AtomicBool,
+    /// WhatsApp's stickers made into Signal packs.
+    sticker_packs: Mutex<stickers::Packs>,
+    /// The collections being made into Signal packs right now.
+    stickers_uploading: Mutex<HashSet<String>>,
 }
 
 /// A file extension for an attachment, so it is served and opened as what it is.
@@ -309,7 +316,6 @@ impl SignalManager {
         let store = linked.then(|| history.load()).flatten().unwrap_or_default();
         Ok(Arc::new(Self {
             app,
-            dir,
             status: Mutex::new(AccountStatus::idle(linked)),
             store: Mutex::new(store),
             history,
@@ -324,6 +330,9 @@ impl SignalManager {
             pending: Mutex::new(HashMap::new()),
             notes_checked_ms: AtomicI64::new(0),
             notes_running: AtomicBool::new(false),
+            sticker_packs: Mutex::new(if linked { stickers::Packs::load(&dir) } else { stickers::Packs::default() }),
+            stickers_uploading: Mutex::new(HashSet::new()),
+            dir,
         }))
     }
 
@@ -490,6 +499,8 @@ impl SignalManager {
                 log::warn!("signal: could not remove {}: {e}", dir.display());
             }
         }
+        stickers::Packs::remove_file(&self.dir);
+        *lock(&self.sticker_packs) = stickers::Packs::default();
         *lock(&self.store) = ChatStore::default();
         self.notes_checked_ms.store(0, Ordering::Release);
         self.save_dirty.store(false, Ordering::Release);
@@ -1809,6 +1820,12 @@ impl SignalManager {
                     let _ = waiter.send(error.map_or(Ok(media.map(|m| m.to_string())), Err));
                 }
             }
+            BridgeEvent::Pack { id, pack_id, pack_key, error } => {
+                if let Some(waiter) = lock(&self.pending).remove(&id) {
+                    let made = serde_json::json!({ "packId": pack_id, "packKey": pack_key }).to_string();
+                    let _ = waiter.send(error.map_or(Ok(Some(made)), Err));
+                }
+            }
             BridgeEvent::Done { id, error } => {
                 if let Some(waiter) = lock(&self.pending).remove(&id) {
                     let _ = waiter.send(error.map_or(Ok(None), Err));
@@ -1837,6 +1854,7 @@ mod tests {
             r#"{"event":"receipt","ids":["1790000000000"],"delivery":"read"}"#,
             r#"{"event":"read","messages":[{"sender":"9d0652a3-dcc3-4d11-975f-74d61598733f","ts":1790000000000}]}"#,
             r#"{"event":"done","id":3,"error":null}"#,
+            r#"{"event":"pack","id":4,"packId":"ab","packKey":"cd","error":null}"#,
             r#"{"event":"profile_key","id":"9d0652a3-dcc3-4d11-975f-74d61598733f"}"#,
             r#"{"event":"typing","chat":"g.00ff","isGroup":true,"sender":"9d0652a3-dcc3-4d11-975f-74d61598733f","active":true}"#,
             r#"{"event":"blocked","ids":["9d0652a3-dcc3-4d11-975f-74d61598733f"],"groups":["g.00ff"]}"#,

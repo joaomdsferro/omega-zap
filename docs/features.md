@@ -136,6 +136,14 @@ Everything Omega Zap does today, network by network. For what is still missing, 
   installed on the phone are not shared with linked devices, so they can't show here. Right-click a
   sticker, or open a sticker message's menu, to star it or add it to a pack. The search box finds
   stickers on KLIPY; they are made into WhatsApp stickers as they are sent.
+- **Your WhatsApp stickers on Signal**: in a Signal chat the **Stickers** tab shows the same library
+  (the personal WhatsApp account's, or the business one's when only it is linked). **Add to Signal**
+  beside Favorites or a pack, or **Add all**, makes it a Signal pack (still WebP stickers stay as they
+  are; animated ones become APNG of at most 3 seconds and 300 KB, as Signal asks) and installs it on
+  your phone, so the same stickers are in Signal there too. Stickers from those packs go as Signal
+  stickers, which anyone can add; the others go as pictures until their pack is on Signal. A pack
+  that changed on WhatsApp shows **Update on Signal**: Signal packs can't change, so it is made again
+  and replaces the old one on the phone. The copy button gives the pack's signal.art link.
 - **GIFs** (WhatsApp): the **GIFs** tab searches KLIPY and shows what is trending and the GIFs you
   sent.
 - **Link cards** for links that come with one, and for links that don't (fetched from the page's own
@@ -161,7 +169,7 @@ Everything Omega Zap does today, network by network. For what is still missing, 
 
 - Windows and macOS builds
 - Recording voice messages on Signal
-- Signal stickers and GIFs (receiving works)
+- Signal GIFs, and Signal's own sticker packs from the phone (receiving works)
 - Editing captions from this computer; Signal pinned messages
 - An app lock (a password for the stored data)
 - More than one account per network, WhatsApp Business, Telegram

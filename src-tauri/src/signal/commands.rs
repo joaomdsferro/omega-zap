@@ -243,3 +243,18 @@ pub fn signal_person(mgr: Mgr<'_>, id: String) -> crate::store::PersonDto {
 pub fn signal_group_info(mgr: Mgr<'_>, id: String) -> crate::store::GroupInfoDto {
     mgr.group_info(&id)
 }
+
+#[tauri::command]
+pub fn signal_sticker_packs(mgr: Mgr<'_>) -> Result<Vec<super::stickers::SignalPackDto>, String> {
+    mgr.sticker_packs()
+}
+
+#[tauri::command]
+pub async fn signal_upload_stickers(mgr: Mgr<'_>, source: String) -> Result<(), String> {
+    mgr.upload_stickers(&source).await
+}
+
+#[tauri::command]
+pub async fn signal_send_sticker(mgr: Mgr<'_>, chat_id: String, id: String, reply_to: Option<String>) -> Result<MessageDto, String> {
+    mgr.send_sticker(&chat_id, &id, reply_to.as_deref()).await
+}

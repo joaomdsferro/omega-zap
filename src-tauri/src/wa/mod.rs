@@ -1,6 +1,6 @@
 pub mod commands;
 mod convert;
-mod stickers;
+pub mod stickers;
 
 use std::collections::HashMap;
 use std::fs;
@@ -173,6 +173,12 @@ pub struct WaAccounts {
 impl WaAccounts {
     pub fn all(&self) -> [&Arc<WaManager>; 2] {
         [&self.personal, &self.business]
+    }
+
+    /// The account whose stickers the other networks use: the personal one,
+    /// or the business one when only it is linked.
+    pub fn stickers(&self) -> &Arc<WaManager> {
+        if !self.personal.is_linked() && self.business.is_linked() { &self.business } else { &self.personal }
     }
 }
 

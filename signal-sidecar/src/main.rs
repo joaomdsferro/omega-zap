@@ -6,6 +6,7 @@
 mod avatars;
 mod history;
 mod linking;
+mod stickers;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -50,6 +51,8 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(45);
 const MEDIA_TIMEOUT: Duration = Duration::from_secs(120);
 /// Uploading a file of up to 100 MB.
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(540);
+/// Stickers are square, this many pixels a side.
+const STICKER_SIDE: u32 = 512;
 const PROFILE_TIMEOUT: Duration = Duration::from_secs(10);
 const RETRY_DELAY: Duration = Duration::from_secs(5);
 const KEY_SYNC_ATTEMPTS: u32 = 5;
@@ -161,6 +164,24 @@ enum Command {
     /// Deletes stored messages of a chat that disappeared, named by when
     /// they were sent.
     Forget { id: u64, chat: String, timestamps: Vec<u64> },
+    /// Puts a pack of stickers on Signal's CDN and, with `install`, on our
+    /// other devices. Answered with `pack`.
+    UploadPack { id: u64, title: String, author: String, stickers: Vec<stickers::PackSticker>, install: bool, ts: u64 },
+    /// Installs a pack already on Signal on our other devices, or removes it.
+    InstallPack { id: u64, pack_id: String, pack_key: String, install: bool, ts: u64 },
+    /// Sends a sticker from a pack on Signal. Answered with `uploaded`.
+    SendSticker {
+        id: u64,
+        chat: String,
+        pack_id: String,
+        pack_key: String,
+        sticker_id: u32,
+        emoji: Option<String>,
+        path: PathBuf,
+        mime: String,
+        quote: Option<SendQuote>,
+        ts: u64,
+    },
 }
 
 /// Where an attachment lives, the key that decrypts it, and what it is.
@@ -330,6 +351,8 @@ enum Event {
     Avatar { id: u64, picture: Option<String>, error: Option<String> },
     /// The answer to `send_file`: where the file now is.
     Uploaded { id: u64, media: Option<Media>, error: Option<String> },
+    /// The answer to `upload_pack`: the new pack's id and key, hex.
+    Pack { id: u64, pack_id: Option<String>, pack_key: Option<String>, error: Option<String> },
     /// The answer to any other command that carried this `id`.
     Done { id: u64, error: Option<String> },
 }
@@ -1585,6 +1608,42 @@ async fn session(
                     let error = respond(&mut sender, me, &chat, &action, ts).await.err();
                     emit(Event::Done { id, error });
                 }
+                // On its own task: a pack is many uploads.
+                Some(Command::UploadPack { id, title, author, stickers, install, ts }) => {
+                    let (mut manager, service) = (sender.clone(), service.clone());
+                    tokio::task::spawn_local(async move {
+                        let uploaded = match &service {
+                            Some(service) => stickers::upload_pack(service, &title, &author, stickers).await,
+                            None => Err("The Signal session could not be read.".into()),
+                        };
+                        let event = match uploaded {
+                            Ok((pack_id, pack_key)) => {
+                                // The pack is on Signal either way; the phone can still add it later.
+                                if install && let Err(e) = stickers::sync_pack(&mut manager, me, &pack_id, &pack_key, true, ts).await {
+                                    eprintln!("signal: the new pack was not installed on the phone: {e}");
+                                }
+                                Event::Pack { id, pack_id: Some(pack_id), pack_key: Some(pack_key), error: None }
+                            }
+                            Err(e) => Event::Pack { id, pack_id: None, pack_key: None, error: Some(e) },
+                        };
+                        emit(event);
+                    });
+                }
+                Some(Command::InstallPack { id, pack_id, pack_key, install, ts }) => {
+                    let error = stickers::sync_pack(&mut sender, me, &pack_id, &pack_key, install, ts).await.err();
+                    emit(Event::Done { id, error });
+                }
+                Some(Command::SendSticker { id, chat, pack_id, pack_key, sticker_id, emoji, path, mime, quote, ts }) => {
+                    let mut manager = sender.clone();
+                    tokio::task::spawn_local(async move {
+                        let sticker = stickers::OutgoingSticker { chat, pack_id, pack_key, sticker_id, emoji, path, mime, quote };
+                        let (media, error) = match stickers::send_sticker(&mut manager, sticker, ts).await {
+                            Ok(media) => (Some(media), None),
+                            Err(e) => (None, Some(e)),
+                        };
+                        emit(Event::Uploaded { id, media, error });
+                    });
+                }
                 Some(Command::Link) => {}
                 None => std::process::exit(0),
             },
@@ -1641,7 +1700,10 @@ async fn run(path: String) {
                         | Command::Block { id, .. }
                         | Command::Respond { id, .. }
                         | Command::Timer { id, .. }
-                        | Command::Forget { id, .. },
+                        | Command::Forget { id, .. }
+                        | Command::UploadPack { id, .. }
+                        | Command::InstallPack { id, .. }
+                        | Command::SendSticker { id, .. },
                     ) => emit(Event::Done { id, error: Some("Signal is not linked.".into()) }),
                     None => return,
                 }

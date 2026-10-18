@@ -358,6 +358,27 @@ impl Library {
         Ok(())
     }
 
+    /// A collection to take elsewhere: `favorites` or a pack, as its name,
+    /// publisher, and stickers (hash and emojis) in the order shown.
+    pub fn collection(&self, source: &str) -> Option<Collection> {
+        let (name, publisher, hashes) = if source == "favorites" {
+            let mut favorites: Vec<(&String, i64)> = self.stickers.iter().filter_map(|(h, s)| s.favorite_ms.map(|at| (h, at))).collect();
+            favorites.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+            ("Favorites".to_string(), String::new(), favorites.into_iter().map(|(h, _)| h.clone()).collect::<Vec<_>>())
+        } else {
+            let pack = self.packs.iter().find(|p| p.id == source)?;
+            (pack.name.clone(), pack.publisher.clone(), pack.stickers.clone())
+        };
+        let stickers = hashes
+            .into_iter()
+            .filter_map(|h| {
+                let emojis = self.stickers.get(&h)?.emojis.clone();
+                Some((h, emojis))
+            })
+            .collect();
+        Some(Collection { name, publisher, stickers })
+    }
+
     fn dto(&self, hash: &str) -> Option<StickerDto> {
         let s = self.stickers.get(hash)?;
         Some(StickerDto {
@@ -404,6 +425,14 @@ impl Library {
                 .collect(),
         }
     }
+}
+
+/// Favorites or a pack, to take to another network.
+pub struct Collection {
+    pub name: String,
+    pub publisher: String,
+    /// Hash and emojis of each sticker.
+    pub stickers: Vec<(String, Vec<String>)>,
 }
 
 /// One of the packs in WhatsApp's sticker store, as the store lists it.
@@ -620,7 +649,17 @@ impl WaManager {
         Ok(name)
     }
 
-    async fn library_bytes(&self, id: &str) -> Result<Vec<u8>, String> {
+    pub fn sticker_collection(&self, source: &str) -> Option<Collection> {
+        lock(&self.stickers).collection(source)
+    }
+
+    /// The emojis a library sticker goes with.
+    pub fn sticker_emojis(&self, id: &str) -> Vec<String> {
+        lock(&self.stickers).sticker(id).map(|s| s.emojis.clone()).unwrap_or_default()
+    }
+
+    /// A library sticker's or GIF's plain bytes, downloaded if needed.
+    pub(crate) async fn library_bytes(&self, id: &str) -> Result<Vec<u8>, String> {
         let name = self.library_media(id).await?;
         crate::vault::get()
             .read(&self.dir.join(MEDIA_DIR).join(name))

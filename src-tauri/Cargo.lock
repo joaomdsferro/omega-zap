@@ -3431,6 +3431,7 @@ name = "omega-zap"
 version = "0.0.3"
 dependencies = [
  "base64 0.23.1",
+ "color_quant",
  "cpal",
  "diesel",
  "glass_pumpkin",
@@ -3443,6 +3444,7 @@ dependencies = [
  "log",
  "notify-rust",
  "opus",
+ "png 0.18.1",
  "qrcode",
  "ring",
  "secret-service",

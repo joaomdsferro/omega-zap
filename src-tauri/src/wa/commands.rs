@@ -9,7 +9,8 @@ use super::{ACCOUNT_HEADER, ChatSummary, WaAccounts, WaManager};
 use crate::account::AccountStatus as WaStatus;
 
 /// The account a command is for: the business one when the UI names it in
-/// the [`ACCOUNT_HEADER`], else the personal one.
+/// the [`ACCOUNT_HEADER`], the one with the stickers when it says `stickers`,
+/// else the personal one.
 pub struct Mgr<'r>(&'r Arc<WaManager>);
 
 impl Mgr<'_> {
@@ -34,8 +35,12 @@ impl<'r, 'de: 'r, R: tauri::Runtime> CommandArg<'de, R> for Mgr<'r> {
             .try_state::<WaAccounts>()
             .ok_or_else(|| InvokeError::from("WhatsApp is not ready yet."))?
             .inner();
-        let business = message.headers().get(ACCOUNT_HEADER).is_some_and(|v| v == "business");
-        Ok(Mgr(if business { &accounts.business } else { &accounts.personal }))
+        Ok(Mgr(match message.headers().get(ACCOUNT_HEADER).and_then(|v| v.to_str().ok()) {
+            Some("business") => &accounts.business,
+            // The sticker library, as the other networks use it.
+            Some("stickers") => accounts.stickers(),
+            _ => &accounts.personal,
+        }))
     }
 }
 
