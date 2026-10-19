@@ -414,19 +414,22 @@ fn line_max(line: &[u8], r: usize) -> Vec<u8> {
 /// What Signal takes for one sticker in a pack.
 const SIGNAL_MAX: usize = 300 * 1024;
 /// What an animated sticker gives up, in turn, until it fits: its size,
-/// then colours, then frames (keeping one in every so many). Smooth motion
-/// is kept longest, as a sticker shows small anyway.
-const SIGNAL_STEPS: [(u32, usize, usize); 10] = [
-    (SIDE, 255, 1),
-    (384, 255, 1),
-    (320, 255, 1),
-    (256, 255, 1),
-    (256, 128, 1),
-    (256, 64, 1),
-    (256, 128, 2),
-    (256, 64, 2),
-    (256, 64, 4),
-    (192, 64, 4),
+/// then colours, then speed (each frame held at least so many ms), and
+/// size again before it drops under 8 frames a second, as choppy motion
+/// shows more than a smaller sticker does.
+const SIGNAL_STEPS: [(u32, usize, u32); 12] = [
+    (SIDE, 255, 0),
+    (384, 255, 0),
+    (320, 255, 0),
+    (256, 255, 0),
+    (256, 64, 0),
+    (256, 64, 100),
+    (224, 64, 100),
+    (192, 64, 100),
+    (192, 64, 125),
+    (160, 64, 125),
+    (128, 64, 125),
+    (128, 64, 200),
 ];
 /// A step is skipped when the last one's bytes, scaled to it, say it would
 /// come out this much over the limit.
@@ -478,8 +481,9 @@ pub fn for_signal(bytes: &[u8]) -> Result<SignalSticker, String> {
 fn apng_within(frames: &[(RgbaImage, u32)], max: usize) -> Option<Vec<u8>> {
     // Bytes per pixel of every frame, for each palette size tried.
     let mut rates: Vec<(usize, f64)> = Vec::new();
-    for (n, &(side, colors, every)) in SIGNAL_STEPS.iter().enumerate() {
-        let kept = frames.len().div_ceil(every);
+    for (n, &(side, colors, hold)) in SIGNAL_STEPS.iter().enumerate() {
+        let runs = runs_of(frames, hold);
+        let kept = runs.len();
         let pixels = f64::from(side * side) * kept as f64;
         // The nearest palette size measured stands in for this one; fewer
         // colours save less than in proportion (64 of 255 is about ¾ the bytes).
@@ -488,8 +492,8 @@ fn apng_within(frames: &[(RgbaImage, u32)], max: usize) -> Option<Vec<u8>> {
         if !last && rate.is_some_and(|r| r * pixels > max as f64 * SIGNAL_SKIP_OVER) {
             continue;
         }
-        let made: Vec<(RgbaImage, u32)> = frames
-            .chunks(every)
+        let made: Vec<(RgbaImage, u32)> = runs
+            .iter()
             .map(|run| {
                 let frame = &run[0].0;
                 let frame = if side == SIDE { frame.clone() } else { imageops::resize(frame, side, side, FilterType::Triangle) };
@@ -504,6 +508,24 @@ fn apng_within(frames: &[(RgbaImage, u32)], max: usize) -> Option<Vec<u8>> {
         rates.push((colors, bytes.len() as f64 / pixels));
     }
     None
+}
+
+/// The frames in runs that last at least `hold` ms, each to be shown as its
+/// first frame.
+fn runs_of(frames: &[(RgbaImage, u32)], hold: u32) -> Vec<&[(RgbaImage, u32)]> {
+    let mut runs = Vec::new();
+    let (mut start, mut ms) = (0, 0);
+    for (i, (_, shown)) in frames.iter().enumerate() {
+        ms += shown;
+        if ms >= hold {
+            runs.push(&frames[start..=i]);
+            (start, ms) = (i + 1, 0);
+        }
+    }
+    if start < frames.len() {
+        runs.push(&frames[start..]);
+    }
+    runs
 }
 
 /// Alpha below this counts as transparent, so the palette isn't spent on
