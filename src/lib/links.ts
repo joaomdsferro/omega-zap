@@ -64,12 +64,7 @@ export function isPlayable(url: string): boolean {
 /** The player address for a video link, following a short share link first when it has to. */
 export async function embedUrl(raw: string): Promise<string> {
   const link = videoLink(raw);
-  if (link?.embed) {
-    if (link.site === "instagram" && isTauri && !(await invoke<boolean>("instagram_embed_plays", { url: link.embed }))) {
-      throw new Error("Instagram only plays this video on its own site.");
-    }
-    return link.embed;
-  }
+  if (link?.embed) return link.embed;
   if (!link || !isTauri) throw new Error("This link cannot be played here.");
   const followed = await invoke<string>("resolve_short_link", { url: raw.replace(/^http:/, "https:") });
   const embed = videoLink(followed)?.embed;

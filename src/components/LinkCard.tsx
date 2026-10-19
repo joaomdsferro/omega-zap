@@ -117,6 +117,19 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
   const large = wantLarge && !playing;
   const stacked = playing || large || (wide && Boolean(picture));
 
+  // Instagram's player says, through the app's script in it, when it won't play the video here.
+  useEffect(() => {
+    if (!player) return;
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== frame.current?.contentWindow || !event.data?.omegaZapUnplayable) return;
+      setPlayer(null);
+      setNote("This video only plays on its own site. It was opened in your browser.");
+      openExternal(preview.url);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [player, preview.url]);
+
   function changeVolume(level: number) {
     setVolume(level);
     if (level > 0) unmuted.current = level;

@@ -11,7 +11,9 @@
 //! of sound, then none. Without Web Audio it plays the video's own sound.
 //!
 //! The chat can't reach into another site's player, so each player page gets
-//! a script that takes the volume the chat sends it.
+//! a script that takes the volume the chat sends it, and says when Instagram
+//! won't play the video there (for many reels, mostly over their music, it
+//! shows only a picture that links to the site).
 
 use std::sync::OnceLock;
 
@@ -60,12 +62,25 @@ pub fn fix_tiktok(view: &WebView) {
 
 /// Sets every video and sound in a player page to the volume the chat sends,
 /// those that come later too. Only the chat's page, the frame's parent, is heard.
-const VOLUME_SCRIPT: &str = r#"(() => {
+/// On Instagram, tells the chat when the player shows "Watch on Instagram".
+const PLAYER_SCRIPT: &str = r#"(() => {
+  if (window.parent === window) return;
+  if (location.hostname === "www.instagram.com") {
+    const check = () => {
+      if (!document.querySelector(".WatchOnInstagram") || document.querySelector("video")) return false;
+      window.parent.postMessage({ omegaZapUnplayable: true }, "*");
+      return true;
+    };
+    const watch = new MutationObserver(() => check() && watch.disconnect());
+    document.addEventListener("DOMContentLoaded", () => {
+      if (!check()) watch.observe(document.body, { childList: true, subtree: true });
+    });
+  }
   let level = null;
   const apply = (media) => { if (level !== null && media.volume !== level) media.volume = level; };
   const applyAll = () => document.querySelectorAll("video, audio").forEach(apply);
   window.addEventListener("message", (event) => {
-    if (event.source !== window.parent || window.parent === window) return;
+    if (event.source !== window.parent) return;
     const sent = event.data && event.data.omegaZapVolume;
     if (typeof sent !== "number" || !(sent >= 0 && sent <= 1)) return;
     level = sent;
@@ -80,13 +95,13 @@ const VOLUME_SCRIPT: &str = r#"(() => {
   }
 })();"#;
 
-/// Lets the chat set the volume of a window's video players.
-pub fn add_volume(view: &WebView) {
+/// Lets the chat set the volume of a window's video players, and hear which won't play.
+pub fn add_player_script(view: &WebView) {
     let Some(content) = view.user_content_manager() else {
         return;
     };
     content.add_script(&UserScript::new(
-        VOLUME_SCRIPT,
+        PLAYER_SCRIPT,
         UserContentInjectedFrames::AllFrames,
         UserScriptInjectionTime::Start,
         &[

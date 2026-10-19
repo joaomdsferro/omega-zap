@@ -454,7 +454,6 @@ pub fn run() {
             tray::take_pending_open,
             links::resolve_short_link,
             link_preview::link_preview,
-            links::instagram_embed_plays,
             links::x_video,
             signal::commands::signal_status,
             signal::commands::signal_start_linking,
