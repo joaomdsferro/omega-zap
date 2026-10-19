@@ -46,6 +46,11 @@ interface Snapshot {
 const UNDO_GROUP_MS = 700;
 const UNDO_LIMIT = 200;
 
+/** A block the browser added, say on paste, starts a new line when it isn't first. */
+function startsLine(node: Node, index: number): boolean {
+  return index > 0 && node instanceof HTMLElement && /^(DIV|P)$/.test(node.tagName);
+}
+
 /** The text a part of the box stands for: emoji images count as the emoji they show. */
 function textOf(node: Node): string {
   if (node.nodeType === Node.TEXT_NODE) return node.nodeValue ?? "";
@@ -53,19 +58,34 @@ function textOf(node: Node): string {
   if (node instanceof HTMLBRElement) return node.hasAttribute("data-end") ? "" : "\n";
   let text = "";
   node.childNodes.forEach((child, index) => {
-    // A block the browser added, say on paste, starts a new line.
-    if (index > 0 && child instanceof HTMLElement && /^(DIV|P)$/.test(child.tagName)) text += "\n";
+    if (startsLine(child, index)) text += "\n";
     text += textOf(child);
   });
   return text;
 }
 
-/** Where a point in the box falls in its text. */
+/** How much text the first `end` children of `parent` stand for. */
+function lengthBefore(parent: Node, end: number): number {
+  let length = 0;
+  for (let index = 0; index < end; index++) {
+    const child = parent.childNodes[index];
+    if (startsLine(child, index)) length += 1;
+    length += textOf(child).length;
+  }
+  return length;
+}
+
+/** Where a point in the box falls in its text. Counted up the tree from the
+ * point rather than from a copy of everything before it, which every
+ * keystroke would otherwise make, twice. */
 function offsetOf(root: HTMLElement, node: Node, offset: number): number {
-  const range = document.createRange();
-  range.setStart(root, 0);
-  range.setEnd(node, offset);
-  return textOf(range.cloneContents()).length;
+  let length = node.nodeType === Node.TEXT_NODE ? offset : lengthBefore(node, Math.min(offset, node.childNodes.length));
+  for (let child = node; child !== root && child.parentNode; child = child.parentNode) {
+    const index = Array.prototype.indexOf.call(child.parentNode.childNodes, child);
+    length += lengthBefore(child.parentNode, index);
+    if (startsLine(child, index)) length += 1;
+  }
+  return length;
 }
 
 /** The point in the box at `offset` in its text. */
@@ -138,12 +158,19 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     current?.addRange(range);
   }
 
-  /** Draws `value` and puts the cursor at `start`–`end`. */
-  function draw(value: string, start: number, end = start) {
+  /** Draws `value` and puts the cursor at `start`–`end`. With `typed`, the
+   * browser has just put the text and the cursor there itself: when the
+   * drawing comes out the same, the cursor is left alone, since setting the
+   * selection again makes WebKit lay out and spell-check the box anew. */
+  function draw(value: string, start: number, end = start, typed = false) {
     const root = box.current;
     if (!root) return;
     const html = editorHtml(value, 20, marked.current);
     if (root.innerHTML !== html) root.innerHTML = html;
+    else if (typed) {
+      selection.current = { start, end };
+      return;
+    }
     placeSelection(start, end);
   }
 
@@ -182,7 +209,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     // The selection kept is still the one from before this change.
     if (value !== text.current) remember("type");
     text.current = value;
-    draw(value, at.start, at.end);
+    draw(value, at.start, at.end, true);
     report.current(value, at.end);
   }
 
