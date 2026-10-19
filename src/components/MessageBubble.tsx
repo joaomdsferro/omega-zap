@@ -110,39 +110,74 @@ const STATUS_LABEL: Record<DeliveryStatus, string> = {
 
 const RING_LENGTH = 2 * Math.PI * 6;
 
-/** When a message goes, to the second when it is soon: "at 12:15:32", "on 21 Oct at 09:00". */
+/** When a message goes: "12:15:32", or "21 Oct, 09:00" on another day. */
 function expiryTime(at: number): string {
   const when = new Date(at);
-  const soon = at - Date.now() < 60 * 60 * 1000;
-  const time = when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: soon ? "2-digit" : undefined });
-  if (when.toDateString() === new Date().toDateString()) return `at ${time}`;
-  return `on ${when.toLocaleDateString([], { day: "numeric", month: "short" })} at ${time}`;
+  const time = when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  if (when.toDateString() === new Date().toDateString()) return time;
+  return `${when.toLocaleDateString([], { day: "numeric", month: "short" })}, ${time}`;
+}
+
+/** How long until then, in its two largest units, with seconds only in the last hour: "2 hours, 5 minutes". */
+function timeLeft(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const parts: [number, string][] = [
+    [Math.floor(total / 86400), "day"],
+    [Math.floor((total % 86400) / 3600), "hour"],
+    [Math.floor((total % 3600) / 60), "minute"],
+    [total % 60, "second"],
+  ];
+  const first = parts.findIndex(([n]) => n > 0);
+  if (first === -1) return "now";
+  const shown = parts.slice(first, first + 2).filter(([n], i) => n > 0 && (i === 0 || first + i < 3 || total < 3600));
+  return shown.map(([n, unit]) => `${n} ${unit}${n === 1 ? "" : "s"}`).join(", ");
 }
 
 /** A ring by the time that empties as the message's time runs out, as Signal's apps show it. Full until its countdown starts. */
 function TimerRing({ seconds, at }: { seconds: number; at?: number }) {
-  const left = at === undefined ? seconds * 1000 : Math.max(0, at - Date.now());
-  const label = at === undefined ? `Disappears ${timerLabel(seconds)} after it's seen` : `Disappears ${expiryTime(at)}`;
-  const gone = RING_LENGTH * (1 - left / (seconds * 1000));
+  // Worked out once per countdown: changing the animation as it runs would make it jump.
+  const ring = useMemo(() => {
+    const left = at === undefined ? seconds * 1000 : Math.max(0, at - Date.now());
+    return { left, gone: RING_LENGTH * (1 - left / (seconds * 1000)) };
+  }, [at, seconds]);
+  // While pointed at, it says when the message goes and counts down to it.
+  const [hovered, setHovered] = useState(false);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!hovered || at === undefined) return;
+    setNow(Date.now());
+    const tick = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(tick);
+  }, [hovered, at]);
+  const label = at === undefined ? `Disappears ${timerLabel(seconds)} after it's seen` : `Disappears at ${expiryTime(at)}`;
   return (
-    <svg width="12" height="12" viewBox="0 0 16 16" role="img" aria-label={label} className="shrink-0">
-      <title>{label}</title>
-      <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="2" opacity="0.3" />
-      <circle
-        // Drawn again from where it is when the countdown starts or the bubble is redrawn.
-        key={at}
-        cx="8"
-        cy="8"
-        r="6"
-        fill="none"
-        stroke="var(--accent)"
-        strokeWidth="2"
-        strokeDasharray={RING_LENGTH}
-        transform="rotate(-90 8 8)"
-        className={at === undefined ? undefined : "timer-ring"}
-        style={{ strokeDashoffset: gone, "--ring-from": `${gone}px`, "--ring-to": `${RING_LENGTH}px`, animationDuration: `${left}ms` } as CSSProperties}
-      />
-    </svg>
+    <span className="relative flex shrink-0" onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)}>
+      <svg width="12" height="12" viewBox="0 0 16 16" role="img" aria-label={label}>
+        <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="2" opacity="0.3" />
+        <circle
+          key={at}
+          cx="8"
+          cy="8"
+          r="6"
+          fill="none"
+          stroke="var(--accent)"
+          strokeWidth="2"
+          strokeDasharray={RING_LENGTH}
+          transform="rotate(-90 8 8)"
+          className={at === undefined ? undefined : "timer-ring"}
+          style={{ strokeDashoffset: ring.gone, "--ring-from": `${ring.gone}px`, "--ring-to": `${RING_LENGTH}px`, animationDuration: `${ring.left}ms` } as CSSProperties}
+        />
+      </svg>
+      {hovered ? (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute right-1/2 bottom-full z-30 mb-1.5 translate-x-1/2 rounded-md bg-(--panel-header-bg) px-2 py-1 text-[12px] leading-4 whitespace-nowrap text-(--text-primary) tabular-nums"
+          style={{ boxShadow: "0 2px 5px rgba(11,20,26,.26), 0 2px 10px rgba(11,20,26,.16)" }}
+        >
+          {at === undefined ? label : `${label} · in ${timeLeft(at - now)}`}
+        </span>
+      ) : null}
+    </span>
   );
 }
 
