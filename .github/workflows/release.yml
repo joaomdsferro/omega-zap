@@ -21,7 +21,7 @@ jobs:
       tag: ${{ steps.check.outputs.tag }}
       new: ${{ steps.check.outputs.new }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - id: check
         run: |
           tag="v$(jq -r .version package.json)"
@@ -39,7 +39,7 @@ jobs:
     # The oldest supported Ubuntu, so the AppImage runs on older glibc too.
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # The GStreamer plugins go into the AppImage, so videos and voice
       # messages play on any distribution.
@@ -52,19 +52,21 @@ jobs:
 
       # Ubuntu's protoc is too old for the proto3 optional fields in the
       # Signal protocol files.
-      - uses: arduino/setup-protoc@v3
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
         with:
           version: "29.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: pnpm
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           cache-on-failure: true
           workspaces: |
@@ -74,7 +76,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # A draft first, so a release never shows up without its installers.
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Built into the app for GIF search; without it the app has no search.
