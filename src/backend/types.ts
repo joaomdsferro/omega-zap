@@ -170,6 +170,8 @@ export interface Chat {
   lastSeen?: string;
   /** Who is typing or recording right now, as the list says it ("typing…"). */
   typing?: string;
+  /** In a group, the name of who is typing, for the bubble in the chat. */
+  typingWho?: string;
   favorite?: boolean;
   /** Ids of the custom lists the chat is in. */
   lists?: string[];

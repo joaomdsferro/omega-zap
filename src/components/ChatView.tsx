@@ -2,6 +2,7 @@ import { Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useM
 import type { Chat, Contact, GroupInfo as Group, GroupMember, MemberChange, Mention, Message, OutgoingLink, OutgoingMedia, Person, PersonDetails, PinNote, Pins, StarredMessage, StickerLibrary, StickerShelf, TypingState, RequestAnswer, VoiceRecorder } from "../backend";
 import { ContactInfo } from "./ContactInfo";
 import { GroupInfo } from "./GroupInfo";
+import { authorColor } from "../lib/avatar";
 import { listenForFileDrops } from "../lib/dropped";
 import { formatDayLabel, formatMessageTime, sameDay, timerLabel } from "../lib/format";
 import { DisappearingDialog } from "./DisappearingDialog";
@@ -878,11 +879,25 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
             // Inside the content, so the resize keeps the chat at the bottom when it shows.
             <div role="status" className="animate-fade-rise mt-3 flex px-[5%]">
               <span className="sr-only">{chat.typing}</span>
-              <span className="typing-bubble typing-bubble-chat" aria-hidden>
-                <i />
-                <i />
-                <i />
-              </span>
+              {chat.isGroup && chat.typingWho ? (
+                // In a group, who it is, as their messages are signed.
+                <span className="flex flex-col items-start rounded-[7.5px] bg-(--bubble-in) pt-1.5" aria-hidden>
+                  <span className="max-w-60 truncate px-2.5 text-[12.8px] font-medium" style={{ color: authorColor(chat.typingWho) }}>
+                    {chat.typingWho}
+                  </span>
+                  <span className="typing-bubble typing-bubble-chat pt-1.5!">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                </span>
+              ) : (
+                <span className="typing-bubble typing-bubble-chat" aria-hidden>
+                  <i />
+                  <i />
+                  <i />
+                </span>
+              )}
             </div>
           ) : null}
         </div>

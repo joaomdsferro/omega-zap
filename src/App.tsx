@@ -209,6 +209,12 @@ function accountBanner(account: Account, onLink: () => void, onReconnect: () => 
 }
 
 /** Pinned chats first, then the most recent: the order each account already uses. */
+/** Who is typing in a chat: as the list words it, and their name in a group. */
+interface Typing {
+  label: string;
+  who?: string;
+}
+
 /** Someone typing is forgotten after this long without hearing from them. */
 const TYPING_FORGET_MS = 25_000;
 
@@ -286,7 +292,7 @@ function Shell() {
   const messagesOf = useRef<string | null>(null);
   const [forwarding, setForwarding] = useState<Message[] | null>(null);
   /** Who is typing where, by `account:id`, as the list words it. */
-  const [typing, setTyping] = useState<Map<string, string>>(new Map());
+  const [typing, setTyping] = useState<Map<string, Typing>>(new Map());
   const typingTimers = useRef(new Map<string, number>());
   /** Who is online, or when they last were, by `account:id`. */
   const [presence, setPresence] = useState<Map<string, { online: boolean; lastSeen?: string }>>(new Map());
@@ -369,7 +375,7 @@ function Shell() {
         } else if (event.type === "typing") {
           const key = `${backend.account}:${event.chatId}`;
           const label = event.recording ? "recording audio…" : "typing…";
-          showTyping(key, event.active ? (event.who ? `${event.who} is ${label}` : label) : null);
+          showTyping(key, event.active ? { label: event.who ? `${event.who} is ${label}` : label, who: event.who } : null);
         } else if (event.type === "presence") {
           const key = `${backend.account}:${event.chatId}`;
           setPresence((prev) => new Map(prev).set(key, { online: event.online, lastSeen: event.lastSeen ?? prev.get(key)?.lastSeen }));
@@ -426,14 +432,14 @@ function Shell() {
   );
 
   /** Shows someone typing in a chat, or stops; it stops by itself if no word follows, as WhatsApp does. */
-  const showTyping = useCallback((key: string, label: string | null) => {
+  const showTyping = useCallback((key: string, typed: Typing | null) => {
     window.clearTimeout(typingTimers.current.get(key));
     typingTimers.current.delete(key);
-    if (label) typingTimers.current.set(key, window.setTimeout(() => showTyping(key, null), TYPING_FORGET_MS));
+    if (typed) typingTimers.current.set(key, window.setTimeout(() => showTyping(key, null), TYPING_FORGET_MS));
     setTyping((prev) => {
-      if ((prev.get(key) ?? null) === label) return prev;
+      if ((prev.get(key)?.label ?? null) === (typed?.label ?? null)) return prev;
       const next = new Map(prev);
-      if (label) next.set(key, label);
+      if (typed) next.set(key, typed);
       else next.delete(key);
       return next;
     });
@@ -805,7 +811,7 @@ function Shell() {
         // Our own chat is named after us, as the phone does: "João (You)".
         const named = chat.isMe && ownName ? { ...chat, name: `${ownName} (You)`, initials: initialsFor(ownName) } : chat;
         if (!typed && !seen) return named;
-        return { ...named, typing: typed, online: seen?.online, lastSeen: seen?.lastSeen };
+        return { ...named, typing: typed?.label, typingWho: typed?.who, online: seen?.online, lastSeen: seen?.lastSeen };
       });
     });
     if (shown.length > 1) all.sort(byRecency);
