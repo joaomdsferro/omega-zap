@@ -411,6 +411,9 @@ fn line_max(line: &[u8], r: usize) -> Vec<u8> {
     (0..n).map(|i| behind[i].max(ahead[i + 2 * r])).collect()
 }
 
+/// Goes up whenever stickers made for Signal come out better, so ones made
+/// before can be made again.
+pub const SIGNAL_MADE: u32 = 1;
 /// What Signal takes for one sticker in a pack.
 const SIGNAL_MAX: usize = 300 * 1024;
 /// What an animated sticker gives up, in turn, until it fits: its size,

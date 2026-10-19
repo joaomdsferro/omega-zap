@@ -40,6 +40,9 @@ pub struct SignalPack {
     /// Library sticker hashes; each one's place is its id in the pack.
     pub stickers: Vec<String>,
     pub uploaded_ms: i64,
+    /// The [`crate::sticker_image::SIGNAL_MADE`] its stickers were made by.
+    #[serde(default)]
+    pub made: u32,
 }
 
 impl SignalPack {
@@ -247,6 +250,7 @@ impl SignalManager {
             pack_key: made.pack_key,
             stickers: files.into_iter().map(|(hash, ..)| hash).collect(),
             uploaded_ms: now_ms(),
+            made: crate::sticker_image::SIGNAL_MADE,
         };
         let old = {
             let mut packs = lock(&self.sticker_packs);
@@ -280,7 +284,11 @@ impl SignalManager {
             .await
             .map_err(|e| e.to_string())??;
         let emoji = wa.sticker_emojis(id).into_iter().next().unwrap_or_else(|| DEFAULT_EMOJI.to_string());
-        let found = lock(&self.sticker_packs).find(id).map(|(p, n)| (p.pack_id.clone(), p.pack_key.clone(), n));
+        // A sticker's own pack is made again once stickers are made better.
+        let found = lock(&self.sticker_packs)
+            .find(id)
+            .filter(|(p, _)| !p.source.starts_with(SINGLE) || p.made >= crate::sticker_image::SIGNAL_MADE)
+            .map(|(p, n)| (p.pack_id.clone(), p.pack_key.clone(), n));
         let pack = match found {
             Some(pack) => Some(pack),
             None => match self.single_pack(id, &made, &emoji).await {
@@ -384,6 +392,7 @@ impl SignalManager {
             pack_key: made.pack_key,
             stickers: vec![hash.to_string()],
             uploaded_ms: now_ms(),
+            made: crate::sticker_image::SIGNAL_MADE,
         };
         let mut packs = lock(&self.sticker_packs);
         packs.replace(pack.clone());
@@ -419,6 +428,7 @@ mod tests {
             pack_key: "cd".into(),
             stickers: stickers.iter().map(|s| s.to_string()).collect(),
             uploaded_ms: at,
+            made: 0,
         }
     }
 
