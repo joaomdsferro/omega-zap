@@ -1,21 +1,19 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ACCOUNTS, PLANNED_ACCOUNTS, type AccountId } from "../accounts/accounts";
 import type { Account } from "../accounts/useAccount";
 import type { Microphone, Privacy, PrivacyCategory } from "../backend";
 import { version } from "../../package.json";
-import { modKey } from "../lib/platform";
 import {
-  SIDEBAR_DEFAULT,
+  BUBBLE_SHAPES,
   THEMES,
   TRAY_BADGES,
-  ZOOM_STEPS,
   LONG_TEXT_CHARS,
   LONG_TEXT_LINES,
   useSettings,
-  useSidebarWidth,
 } from "../settings/settings";
 import { AccountBadge } from "./AccountBadge";
-import { BackIcon } from "./Icons";
+import { AppearanceSettings } from "./AppearanceSettings";
+import { BackIcon, BellIcon, ChatsIcon, ChevronRightIcon, LockIcon, PaletteIcon, PhoneLinkIcon } from "./Icons";
 import { OwnAvatar } from "./OwnAvatar";
 
 interface SettingsPanelProps {
@@ -158,10 +156,10 @@ function WhatsAppPrivacy({ load, save }: NonNullable<SettingsPanelProps["privacy
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function Section({ title, children }: { title?: string; children: ReactNode }) {
   return (
-    <section className="border-b border-(--divider) px-6 py-5">
-      <h3 className="mb-4 text-[14px] font-medium text-(--accent-strong)">{title}</h3>
+    <section className="border-b border-(--divider) px-6 py-5 last:border-b-0">
+      {title ? <h3 className="mb-4 text-[14px] font-medium text-(--accent-strong)">{title}</h3> : null}
       {children}
     </section>
   );
@@ -383,13 +381,20 @@ function MicrophoneChoice({ list }: { list: () => Promise<Microphone[]> }) {
   );
 }
 
+type Page = "accounts" | "appearance" | "chats" | "notifications" | "privacy";
+
+/** The settings' pages, as listed on the first one; each icon sits on its own colour, as in macOS. */
+const PAGES: { id: Page; label: string; colour: string; icon: (props: { size?: number }) => ReactNode }[] = [
+  { id: "accounts", label: "Accounts", colour: "#16a34a", icon: PhoneLinkIcon },
+  { id: "appearance", label: "Appearance", colour: "#7c3aed", icon: PaletteIcon },
+  { id: "chats", label: "Chats and media", colour: "#2563eb", icon: ChatsIcon },
+  { id: "notifications", label: "Notifications", colour: "#dc2626", icon: BellIcon },
+  { id: "privacy", label: "Privacy", colour: "#475569", icon: LockIcon },
+];
+
 export function SettingsPanel({ accounts, onBack, onLink, privacy, microphones }: SettingsPanelProps) {
   const {
     settings,
-    setTheme,
-    zoomIn,
-    zoomOut,
-    resetZoom,
     setUnifiedInbox,
     setLargeLinkPreviews,
     setFetchLinkPreviews,
@@ -405,277 +410,260 @@ export function SettingsPanel({ accounts, onBack, onLink, privacy, microphones }
     setNotificationOpensChat,
     setSendTyping,
   } = useSettings();
-  const { width: sidebarWidth, setWidth: setSidebarWidth } = useSidebarWidth();
+  const [page, setPage] = useState<Page | null>(null);
+  // The page last opened, so going back puts the focus on its row again.
+  const opened = useRef<Page | null>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const rows = useRef(new Map<Page, HTMLButtonElement>());
 
-  const zoomIndex = ZOOM_STEPS.indexOf(settings.zoom);
+  useEffect(() => {
+    if (page) heading.current?.focus();
+    else if (opened.current) rows.current.get(opened.current)?.focus();
+  }, [page]);
+
+  const linked = accounts.filter((a) => a.status.linked).length;
+  const summary: Record<Page, string> = {
+    accounts: `${linked} of ${accounts.length} linked${settings.unifiedInbox ? " · all chats together" : ""}`,
+    appearance: [
+      THEMES.find((t) => t.id === settings.theme)?.label,
+      BUBBLE_SHAPES.find((b) => b.id === settings.bubbles)?.label.toLowerCase() + " bubbles",
+    ].join(" · "),
+    chats: "Long messages, media, links, chat list",
+    notifications: settings.notifications ? (settings.notificationPreview ? "On, with previews" : "On, without previews") : "Off",
+    privacy: privacy ? "Last seen, online, read receipts, typing" : "Typing",
+  };
+  const title = page ? PAGES.find((p) => p.id === page)!.label : "Settings";
 
   return (
     <div className="flex h-full flex-col bg-(--panel-bg)">
       <header className="flex h-15 shrink-0 items-center gap-4 px-4">
         <button
           type="button"
-          onClick={onBack}
-          aria-label="Back to chats"
+          onClick={page ? () => setPage(null) : onBack}
+          aria-label={page ? "Back to settings" : "Back to chats"}
           className="flex h-9 w-9 items-center justify-center rounded-full text-(--icon) hover:bg-(--hover-bg)"
         >
           <BackIcon size={22} />
         </button>
-        <h1 className="font-display text-[22px] font-bold text-(--text-primary)">Settings</h1>
+        <h1 ref={heading} tabIndex={-1} className="font-display text-[22px] font-bold text-(--text-primary) outline-none">
+          {title}
+        </h1>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <Section title="Accounts">
-          <div className="flex flex-col gap-6">
-            {accounts.map((account) => (
-              <AccountCard key={account.id} account={account} onLink={() => onLink(account.id)} />
-            ))}
-          </div>
-          {PLANNED_ACCOUNTS.length > 0 && (
-            <p className="mt-5 text-[13px] text-(--text-secondary)">
-              Coming later: {PLANNED_ACCOUNTS.join(", ")}.
-            </p>
-          )}
-
-          <div className="mt-5">
-            <Switch
-              checked={settings.unifiedInbox}
-              onChange={setUnifiedInbox}
-              label="Show all chats together"
-              description="One list for every linked account, each chat marked with its network. When off, you switch between accounts from the side rail."
-            />
-          </div>
-        </Section>
-
-        <Section title="Privacy">
-          {privacy ? <WhatsAppPrivacy load={privacy.load} save={privacy.save} /> : null}
-          <Switch
-            checked={settings.sendTyping}
-            onChange={setSendTyping}
-            label="Show when I'm typing"
-            description="Others see “typing…” while you write here. This one is only Omega Zap's: your phone still shows it."
-          />
-        </Section>
-
-        <Section title="Notifications">
-          <Switch
-            checked={settings.notifications}
-            onChange={setNotifications}
-            label="Message notifications"
-            description="New messages, replies and reactions to your messages, except in muted chats and the chat you have open."
-          />
-          {settings.notifications ? (
-            <Switch
-              checked={settings.notificationPreview}
-              onChange={setNotificationPreview}
-              label="Show previews"
-              description="Show what the message says. When off, notifications only name the chat."
-            />
-          ) : null}
-          {settings.notifications ? (
-            <Switch
-              checked={settings.notificationOpensChat}
-              onChange={setNotificationOpensChat}
-              label="Open the chat from a notification"
-              description="Clicking a notification opens its chat, which marks it as read. When off, the chat is pointed out in the list instead."
-            />
-          ) : null}
-          <div className="flex items-center gap-4 rounded-lg px-3 py-2.5">
-            <span className="min-w-0 flex-1">
-              <span className="block text-[15px] text-(--text-primary)">Tray badge</span>
-              <span className="block text-[13px] text-(--text-secondary)">
-                Colour of the unread count on the tray icon.
-              </span>
-            </span>
-            <div className="flex shrink-0 gap-2" role="radiogroup" aria-label="Tray badge colour">
-              {TRAY_BADGES.map((badge) => {
-                const active = settings.trayBadge === badge.id;
-                return (
-                  <button
-                    key={badge.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={active}
-                    aria-label={badge.label}
-                    title={badge.label}
-                    onClick={() => setTrayBadge(badge.id)}
-                    className={[
-                      "flex h-8 min-w-8 items-center justify-center rounded-full px-2 text-[13px] font-bold text-white",
-                      "ring-offset-2 ring-offset-(--panel-bg) transition-shadow",
-                      active ? "ring-2 ring-(--accent)" : "hover:ring-2 hover:ring-(--divider)",
-                    ].join(" ")}
-                    style={{ background: `linear-gradient(${badge.gradient[0]}, ${badge.gradient[1]})` }}
+      {/* Keyed by page, so each one opens at its top. */}
+      <div key={page ?? "root"} className="min-h-0 flex-1 overflow-y-auto">
+        {page === null ? (
+          <>
+            <nav aria-label="Settings" className="flex flex-col px-3 pt-1 pb-4">
+              {PAGES.map(({ id, label, colour, icon: Icon }) => (
+                <button
+                  key={id}
+                  ref={(el) => {
+                    if (el) rows.current.set(id, el);
+                    else rows.current.delete(id);
+                  }}
+                  type="button"
+                  onClick={() => {
+                    opened.current = id;
+                    setPage(id);
+                  }}
+                  className="flex items-center gap-4 rounded-xl px-3 py-3 text-left hover:bg-(--hover-bg)"
+                >
+                  <span
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] text-white shadow-[inset_0_-1px_0_rgba(0,0,0,0.15)]"
+                    style={{ background: colour }}
+                    aria-hidden
                   >
-                    3
-                  </button>
-                );
-              })}
+                    <Icon size={20} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[16px] text-(--text-primary)">{label}</span>
+                    <span className="block truncate text-[13px] text-(--text-secondary)">{summary[id]}</span>
+                  </span>
+                  <ChevronRightIcon size={18} className="shrink-0 text-(--text-secondary)" />
+                </button>
+              ))}
+            </nav>
+            <footer className="border-t border-(--divider) px-6 py-5">
+              <p className="text-[14px] text-(--text-primary)">Omega Zap {version}</p>
+              <p className="mt-1 text-[13px] leading-5 text-(--text-secondary)">
+                An unofficial WhatsApp, Signal and Telegram client. Not affiliated with
+                WhatsApp, Meta, Signal or Telegram.
+              </p>
+            </footer>
+          </>
+        ) : null}
+
+        {page === "appearance" ? <AppearanceSettings /> : null}
+
+        {page === "accounts" ? (
+          <Section>
+            <div className="flex flex-col gap-6">
+              {accounts.map((account) => (
+                <AccountCard key={account.id} account={account} onLink={() => onLink(account.id)} />
+              ))}
             </div>
-          </div>
-        </Section>
+            {PLANNED_ACCOUNTS.length > 0 && (
+              <p className="mt-5 text-[13px] text-(--text-secondary)">
+                Coming later: {PLANNED_ACCOUNTS.join(", ")}.
+              </p>
+            )}
 
-        <Section title="Messages">
-          <Switch
-            checked={settings.shortenLongTexts}
-            onChange={setShortenLongTexts}
-            label="Shorten long messages"
-            description="A long message shows its start and a “Read more” that opens the rest, as on WhatsApp. Search results always show whole."
-          />
-          {settings.shortenLongTexts ? (
-            <>
-              <Stepper
-                label="Characters before “Read more”"
-                value={settings.longTextChars}
-                range={LONG_TEXT_CHARS}
-                onChange={setLongTextChars}
+            <div className="mt-5">
+              <Switch
+                checked={settings.unifiedInbox}
+                onChange={setUnifiedInbox}
+                label="Show all chats together"
+                description="One list for every linked account, each chat marked with its network. When off, you switch between accounts from the side rail."
               />
-              <Stepper
-                label="Lines before “Read more”"
-                value={settings.longTextLines}
-                range={LONG_TEXT_LINES}
-                onChange={setLongTextLines}
-              />
-            </>
-          ) : null}
-        </Section>
-
-        <Section title="Media">
-          <Switch
-            checked={settings.compactMedia}
-            onChange={setCompactMedia}
-            label="Smaller GIFs and stickers"
-            description="GIFs at the size they were sent and stickers at 144 px. When off, they are as large as on WhatsApp: GIFs fill the width of a message, stickers are 190 px."
-          />
-        </Section>
-
-        <Section title="Links">
-          <Switch
-            checked={settings.largeLinkPreviews}
-            onChange={setLargeLinkPreviews}
-            label="Large link pictures"
-            description="Download the full-size picture of a link card from WhatsApp. When off, cards keep the small picture that comes with the message."
-          />
-          <Switch
-            checked={settings.inlineVideos}
-            onChange={setInlineVideos}
-            label="Play videos in the chat"
-            description="TikTok, Instagram, YouTube Shorts and X videos play here, loaded from their site when you press play (for X, the post is looked up when its card shows). When off, they open in your browser."
-          />
-          <Switch
-            checked={settings.fetchLinkPreviews}
-            onChange={setFetchLinkPreviews}
-            label="Cards for links without one"
-            description="When a link arrives with no card, read its title and picture from the site, once, and keep them on this computer. The site sees your IP address, as it would if you opened the link."
-          />
-        </Section>
-
-        {microphones ? (
-          <Section title="Voice messages">
-            <MicrophoneChoice list={microphones} />
+            </div>
           </Section>
         ) : null}
 
-        <Section title="Theme">
-          <div className="flex flex-col gap-1" role="radiogroup" aria-label="Theme">
-            {THEMES.map((theme) => {
-              const active = settings.theme === theme.id;
-              return (
-                <button
-                  key={theme.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={active}
-                  onClick={() => setTheme(theme.id)}
-                  className={[
-                    "flex items-center gap-4 rounded-lg px-3 py-2.5 text-left transition-colors",
-                    active ? "bg-(--selected-bg)" : "hover:bg-(--hover-bg)",
-                  ].join(" ")}
-                >
-                  <span
-                    className="flex h-9 w-12 shrink-0 overflow-hidden rounded-md border border-(--divider)"
-                    aria-hidden
-                  >
-                    {theme.swatch.map((color) => (
-                      <span key={color} className="flex-1" style={{ background: color }} />
-                    ))}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[15px] text-(--text-primary)">{theme.label}</span>
-                    <span className="block text-[13px] text-(--text-secondary)">{theme.description}</span>
-                  </span>
-                  <span
-                    className={[
-                      "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2",
-                      active ? "border-(--accent)" : "border-(--text-secondary)",
-                    ].join(" ")}
-                    aria-hidden
-                  >
-                    {active ? <span className="h-2.5 w-2.5 rounded-full bg-(--accent)" /> : null}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </Section>
-
-        <Section title="Zoom">
-          <div className="flex items-center gap-3">
-            <StepButton label="Zoom out" onClick={zoomOut} disabled={zoomIndex === 0}>
-              −
-            </StepButton>
-            <output className="w-14 text-center text-[15px] tabular-nums text-(--text-primary)" aria-live="polite">
-              {Math.round(settings.zoom * 100)}%
-            </output>
-            <StepButton label="Zoom in" onClick={zoomIn} disabled={zoomIndex === ZOOM_STEPS.length - 1}>
-              +
-            </StepButton>
-            <button
-              type="button"
-              onClick={resetZoom}
-              disabled={settings.zoom === 1}
-              className="ml-2 h-9 rounded-full px-3 text-[14px] text-(--accent-strong) hover:bg-(--hover-bg) disabled:opacity-40"
-            >
-              Reset
-            </button>
-          </div>
-          <p className="mt-3 text-[13px] text-(--text-secondary)">
-            {modKey} + and {modKey} − change the zoom, {modKey} 0 resets it. {modKey} + scroll works too.
-          </p>
-        </Section>
-
-        <Section title="Chat list">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-[14px] text-(--text-primary)">
-              Width <span className="text-(--text-secondary)">{sidebarWidth}px</span>
-            </p>
-            <button
-              type="button"
-              onClick={() => setSidebarWidth(SIDEBAR_DEFAULT)}
-              disabled={sidebarWidth === SIDEBAR_DEFAULT}
-              className="h-9 rounded-full px-3 text-[14px] text-(--accent-strong) hover:bg-(--hover-bg) disabled:opacity-40"
-            >
-              Reset width
-            </button>
-          </div>
-          <p className="mt-2 text-[13px] text-(--text-secondary)">
-            Drag the edge of the chat list to resize it. Double-click the edge to reset.
-          </p>
-          <div className="mt-4">
+        {page === "privacy" ? (
+          <Section>
+            {privacy ? <WhatsAppPrivacy load={privacy.load} save={privacy.save} /> : null}
             <Switch
-              checked={settings.reactionsInList}
-              onChange={setReactionsInList}
-              label="Show reactions"
-              description="A reaction newer than a chat's last message shows in its place, such as “Reacted ❤️ to “See you there””."
+              checked={settings.sendTyping}
+              onChange={setSendTyping}
+              label="Show when I'm typing"
+              description="Others see “typing…” while you write here. This one is only Omega Zap's: your phone still shows it."
             />
-          </div>
-        </Section>
+          </Section>
+        ) : null}
 
-        <Section title="About">
-          <p className="text-[14px] text-(--text-primary)">Omega Zap {version}</p>
-          <p className="mt-1 text-[13px] leading-5 text-(--text-secondary)">
-            An unofficial WhatsApp, Signal and Telegram client. Not affiliated with
-            WhatsApp, Meta, Signal or Telegram.
-          </p>
-        </Section>
+        {page === "notifications" ? (
+          <Section>
+            <Switch
+              checked={settings.notifications}
+              onChange={setNotifications}
+              label="Message notifications"
+              description="New messages, replies and reactions to your messages, except in muted chats and the chat you have open."
+            />
+            {settings.notifications ? (
+              <Switch
+                checked={settings.notificationPreview}
+                onChange={setNotificationPreview}
+                label="Show previews"
+                description="Show what the message says. When off, notifications only name the chat."
+              />
+            ) : null}
+            {settings.notifications ? (
+              <Switch
+                checked={settings.notificationOpensChat}
+                onChange={setNotificationOpensChat}
+                label="Open the chat from a notification"
+                description="Clicking a notification opens its chat, which marks it as read. When off, the chat is pointed out in the list instead."
+              />
+            ) : null}
+            <div className="flex items-center gap-4 rounded-lg px-3 py-2.5">
+              <span className="min-w-0 flex-1">
+                <span className="block text-[15px] text-(--text-primary)">Tray badge</span>
+                <span className="block text-[13px] text-(--text-secondary)">
+                  Colour of the unread count on the tray icon.
+                </span>
+              </span>
+              <div className="flex shrink-0 gap-2" role="radiogroup" aria-label="Tray badge colour">
+                {TRAY_BADGES.map((badge) => {
+                  const active = settings.trayBadge === badge.id;
+                  return (
+                    <button
+                      key={badge.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      aria-label={badge.label}
+                      title={badge.label}
+                      onClick={() => setTrayBadge(badge.id)}
+                      className={[
+                        "flex h-8 min-w-8 items-center justify-center rounded-full px-2 text-[13px] font-bold text-white",
+                        "ring-offset-2 ring-offset-(--panel-bg) transition-shadow",
+                        active ? "ring-2 ring-(--accent)" : "hover:ring-2 hover:ring-(--divider)",
+                      ].join(" ")}
+                      style={{ background: `linear-gradient(${badge.gradient[0]}, ${badge.gradient[1]})` }}
+                    >
+                      3
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </Section>
+        ) : null}
+
+        {page === "chats" ? (
+          <>
+            <Section title="Messages">
+              <Switch
+                checked={settings.shortenLongTexts}
+                onChange={setShortenLongTexts}
+                label="Shorten long messages"
+                description="A long message shows its start and a “Read more” that opens the rest, as on WhatsApp. Search results always show whole."
+              />
+              {settings.shortenLongTexts ? (
+                <>
+                  <Stepper
+                    label="Characters before “Read more”"
+                    value={settings.longTextChars}
+                    range={LONG_TEXT_CHARS}
+                    onChange={setLongTextChars}
+                  />
+                  <Stepper
+                    label="Lines before “Read more”"
+                    value={settings.longTextLines}
+                    range={LONG_TEXT_LINES}
+                    onChange={setLongTextLines}
+                  />
+                </>
+              ) : null}
+            </Section>
+
+            <Section title="Chat list">
+              <Switch
+                checked={settings.reactionsInList}
+                onChange={setReactionsInList}
+                label="Show reactions"
+                description="A reaction newer than a chat's last message shows in its place, such as “Reacted ❤️ to “See you there””."
+              />
+            </Section>
+
+            <Section title="Media">
+              <Switch
+                checked={settings.compactMedia}
+                onChange={setCompactMedia}
+                label="Smaller GIFs and stickers"
+                description="GIFs at the size they were sent and stickers at 144 px. When off, they are as large as on WhatsApp: GIFs fill the width of a message, stickers are 190 px."
+              />
+            </Section>
+
+            <Section title="Links">
+              <Switch
+                checked={settings.largeLinkPreviews}
+                onChange={setLargeLinkPreviews}
+                label="Large link pictures"
+                description="Download the full-size picture of a link card from WhatsApp. When off, cards keep the small picture that comes with the message."
+              />
+              <Switch
+                checked={settings.inlineVideos}
+                onChange={setInlineVideos}
+                label="Play videos in the chat"
+                description="TikTok, Instagram, YouTube Shorts and X videos play here, loaded from their site when you press play (for X, the post is looked up when its card shows). When off, they open in your browser."
+              />
+              <Switch
+                checked={settings.fetchLinkPreviews}
+                onChange={setFetchLinkPreviews}
+                label="Cards for links without one"
+                description="When a link arrives with no card, read its title and picture from the site, once, and keep them on this computer. The site sees your IP address, as it would if you opened the link."
+              />
+            </Section>
+
+            {microphones ? (
+              <Section title="Voice messages">
+                <MicrophoneChoice list={microphones} />
+              </Section>
+            ) : null}
+          </>
+        ) : null}
       </div>
     </div>
   );

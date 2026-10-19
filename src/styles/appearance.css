@@ -36,15 +36,19 @@
   line-height: 24px;
 }
 
-/* Chat background. "theme" keeps what the theme draws. */
-:root[data-wallpaper="plain"] .chat-wallpaper {
+/* Chat background. "theme" keeps what the theme draws. A thumbnail in the
+ * settings names its own with data-wp, whatever the window uses. */
+:root[data-wallpaper="plain"] .chat-wallpaper:not([data-wp]),
+.chat-wallpaper[data-wp="plain"] {
   background-image: none;
 }
-:root[data-wallpaper="dots"] .chat-wallpaper {
+:root[data-wallpaper="dots"] .chat-wallpaper:not([data-wp]),
+.chat-wallpaper[data-wp="dots"] {
   background-image: radial-gradient(color-mix(in srgb, var(--text-secondary) 22%, transparent) 1px, transparent 1.5px);
   background-size: 18px 18px;
 }
-:root[data-wallpaper="glow"] .chat-wallpaper {
+:root[data-wallpaper="glow"] .chat-wallpaper:not([data-wp]),
+.chat-wallpaper[data-wp="glow"] {
   background-image:
     radial-gradient(ellipse 80% 60% at 15% 5%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%),
     radial-gradient(ellipse 70% 55% at 95% 95%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 55%);

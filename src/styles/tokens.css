@@ -14,10 +14,11 @@
 
 /*
  * Semantic colours. Components only read these variables; each theme below
- * fills them in. The WhatsApp themes follow WhatsApp Web's palette.
+ * fills them in. The selectors work on any element, so a settings thumbnail
+ * can show a theme other than the window's. The WhatsApp themes follow WhatsApp Web's palette.
  */
 :root,
-:root[data-theme="whatsapp-light"] {
+[data-theme="whatsapp-light"] {
   color-scheme: light;
   --font-ui: "Segoe UI", "Helvetica Neue", Helvetica, "Lucida Grande", Arial, Ubuntu,
     Cantarell, "Fira Sans", sans-serif;
@@ -71,7 +72,7 @@
   --menu-bg: #ffffff;
 }
 
-:root[data-theme="whatsapp-dark"] {
+[data-theme="whatsapp-dark"] {
   color-scheme: dark;
   --rail-bg: #202c33;
   --rail-active: #374248;
@@ -115,7 +116,7 @@
   --menu-bg: #233138;
 }
 
-:root[data-theme="omegazap-dark"] {
+[data-theme="omegazap-dark"] {
   color-scheme: dark;
   --font-ui: "Source Sans 3", ui-sans-serif, system-ui, sans-serif;
   --font-brand: "Syne", ui-sans-serif, system-ui, sans-serif;
@@ -162,7 +163,7 @@
   --menu-bg: #16201c;
 }
 
-:root[data-theme="omegazap-light"] {
+[data-theme="omegazap-light"] {
   color-scheme: light;
   --font-ui: "Source Sans 3", ui-sans-serif, system-ui, sans-serif;
   --font-brand: "Syne", ui-sans-serif, system-ui, sans-serif;
@@ -208,7 +209,7 @@
   --menu-bg: #ffffff;
 }
 
-:root[data-theme="graphite"] {
+[data-theme="graphite"] {
   color-scheme: dark;
   --rail-bg: #161618;
   --rail-active: #2e2e32;
@@ -252,7 +253,7 @@
   --menu-bg: #2a2a2d;
 }
 
-:root[data-theme="midnight"] {
+[data-theme="midnight"] {
   color-scheme: dark;
   --rail-bg: #0c0e1a;
   --rail-active: #252a52;
@@ -296,7 +297,7 @@
   --menu-bg: #1a1e38;
 }
 
-:root[data-theme="oled"] {
+[data-theme="oled"] {
   color-scheme: dark;
   --rail-bg: #000000;
   --rail-active: #1f1f1f;
@@ -340,7 +341,7 @@
   --menu-bg: #1a1a1a;
 }
 
-:root[data-theme="paper"] {
+[data-theme="paper"] {
   color-scheme: light;
   --rail-bg: #f2ece2;
   --rail-active: #e6dccb;
@@ -384,7 +385,7 @@
   --menu-bg: #fffdf8;
 }
 
-:root[data-theme="frost"] {
+[data-theme="frost"] {
   color-scheme: light;
   --rail-bg: #edf1f7;
   --rail-active: #d9e3f2;

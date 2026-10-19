@@ -53,6 +53,12 @@ export const THEMES: ThemeOption[] = [
     dark: true,
   },
   {
+    id: "omegazap-light",
+    label: "Omega Zap mint",
+    description: "Soft mint with teal accents",
+    swatch: ["#eef5f1", "#c8ebe0", "#0f9f7a"],
+  },
+  {
     id: "omegazap-dark",
     label: "Omega Zap ink",
     description: "Near-black with teal accents",
@@ -60,10 +66,16 @@ export const THEMES: ThemeOption[] = [
     dark: true,
   },
   {
-    id: "omegazap-light",
-    label: "Omega Zap mint",
-    description: "Soft mint with teal accents",
-    swatch: ["#eef5f1", "#c8ebe0", "#0f9f7a"],
+    id: "paper",
+    label: "Paper",
+    description: "Warm cream with terracotta",
+    swatch: ["#f3ecdf", "#fbe2c8", "#c0571a"],
+  },
+  {
+    id: "frost",
+    label: "Frost",
+    description: "Cool light blue",
+    swatch: ["#e9eff7", "#d6e5ff", "#2f6fe4"],
   },
   {
     id: "graphite",
@@ -85,18 +97,6 @@ export const THEMES: ThemeOption[] = [
     description: "Pure black, nothing lit that needn't be",
     swatch: ["#000000", "#0c3b31", "#00c896"],
     dark: true,
-  },
-  {
-    id: "paper",
-    label: "Paper",
-    description: "Warm cream with terracotta",
-    swatch: ["#f3ecdf", "#fbe2c8", "#c0571a"],
-  },
-  {
-    id: "frost",
-    label: "Frost",
-    description: "Cool light blue",
-    swatch: ["#e9eff7", "#d6e5ff", "#2f6fe4"],
   },
 ];
 
@@ -237,6 +237,17 @@ const DEFAULTS: Settings = {
   microphone: null,
 };
 
+/** The choices the Appearance page sets, and what they start as. */
+export type Appearance = Pick<Settings, "theme" | "accent" | "bubbles" | "wallpaper" | "textSize">;
+
+export const DEFAULT_APPEARANCE: Appearance = {
+  theme: DEFAULTS.theme,
+  accent: DEFAULTS.accent,
+  bubbles: DEFAULTS.bubbles,
+  wallpaper: DEFAULTS.wallpaper,
+  textSize: DEFAULTS.textSize,
+};
+
 const STORAGE_KEY = "omega-zap-settings";
 
 function clamp(value: number, min: number, max: number) {
@@ -306,6 +317,8 @@ interface SettingsContextValue {
   setBubbles: (bubbles: BubbleShape) => void;
   setWallpaper: (wallpaper: Wallpaper) => void;
   setTextSize: (size: TextSize) => void;
+  /** Sets several appearance choices at once, as "Restore defaults" and its undo do. */
+  setAppearance: (appearance: Appearance) => void;
   setZoom: (zoom: number) => void;
   zoomIn: () => void;
   zoomOut: () => void;
@@ -400,6 +413,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       setBubbles: (bubbles) => setSettings((s) => ({ ...s, bubbles })),
       setWallpaper: (wallpaper) => setSettings((s) => ({ ...s, wallpaper })),
       setTextSize: (textSize) => setSettings((s) => ({ ...s, textSize })),
+      setAppearance: (appearance) => setSettings((s) => ({ ...s, ...appearance })),
       setZoom,
       zoomIn: () => stepZoom(1),
       zoomOut: () => stepZoom(-1),

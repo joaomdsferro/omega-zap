@@ -354,6 +354,22 @@ export const PhoneLinkIcon = (p: IconProps) => (
   </Svg>
 );
 
+export const PaletteIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.1 0 1.7-.8 1.7-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.8-1.7 1.7-1.7h2a4.1 4.1 0 0 0 4.1-4.1C20.5 6.6 16.7 3.5 12 3.5z" />
+    <circle cx="7.5" cy="11.5" r="1" />
+    <circle cx="10" cy="7.5" r="1" />
+    <circle cx="14.5" cy="7.5" r="1" />
+  </Svg>
+);
+
+export const BellIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15z" />
+    <path d="M10 20.5a2 2 0 0 0 4 0" />
+  </Svg>
+);
+
 export const LockIcon = (p: IconProps) => (
   <Svg {...p}>
     <rect x="5" y="11" width="14" height="10" rx="2" />

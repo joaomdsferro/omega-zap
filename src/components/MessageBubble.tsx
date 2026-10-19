@@ -87,7 +87,8 @@ interface MessageBubbleProps {
   moreActions?: (message: Message) => MenuEntry[];
 }
 
-function Tail({ mine }: { mine: boolean }) {
+/** The point on the first bubble of a run; also drawn in the appearance preview. */
+export function Tail({ mine }: { mine: boolean }) {
   return (
     <svg
       viewBox="0 0 8 13"
