@@ -401,17 +401,12 @@ body {
   }
 }
 
-/* WebKitGTK gives an animated element a layer of its own as it starts and
- * takes it back as it ends, and each swap can show a wrong frame: a flash.
- * Saying the layer is wanted keeps it the whole time. */
 .animate-fade-rise {
   animation: fade-rise 160ms ease both;
-  will-change: opacity, transform;
 }
 
 .animate-fade-in {
   animation: fade-in 120ms ease-out both;
-  will-change: opacity;
 }
 
 .reaction-pop {

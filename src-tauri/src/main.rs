@@ -38,5 +38,14 @@ fn main() {
         unsafe { std::env::set_var("WEBKIT_GST_DMABUF_SINK_DISABLED", "1") };
     }
 
+    // WebKitGTK's DMA-BUF renderer shows wrong frames for an instant in the
+    // window (a dialog flashes twice before it settles) on Wayland, measured
+    // on an AMD iGPU with WebKitGTK 2.54. Without it nothing flashes, and
+    // scrolling stays close to as smooth.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+    }
+
     omega_zap_lib::run()
 }
