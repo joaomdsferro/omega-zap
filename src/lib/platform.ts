@@ -5,3 +5,6 @@ export const isTauri = tauriDetected();
 
 export const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 export const modKey = isMac ? "⌘" : "Ctrl";
+
+/** The desktop app on Linux, where the page is drawn by WebKitGTK. */
+export const isWebKitGtk = isTauri && /Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent);

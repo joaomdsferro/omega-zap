@@ -620,3 +620,11 @@ button.mention:hover {
     inset 0 0 0 1.5px var(--accent),
     0 1px 4px rgba(11, 20, 26, 0.3);
 }
+
+/* WebKitGTK, drawing through DMA-BUF, shows a new layer for a frame before
+ * it is painted: a fade or rise that gives an element its own layer flashes
+ * it twice. Turning the renderer off cures that but makes switching chats
+ * slow, so on Linux things appear without them. */
+:root[data-engine="webkitgtk"] :is(.animate-fade-rise, .animate-fade-in, .animate-toast, .reaction-pop) {
+  animation: none;
+}

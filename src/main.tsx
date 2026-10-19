@@ -2,6 +2,10 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./styles/tokens.css";
+import { isWebKitGtk } from "./lib/platform";
+
+// Some animations flash on WebKitGTK; the styles leave them out there.
+if (isWebKitGtk) document.documentElement.dataset.engine = "webkitgtk";
 
 // Files from the desktop go to the app, not the page (see lib/dropped), but
 // only if the page lets the drop happen: refused here, the system cancels
