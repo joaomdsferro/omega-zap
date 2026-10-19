@@ -26,6 +26,8 @@ const DEFAULT_EMOJI: &str = "🙂";
 const AUTHOR: &str = "Omega Zap";
 /// The source of a pack made for one sticker sent from no pack, before its hash.
 const SINGLE: &str = "single:";
+/// Library stickers as made for Signal, by hash and how they were made.
+pub(super) const MADE_DIR: &str = "stickers-made";
 
 /// A pack made on Signal from WhatsApp's favorites or one of its packs.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -155,6 +157,27 @@ pub fn status(packs: &Packs, collections: &[(String, crate::stickers::Collection
 
 impl SignalManager {
     /// The WhatsApp account whose stickers Signal uses.
+    /// A library sticker as Signal takes it, kept once made, as making an
+    /// animated one takes seconds.
+    async fn made(&self, wa: &WaManager, hash: &str) -> Result<crate::sticker_image::SignalSticker, String> {
+        let kept = |ext: &str| self.dir.join(MADE_DIR).join(format!("{hash}-{}.{ext}", crate::sticker_image::SIGNAL_MADE));
+        for (ext, mime) in [("png", "image/png"), ("webp", "image/webp")] {
+            if let Ok(bytes) = crate::vault::get().read(&kept(ext)) {
+                return Ok(crate::sticker_image::SignalSticker { bytes, mime });
+            }
+        }
+        let bytes = wa.library_bytes(hash).await?;
+        let made = tauri::async_runtime::spawn_blocking(move || crate::sticker_image::for_signal(&bytes))
+            .await
+            .map_err(|e| e.to_string())??;
+        let path = kept(if made.mime == "image/png" { "png" } else { "webp" });
+        let saved = secure_dir(&self.dir.join(MADE_DIR)).and_then(|()| crate::vault::get().write(&path, &made.bytes));
+        if let Err(e) = saved {
+            log::warn!("signal: a sticker made for Signal could not be kept: {e}");
+        }
+        Ok(made)
+    }
+
     fn wa(&self) -> Result<Arc<WaManager>, String> {
         self.app
             .try_state::<WaAccounts>()
@@ -199,14 +222,7 @@ impl SignalManager {
         let mut files: Vec<(String, String, PathBuf, &'static str)> = Vec::new();
         let mut missing = 0usize;
         for (hash, emojis) in collection.stickers.iter().take(PACK_MAX) {
-            let made = match wa.library_bytes(hash).await {
-                Ok(bytes) => tauri::async_runtime::spawn_blocking(move || crate::sticker_image::for_signal(&bytes))
-                    .await
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| r),
-                Err(e) => Err(e),
-            };
-            let made = match made {
+            let made = match self.made(&wa, hash).await {
                 Ok(made) => made,
                 Err(e) => {
                     log::warn!("signal: a sticker was left out of the pack: {e}");
@@ -279,10 +295,7 @@ impl SignalManager {
     pub async fn send_sticker(&self, chat_id: &str, id: &str, reply_to: Option<&str>) -> Result<MessageDto, String> {
         writable(chat_id)?;
         let wa = self.wa()?;
-        let bytes = wa.library_bytes(id).await?;
-        let made = tauri::async_runtime::spawn_blocking(move || crate::sticker_image::for_signal(&bytes))
-            .await
-            .map_err(|e| e.to_string())??;
+        let made = self.made(&wa, id).await?;
         let emoji = wa.sticker_emojis(id).into_iter().next().unwrap_or_else(|| DEFAULT_EMOJI.to_string());
         // A sticker's own pack is made again once stickers are made better.
         let found = lock(&self.sticker_packs)

@@ -491,7 +491,7 @@ impl SignalManager {
                 log::warn!("signal: could not remove {}: {e}", path.display());
             }
         }
-        for name in [MEDIA_DIR, AVATAR_DIR] {
+        for name in [MEDIA_DIR, AVATAR_DIR, stickers::MADE_DIR] {
             let dir = self.dir.join(name);
             if dir.exists()
                 && let Err(e) = fs::remove_dir_all(&dir)
