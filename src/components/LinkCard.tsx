@@ -150,33 +150,7 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
       ].join(" ")}
     >
       {playing ? (
-        <div className="flex items-center justify-between">
-          {player ? (
-            <div className="flex items-center gap-1 pl-1">
-              <button
-                type="button"
-                onClick={() => changeVolume(volume > 0 ? 0 : unmuted.current)}
-                aria-label={volume > 0 ? "Mute" : "Unmute"}
-                title={volume > 0 ? "Mute" : "Unmute"}
-                className="flex h-8 w-8 items-center justify-center rounded-full text-(--text-secondary) hover:text-(--text-primary)"
-              >
-                {volume > 0 ? <VolumeIcon size={18} /> : <MuteIcon size={18} />}
-              </button>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={volume}
-                onChange={(event) => changeVolume(Number(event.target.value))}
-                aria-label="Volume"
-                aria-valuetext={`${Math.round(volume * 100)}%`}
-                className="w-24 accent-(--accent)"
-              />
-            </div>
-          ) : (
-            <span />
-          )}
+        <div className="flex justify-end">
           <button
             type="button"
             onClick={() => {
@@ -204,22 +178,46 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
           videoStyle={{ aspectRatio: `${clip.width} / ${clip.height}` }}
         />
       ) : player ? (
-        <iframe
-          ref={frame}
-          src={player}
-          // The player's script is in place once its page loads; it is told again as it starts, in case.
-          onLoad={() => {
-            sendVolume(frame.current, volume);
-            window.setTimeout(() => sendVolume(frame.current, localVolume.current), 1500);
-          }}
-          title={preview.title ?? "Video"}
-          allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
-          allowFullScreen
-          referrerPolicy="strict-origin-when-cross-origin"
-          sandbox="allow-scripts allow-same-origin allow-popups allow-presentation"
-          // Instagram wraps the video in its own header and footer.
-          className={["w-full border-0 bg-black", video?.site === "instagram" ? "h-150" : "aspect-9/16"].join(" ")}
-        />
+        <>
+          <iframe
+            ref={frame}
+            src={player}
+            // The player's script is in place once its page loads; it is told again as it starts, in case.
+            onLoad={() => {
+              sendVolume(frame.current, volume);
+              window.setTimeout(() => sendVolume(frame.current, localVolume.current), 1500);
+            }}
+            title={preview.title ?? "Video"}
+            allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+            allowFullScreen
+            referrerPolicy="strict-origin-when-cross-origin"
+            sandbox="allow-scripts allow-same-origin allow-popups allow-presentation"
+            // Instagram wraps the video in its own header and footer.
+            className={["w-full border-0 bg-black", video?.site === "instagram" ? "h-150" : "aspect-9/16"].join(" ")}
+          />
+          <div className="flex items-center gap-1 py-0.5 pr-3 pl-1">
+            <button
+              type="button"
+              onClick={() => changeVolume(volume > 0 ? 0 : unmuted.current)}
+              aria-label={volume > 0 ? "Mute" : "Unmute"}
+              title={volume > 0 ? "Mute" : "Unmute"}
+              className="flex h-8 w-8 items-center justify-center rounded-full text-(--text-secondary) hover:text-(--text-primary)"
+            >
+              {volume > 0 ? <VolumeIcon size={18} /> : <MuteIcon size={18} />}
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={volume}
+              onChange={(event) => changeVolume(Number(event.target.value))}
+              aria-label="Volume"
+              aria-valuetext={`${Math.round(volume * 100)}%`}
+              className="min-w-0 flex-1 accent-(--accent)"
+            />
+          </div>
+        </>
       ) : picture || video ? (
         <div
           onClick={video ? undefined : () => openExternal(preview.url)}
