@@ -19,6 +19,20 @@ interface AvatarProps {
 export function Avatar({ name, initials, hue, src, size, group, online, note, timer }: AvatarProps) {
   // The placeholder stays underneath, so a picture that fails to load just disappears.
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  // Drawn alone: over the other layers, their edges showed round it.
+  if (note) {
+    return (
+      <div className="relative shrink-0" style={{ width: size, height: size }} role="img" aria-label={name}>
+        <div
+          className="flex h-full w-full items-center justify-center rounded-full"
+          style={{ background: "color-mix(in oklab, #2c6bed 22%, var(--panel-bg))", color: "color-mix(in oklab, #2c6bed 80%, var(--text-primary))" }}
+        >
+          <NoteIcon size={size * 0.5} />
+        </div>
+        {timer ? <AvatarTimer side={timer} size={size} /> : null}
+      </div>
+    );
+  }
   return (
     <div
       className="relative shrink-0"
@@ -44,14 +58,7 @@ export function Avatar({ name, initials, hue, src, size, group, online, note, ti
       >
         {initials}
       </div>
-      {note ? (
-        <div
-          className="absolute inset-0 flex items-center justify-center rounded-full"
-          style={{ background: "color-mix(in oklab, #2c6bed 22%, var(--panel-bg))", color: "color-mix(in oklab, #2c6bed 80%, var(--text-primary))" }}
-        >
-          <NoteIcon size={size * 0.5} />
-        </div>
-      ) : src && src !== failedSrc ? (
+      {src && src !== failedSrc ? (
         <img
           src={src}
           alt=""
@@ -65,15 +72,7 @@ export function Avatar({ name, initials, hue, src, size, group, online, note, ti
         />
       ) : null}
       {timer ? (
-        <span
-          className={[
-            "absolute -bottom-0.75 flex items-center justify-center rounded-full border-2 border-(--panel-bg) bg-(--accent) text-(--on-accent)",
-            timer === "left" ? "-left-0.75" : "-right-0.75",
-          ].join(" ")}
-          style={{ width: Math.round(size * 0.42), height: Math.round(size * 0.42) }}
-        >
-          <TimerIcon size={Math.round(size * 0.25)} strokeWidth={2.4} />
-        </span>
+        <AvatarTimer side={timer} size={size} />
       ) : online ? (
         <span
           className="absolute right-0 bottom-0 rounded-full border-2 border-(--panel-bg) bg-(--accent)"
@@ -81,6 +80,20 @@ export function Avatar({ name, initials, hue, src, size, group, online, note, ti
         />
       ) : null}
     </div>
+  );
+}
+
+function AvatarTimer({ side, size }: { side: "right" | "left"; size: number }) {
+  return (
+    <span
+      className={[
+        "absolute -bottom-0.75 flex items-center justify-center rounded-full border-2 border-(--panel-bg) bg-(--accent) text-(--on-accent)",
+        side === "left" ? "-left-0.75" : "-right-0.75",
+      ].join(" ")}
+      style={{ width: Math.round(size * 0.42), height: Math.round(size * 0.42) }}
+    >
+      <TimerIcon size={Math.round(size * 0.25)} strokeWidth={2.4} />
+    </span>
   );
 }
 
