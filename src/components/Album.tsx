@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { Message } from "../backend";
+import type { GroupMember, Message } from "../backend";
+import { SenderAvatar } from "./Avatar";
 import { authorColor } from "../lib/avatar";
 import { formatMessageTime } from "../lib/format";
 import type { LoadMedia } from "./Attachments";
@@ -32,21 +33,25 @@ export function continuesAlbum(last: Message, next: Message): boolean {
 interface AlbumProps {
   messages: Message[];
   showAuthor: boolean;
+  /** As on a message bubble. */
+  sender?: GroupMember | null;
+  onOpenPerson?: (id: string) => void;
   tail: boolean;
   loadMedia?: LoadMedia;
   onOpen?: (message: Message) => void;
 }
 
 /** Four or more photos in a row, as WhatsApp shows them: a 2×2 grid, the fourth counting the rest. */
-export function Album({ messages, showAuthor, tail, loadMedia, onOpen }: AlbumProps) {
+export function Album({ messages, showAuthor, sender, onOpenPerson, tail, loadMedia, onOpen }: AlbumProps) {
   const first = messages[0];
   const mine = first.fromMe;
   const tiles = messages.slice(0, 4);
   const more = messages.length - tiles.length;
   return (
     <div
-      className={["flex px-[5%]", mine ? "flex-row-reverse" : "flex-row", tail ? "mt-3" : "mt-0.5"].join(" ")}
+      className={["flex gap-1 px-[5%]", mine ? "flex-row-reverse" : "flex-row", tail ? "mt-3" : "mt-0.5"].join(" ")}
     >
+      {sender !== undefined && !mine ? <SenderAvatar member={sender} onOpen={onOpenPerson} /> : null}
       <div
         className={["rounded-[7.5px] p-0.75", tail ? (mine ? "rounded-tr-none" : "rounded-tl-none") : ""].join(" ")}
         style={{ background: mine ? "var(--bubble-out)" : "var(--bubble-in)", boxShadow: "var(--bubble-shadow)" }}

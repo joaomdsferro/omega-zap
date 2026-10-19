@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { isWhatsApp, type AccountId } from "../accounts/accounts";
-import type { DeliveryStatus, LinkPreview, Message, ReplyQuote } from "../backend";
+import type { DeliveryStatus, GroupMember, LinkPreview, Message, ReplyQuote } from "../backend";
 import { authorColor } from "../lib/avatar";
 import { formatMessageTime, formatVoiceDuration, timerLabel } from "../lib/format";
 import { fetchLinkPreview, findLinks, isPlayable, readyLinkPreview } from "../lib/links";
@@ -14,6 +14,7 @@ import { canEdit } from "./EditDialog";
 import { PollCard } from "./PollCard";
 import { ContactCards, PlaceCard, StickerPackCard } from "./SharedCards";
 import { canForward } from "./ForwardDialog";
+import { SenderAvatar } from "./Avatar";
 import {
   BlockedIcon,
   ChevronDownIcon,
@@ -44,6 +45,9 @@ interface MessageBubbleProps {
   /** The network decides how reactions look and which ones are offered. */
   account: AccountId;
   showAuthor: boolean;
+  /** Signal's groups: who wrote it, pictured beside the last of their row
+   * (`null` keeps the room on the others). */
+  sender?: GroupMember | null;
   /** First bubble of a run from the same sender: gets the tail. */
   tail: boolean;
   loadMedia?: LoadMedia;
@@ -348,7 +352,7 @@ const LONG_PRESS_MS = 450;
 /** WhatsApp's forwarding score from which a message counts as forwarded many times. */
 const FORWARDED_MANY = 5;
 
-export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight, pinned, onEdit, onPin, onSelect, onVote, onAddPack, onMessageContact, moreActions }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, account, showAuthor, sender, tail, loadMedia, openMedia, loadLinkThumbnail, onOpenPhoto, onReact, onStar, onReply, onForward, onDelete, onJumpTo, onOpenPerson, flash, highlight, pinned, onEdit, onPin, onSelect, onVote, onAddPack, onMessageContact, moreActions }: MessageBubbleProps) {
   const { settings } = useSettings();
   const [picking, setPicking] = useState(false);
   // The reactions' details, opened from their pill.
@@ -573,6 +577,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
         found ? "message-flash message-flash-short" : "",
       ].join(" ")}
     >
+      {sender !== undefined && !mine ? <SenderAvatar member={sender} onOpen={onOpenPerson} /> : null}
       <div
         ref={bubble}
         data-bubble

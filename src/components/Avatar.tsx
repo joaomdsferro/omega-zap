@@ -74,3 +74,19 @@ export function Avatar({ name, initials, hue, src, size, group, online, timer }:
     </div>
   );
 }
+
+/**
+ * Who wrote a group message, beside it as Signal shows it: their picture on
+ * the last message in a row of theirs, the same room left empty on the rest.
+ */
+export function SenderAvatar({ member, onOpen }: { member: { id: string; name: string; initials: string; avatarHue: number; avatarUrl?: string } | null; onOpen?: (id: string) => void }) {
+  if (!member) return <div aria-hidden className="w-7 shrink-0" />;
+  const avatar = <Avatar name={member.name} initials={member.initials} hue={member.avatarHue} src={member.avatarUrl} size={28} />;
+  return onOpen ? (
+    <button type="button" onClick={() => onOpen(member.id)} aria-label={`Contact info for ${member.name}`} className="shrink-0 self-end rounded-full">
+      {avatar}
+    </button>
+  ) : (
+    <div className="shrink-0 self-end">{avatar}</div>
+  );
+}

@@ -2,7 +2,7 @@ import { Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useM
 import type { Chat, Contact, GroupInfo as Group, GroupMember, MemberChange, Mention, Message, OutgoingLink, OutgoingMedia, Person, PersonDetails, PinNote, Pins, StarredMessage, StickerLibrary, StickerShelf, TypingState, RequestAnswer, VoiceRecorder } from "../backend";
 import { ContactInfo } from "./ContactInfo";
 import { GroupInfo } from "./GroupInfo";
-import { authorColor } from "../lib/avatar";
+import { authorColor, hueFor, initialsFor } from "../lib/avatar";
 import { listenForFileDrops } from "../lib/dropped";
 import { formatDayLabel, formatMessageTime, sameDay, timerLabel } from "../lib/format";
 import { DisappearingDialog } from "./DisappearingDialog";
@@ -140,6 +140,37 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
     async () => (await loadGroup!(chat.id)).participants.filter((m) => !m.isMe),
     [loadGroup, chat.id],
   );
+  // Signal pictures who wrote each group message beside it.
+  const [members, setMembers] = useState<Map<string, GroupMember> | null>(null);
+  const strangers = useRef(new Map<string, GroupMember>());
+  const pictured = chat.account === "signal" && Boolean(chat.isGroup) && Boolean(loadGroup);
+  useEffect(() => {
+    setMembers(null);
+    if (!pictured) return;
+    let alive = true;
+    loadGroup!(chat.id)
+      .then((group) => alive && setMembers(new Map(group.participants.map((m) => [m.id, m]))))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [pictured, loadGroup, chat.id, groupTick]);
+  /** Who wrote it, on the last message of their row; `null` on the others. */
+  const senderOf = (message: Message, next: Message | undefined): GroupMember | null | undefined => {
+    if (!pictured || message.fromMe) return undefined;
+    if (next && !next.fromMe && next.author === message.author && next.timer === undefined) return null;
+    const known = message.authorId ? members?.get(message.authorId) : undefined;
+    if (known) return known;
+    // Someone not among the members kept, made once so bubbles don't redraw.
+    const name = message.author ?? "";
+    const id = message.authorId ?? name;
+    let stranger = strangers.current.get(id);
+    if (!stranger || stranger.name !== name) {
+      stranger = { id, name, initials: initialsFor(name), avatarHue: hueFor(id), isMe: false, admin: false };
+      strangers.current.set(id, stranger);
+    }
+    return stranger;
+  };
   // Someone's contact info belongs to the chat it was opened from.
   useEffect(() => setPersonId(null), [chat.id, chat.account]);
   const scroller = useRef<HTMLDivElement>(null);
@@ -796,6 +827,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                   {(() => {
                 if (message.timer !== undefined) return <TimerLine message={message} name={chat.isGroup ? message.author : chat.name} />;
                 const prev = day[index - 1];
+                const sender = senderOf(message, day[index + (album ? album.length : 1)]);
                 if (album) {
                   const tail = !prev || prev.fromMe !== message.fromMe || (!message.fromMe && prev.author !== message.author);
                   const grid = selectable(
@@ -805,6 +837,8 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                       messages={album}
                       tail={tail}
                       showAuthor={Boolean(chat.isGroup) && tail && !message.fromMe}
+                      sender={sender}
+                      onOpenPerson={loadPerson ? setPersonId : undefined}
                       loadMedia={loadMedia}
                       onOpen={loadMedia ? (photo) => openPhoto(photo, 0) : undefined}
                     />,
@@ -834,6 +868,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
                     account={chat.account}
                     tail={newRun}
                     showAuthor={Boolean(chat.isGroup) && newRun && !message.fromMe}
+                    sender={sender}
                     loadMedia={loadMedia}
                     openMedia={openMedia}
                     loadLinkThumbnail={loadLinkThumbnail}
