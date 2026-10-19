@@ -24,6 +24,8 @@ pub const PACK_MAX: usize = 200;
 const DEFAULT_EMOJI: &str = "🙂";
 /// Signal's own name for packs made by people, when ours has no publisher.
 const AUTHOR: &str = "Omega Zap";
+/// The source of a pack made for one sticker sent from no pack, before its hash.
+const SINGLE: &str = "single:";
 
 /// A pack made on Signal from WhatsApp's favorites or one of its packs.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -237,12 +239,6 @@ impl SignalManager {
         let answer = self.request(command, UPLOAD_TIMEOUT).await;
         cleanup(&files);
         let answer = answer.map_err(|e| format!("The pack was not added to Signal: {e}"))?.ok_or("Signal did not name the pack.")?;
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Made {
-            pack_id: String,
-            pack_key: String,
-        }
         let made: Made = serde_json::from_str(&answer).map_err(|e| e.to_string())?;
         let pack = SignalPack {
             source: source.to_string(),
@@ -273,9 +269,9 @@ impl SignalManager {
         Ok(())
     }
 
-    /// Sends a library sticker. One in a pack on Signal goes as that pack's
-    /// sticker; any other as a picture, as Signal's stickers have to come
-    /// from a pack.
+    /// Sends a library sticker. Signal's stickers have to come from a pack:
+    /// one in none yet gets a pack of its own first, and goes as a picture
+    /// only when that can't be made.
     pub async fn send_sticker(&self, chat_id: &str, id: &str, reply_to: Option<&str>) -> Result<MessageDto, String> {
         writable(chat_id)?;
         let wa = self.wa()?;
@@ -283,7 +279,18 @@ impl SignalManager {
         let made = tauri::async_runtime::spawn_blocking(move || crate::sticker_image::for_signal(&bytes))
             .await
             .map_err(|e| e.to_string())??;
-        let pack = lock(&self.sticker_packs).find(id).map(|(p, n)| (p.pack_id.clone(), p.pack_key.clone(), n));
+        let emoji = wa.sticker_emojis(id).into_iter().next().unwrap_or_else(|| DEFAULT_EMOJI.to_string());
+        let found = lock(&self.sticker_packs).find(id).map(|(p, n)| (p.pack_id.clone(), p.pack_key.clone(), n));
+        let pack = match found {
+            Some(pack) => Some(pack),
+            None => match self.single_pack(id, &made, &emoji).await {
+                Ok(pack) => Some((pack.pack_id, pack.pack_key, 0)),
+                Err(e) => {
+                    log::warn!("signal: the sticker goes as a picture, as no pack could be made for it: {e}");
+                    None
+                }
+            },
+        };
         let (quote, reply) = self.quote(chat_id, reply_to)?.unzip();
         let ts = now_ms();
         let staged = crate::vault::handoff_path("signal-outbox").map_err(|e| e.to_string())?;
@@ -296,7 +303,7 @@ impl SignalManager {
                 "packId": pack_id,
                 "packKey": pack_key,
                 "stickerId": sticker_id,
-                "emoji": wa.sticker_emojis(id).into_iter().next().unwrap_or_else(|| DEFAULT_EMOJI.to_string()),
+                "emoji": emoji,
                 "path": staged,
                 "mime": made.mime,
                 "quote": quote,
@@ -350,6 +357,47 @@ impl SignalManager {
         content.attachments.extend(media);
         self.store_sent(chat_id, ts, content)
     }
+}
+
+impl SignalManager {
+    /// A pack of this one sticker, made on Signal (not added on the phone)
+    /// and kept, so a sticker from no pack still goes as a sticker.
+    async fn single_pack(&self, hash: &str, made: &crate::sticker_image::SignalSticker, emoji: &str) -> Result<SignalPack, String> {
+        let staged = crate::vault::handoff_path("signal-sticker").map_err(|e| e.to_string())?;
+        fs::write(&staged, &made.bytes).map_err(|e| format!("could not hand the sticker over: {e}"))?;
+        let command = serde_json::json!({
+            "cmd": "upload_pack",
+            "title": AUTHOR,
+            "author": AUTHOR,
+            "stickers": [{ "path": staged, "emoji": emoji, "mime": made.mime }],
+            "install": false,
+            "ts": now_ms(),
+        });
+        let answer = self.request(command, UPLOAD_TIMEOUT).await;
+        let _ = fs::remove_file(&staged);
+        let answer = answer?.ok_or("Signal did not name the pack.")?;
+        let made: Made = serde_json::from_str(&answer).map_err(|e| e.to_string())?;
+        let pack = SignalPack {
+            source: format!("{SINGLE}{hash}"),
+            title: AUTHOR.to_string(),
+            pack_id: made.pack_id,
+            pack_key: made.pack_key,
+            stickers: vec![hash.to_string()],
+            uploaded_ms: now_ms(),
+        };
+        let mut packs = lock(&self.sticker_packs);
+        packs.replace(pack.clone());
+        packs.save(&self.dir);
+        Ok(pack)
+    }
+}
+
+/// What the sidecar answers for a pack it made.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Made {
+    pack_id: String,
+    pack_key: String,
 }
 
 fn cleanup(files: &[(String, String, PathBuf, &'static str)]) {
