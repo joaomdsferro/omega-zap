@@ -6,6 +6,50 @@ import { isTauri } from "./platform";
 // Trailing punctuation belongs to the sentence, not the address.
 export const URL_PATTERN = /https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]}'"]/g;
 
+// An address written without its scheme, like "docu.pt" or "google.com/maps",
+// as WhatsApp and Signal show it: a domain ending in a real top-level one,
+// not part of an email address or a longer word.
+const BARE_PATTERN =
+  /(?<![\w@./-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+([a-z]{2,})(?![\w-])(?:[/?#:][^\s<>]*[^\s<>.,;:!?)\]}'"])?/giu;
+
+const TOP_LEVEL = new Set(
+  ("com net org info biz io co app dev ai me tv xyz online site store shop tech blog news page link live cloud " +
+    "gov edu mil int eu asia pro club design art email agency studio world space website fun top digital media " +
+    "network group social today life one host wiki zone uk").split(" "),
+);
+/** Country domains that are mostly file names in a message: "readme.md", "main.rs". */
+const FILE_LIKE = new Set(["md", "sh", "py", "rs", "pl", "ps"]);
+const regions = new Intl.DisplayNames(["en"], { type: "region", fallback: "none" });
+
+function realTopLevel(tld: string): boolean {
+  const lower = tld.toLowerCase();
+  if (TOP_LEVEL.has(lower)) return true;
+  if (lower.length !== 2 || FILE_LIKE.has(lower)) return false;
+  try {
+    return regions.of(lower.toUpperCase()) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+export interface FoundLink {
+  index: number;
+  /** As written. */
+  text: string;
+  /** What it opens: the text, with `https://` when it was written without. */
+  href: string;
+}
+
+/** The web addresses in a text, in order, with or without their scheme. */
+export function findLinks(text: string): FoundLink[] {
+  const full = [...text.matchAll(URL_PATTERN)].map((m) => ({ index: m.index, text: m[0], href: m[0] }));
+  const inFull = (at: number) => full.some((l) => at >= l.index && at < l.index + l.text.length);
+  const bare = [...text.matchAll(BARE_PATTERN)]
+    .filter((m) => !inFull(m.index) && realTopLevel(m[1]))
+    .map((m) => ({ index: m.index, text: m[0], href: `https://${m[0]}` }));
+  return [...full, ...bare].sort((a, b) => a.index - b.index);
+}
+
 export type VideoSite = "tiktok" | "instagram" | "youtube" | "x";
 
 export interface VideoLink {

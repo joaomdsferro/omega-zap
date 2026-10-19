@@ -1,7 +1,7 @@
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import type { Mention } from "../backend/types";
 import { emojiImage, withEmoji } from "./emoji";
-import { URL_PATTERN } from "./links";
+import { findLinks } from "./links";
 import { ranges } from "./search";
 
 // WhatsApp's formatting, which the composer also shows as it is typed:
@@ -31,7 +31,7 @@ const SPACE = /\s/;
 
 /** Splits text into runs, every character in exactly one, in order. */
 export function tokenize(text: string): Run[] {
-  const urls = [...text.matchAll(URL_PATTERN)].map((m) => [m.index, m.index + m[0].length] as const);
+  const urls = findLinks(text).map((l) => [l.index, l.index + l.text.length] as const);
   const runs: Run[] = [];
 
   function push(kind: Run["kind"], start: number, end: number, styles: number) {
@@ -177,13 +177,14 @@ function drawRun(
   if (run.kind === "marker") return null;
   const className = styleClass(run.styles);
   if (run.kind === "link") {
+    const href = /^https?:\/\//i.test(run.text) ? run.text : `https://${run.text}`;
     return (
       <a
         key={key}
-        href={run.text}
+        href={href}
         target="_blank"
         rel="noreferrer"
-        onClick={onLink ? (event) => onLink(event, run.text) : undefined}
+        onClick={onLink ? (event) => onLink(event, href) : undefined}
         className={`break-all text-(--accent) underline ${className}`}
       >
         {run.text}

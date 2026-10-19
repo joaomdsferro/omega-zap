@@ -4,7 +4,7 @@ import { isWhatsApp, type AccountId } from "../accounts/accounts";
 import type { DeliveryStatus, LinkPreview, Message, ReplyQuote } from "../backend";
 import { authorColor } from "../lib/avatar";
 import { formatMessageTime, formatVoiceDuration, timerLabel } from "../lib/format";
-import { URL_PATTERN, fetchLinkPreview, isPlayable, readyLinkPreview } from "../lib/links";
+import { fetchLinkPreview, findLinks, isPlayable, readyLinkPreview } from "../lib/links";
 import { useSettings } from "../settings/settings";
 import { Attachments } from "./Attachments";
 import { Waveform } from "./AudioPlayer";
@@ -374,14 +374,14 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
   );
   // A link that came without a card gets one made from the page itself.
   const bareLink = useMemo(
-    () => (message.linkPreview || message.deleted ? undefined : message.text?.match(URL_PATTERN)?.[0]),
+    () => (message.linkPreview || message.deleted ? undefined : (message.text ? findLinks(message.text)[0]?.href : undefined)),
     [message.linkPreview, message.deleted, message.text],
   );
   const fetched = useFetchedPreview(settings.fetchLinkPreviews ? bareLink : undefined);
   // A video link gets a card to play it from even when there is none to show.
   const linkPreview = useMemo(() => {
     if (message.linkPreview || fetched) return message.linkPreview ?? fetched ?? undefined;
-    const url = settings.inlineVideos ? message.text?.match(URL_PATTERN)?.find(isPlayable) : undefined;
+    const url = settings.inlineVideos ? message.text ? findLinks(message.text).map((l) => l.href).find(isPlayable) : undefined : undefined;
     return url ? { url } : undefined;
   }, [message.linkPreview, fetched, message.text, settings.inlineVideos]);
   /** A long text shows its start until "Read more"; a search's hits show it whole. */
