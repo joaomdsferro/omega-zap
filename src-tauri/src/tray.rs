@@ -163,7 +163,10 @@ fn build_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     }
     let window = builder.build().inspect_err(|e| log::warn!("could not open the window: {e}")).ok()?;
     #[cfg(target_os = "linux")]
-    let _ = window.with_webview(|platform| crate::players::fix_tiktok(&platform.inner()));
+    let _ = window.with_webview(|platform| {
+        crate::players::fix_tiktok(&platform.inner());
+        crate::players::add_volume(&platform.inner());
+    });
     Some(window)
 }
 

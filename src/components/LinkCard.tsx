@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { LinkPreview } from "../backend";
 import { embedUrl, videoLink, xVideo, type XVideo } from "../lib/links";
 import { isTauri } from "../lib/platform";
 import { useSettings } from "../settings/settings";
-import { CloseIcon, PlayIcon } from "./Icons";
+import { CloseIcon, MuteIcon, PlayIcon, VolumeIcon } from "./Icons";
 import { VideoPlayer } from "./VideoPlayer";
 
 /** Opens a page in the system browser, or a new tab in a plain browser. */
@@ -31,6 +31,23 @@ const largeUrls = new Map<string, string>();
 /** Whether a link's small picture turned out wide enough to sit above the title. */
 const wideThumbs = new Map<string, boolean>();
 
+const VOLUME_KEY = "omega-zap.embed-volume";
+
+/** The volume embedded players play at, the same for all and kept for next time. */
+function savedVolume(): number {
+  try {
+    const level = Number(localStorage.getItem(VOLUME_KEY) ?? "1");
+    return level >= 0 && level <= 1 ? level : 1;
+  } catch {
+    return 1;
+  }
+}
+
+/** Sets a player page's volume: a script the app puts in each player page takes it. */
+function sendVolume(frame: HTMLIFrameElement | null, level: number) {
+  frame?.contentWindow?.postMessage({ omegaZapVolume: level }, "*");
+}
+
 interface LinkCardProps {
   preview: LinkPreview;
   /** Fetches the full-size picture, when the account can. */
@@ -44,6 +61,12 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
   const [largeUrl, setLargeUrl] = useState(() => largeUrls.get(preview.url) ?? null);
   const [largeFailed, setLargeFailed] = useState(false);
   const [player, setPlayer] = useState<string | null>(null);
+  const frame = useRef<HTMLIFrameElement>(null);
+  const [volume, setVolume] = useState(savedVolume);
+  // What unmuting goes back to.
+  const unmuted = useRef(volume || 1);
+  const localVolume = useRef(volume);
+  localVolume.current = volume;
   const [starting, setStarting] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const linked = settings.inlineVideos ? videoLink(preview.url) : null;
@@ -94,6 +117,17 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
   const large = wantLarge && !playing;
   const stacked = playing || large || (wide && Boolean(picture));
 
+  function changeVolume(level: number) {
+    setVolume(level);
+    if (level > 0) unmuted.current = level;
+    sendVolume(frame.current, level);
+    try {
+      localStorage.setItem(VOLUME_KEY, String(level));
+    } catch {
+      // Only remembered for this time.
+    }
+  }
+
   async function play() {
     if (xClip) return setClip(xClip);
     setStarting(true);
@@ -116,7 +150,33 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
       ].join(" ")}
     >
       {playing ? (
-        <div className="flex justify-end">
+        <div className="flex items-center justify-between">
+          {player ? (
+            <div className="flex items-center gap-1 pl-1">
+              <button
+                type="button"
+                onClick={() => changeVolume(volume > 0 ? 0 : unmuted.current)}
+                aria-label={volume > 0 ? "Mute" : "Unmute"}
+                title={volume > 0 ? "Mute" : "Unmute"}
+                className="flex h-8 w-8 items-center justify-center rounded-full text-(--text-secondary) hover:text-(--text-primary)"
+              >
+                {volume > 0 ? <VolumeIcon size={18} /> : <MuteIcon size={18} />}
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={volume}
+                onChange={(event) => changeVolume(Number(event.target.value))}
+                aria-label="Volume"
+                aria-valuetext={`${Math.round(volume * 100)}%`}
+                className="w-24 accent-(--accent)"
+              />
+            </div>
+          ) : (
+            <span />
+          )}
           <button
             type="button"
             onClick={() => {
@@ -145,7 +205,13 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
         />
       ) : player ? (
         <iframe
+          ref={frame}
           src={player}
+          // The player's script is in place once its page loads; it is told again as it starts, in case.
+          onLoad={() => {
+            sendVolume(frame.current, volume);
+            window.setTimeout(() => sendVolume(frame.current, localVolume.current), 1500);
+          }}
           title={preview.title ?? "Video"}
           allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
           allowFullScreen

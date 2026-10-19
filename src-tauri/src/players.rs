@@ -9,6 +9,9 @@
 //! TikTok's player, once unmuted, sends the sound through Web Audio, which
 //! WebKitGTK plays as silence for a video from another site: half a second
 //! of sound, then none. Without Web Audio it plays the video's own sound.
+//!
+//! The chat can't reach into another site's player, so each player page gets
+//! a script that takes the volume the chat sends it.
 
 use std::sync::OnceLock;
 
@@ -51,6 +54,46 @@ pub fn fix_tiktok(view: &WebView) {
         UserContentInjectedFrames::AllFrames,
         UserScriptInjectionTime::Start,
         &["https://www.tiktok.com/player/*"],
+        &[],
+    ));
+}
+
+/// Sets every video and sound in a player page to the volume the chat sends,
+/// those that come later too. Only the chat's page, the frame's parent, is heard.
+const VOLUME_SCRIPT: &str = r#"(() => {
+  let level = null;
+  const apply = (media) => { if (level !== null && media.volume !== level) media.volume = level; };
+  const applyAll = () => document.querySelectorAll("video, audio").forEach(apply);
+  window.addEventListener("message", (event) => {
+    if (event.source !== window.parent || window.parent === window) return;
+    const sent = event.data && event.data.omegaZapVolume;
+    if (typeof sent !== "number" || !(sent >= 0 && sent <= 1)) return;
+    level = sent;
+    applyAll();
+  });
+  // A player may make its video late, or swap it, so it is set again when one starts.
+  for (const name of ["loadedmetadata", "play"]) {
+    document.addEventListener(name, (event) => {
+      const media = event.target;
+      if (media instanceof HTMLMediaElement) apply(media);
+    }, true);
+  }
+})();"#;
+
+/// Lets the chat set the volume of a window's video players.
+pub fn add_volume(view: &WebView) {
+    let Some(content) = view.user_content_manager() else {
+        return;
+    };
+    content.add_script(&UserScript::new(
+        VOLUME_SCRIPT,
+        UserContentInjectedFrames::AllFrames,
+        UserScriptInjectionTime::Start,
+        &[
+            "https://www.tiktok.com/player/*",
+            "https://www.instagram.com/*",
+            "https://www.youtube.com/embed/*",
+        ],
         &[],
     ));
 }

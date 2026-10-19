@@ -252,7 +252,7 @@ body {
   [role="checkbox"],
   [role="menuitem"],
   [role="menuitemcheckbox"],
-  input:is([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="file"]) {
+  input:is([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="file"], [type="range"]) {
     cursor: pointer;
   }
 
