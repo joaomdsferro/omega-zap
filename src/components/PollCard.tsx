@@ -116,7 +116,7 @@ function PollVotes({ question, poll, onClose }: { question: string; poll: Poll; 
   // On the body: the message list would clip a fixed layer drawn inside it.
   return createPortal(
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
+      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
       onPointerDown={(event) => event.target === event.currentTarget && onClose()}
       onClick={(event) => event.stopPropagation()}
     >

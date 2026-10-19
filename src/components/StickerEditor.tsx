@@ -339,7 +339,7 @@ export function StickerEditor({ shelf, pack, picture, making: startMaking = "sti
     ["h-8 rounded-full px-3 text-[13px]", on ? "bg-(--chip-active-bg) font-semibold text-(--chip-active-text)" : "bg-(--chip-bg) text-(--text-secondary) hover:text-(--text-primary)"].join(" ");
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onPointerDown={(e) => e.target === e.currentTarget && !making && onClose()}>
+    <div className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onPointerDown={(e) => e.target === e.currentTarget && !making && onClose()}>
       <div
         ref={dialog}
         role="dialog"

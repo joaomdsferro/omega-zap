@@ -73,7 +73,7 @@ export function AddMembersDialog({ loadContacts, members, onAdd, onClose }: AddM
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       onPointerDown={(event) => event.target === event.currentTarget && !busy && onClose()}
     >
       <div
