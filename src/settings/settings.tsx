@@ -1,4 +1,5 @@
 import { ACCOUNT_IDS, type AccountId } from "../accounts/accounts";
+import { loadWallpaperImage, prepareWallpaperImage, saveWallpaperImage } from "./wallpaperImage";
 import {
   createContext,
   useCallback,
@@ -122,14 +123,18 @@ export const BUBBLE_SHAPES: { id: BubbleShape; label: string }[] = [
   { id: "sharp", label: "Sharp" },
 ];
 
-export type Wallpaper = "theme" | "glow" | "dots" | "plain";
+export type Wallpaper = "theme" | "glow" | "dots" | "plain" | "image";
 
 export const WALLPAPERS: { id: Wallpaper; label: string }[] = [
   { id: "theme", label: "Theme's own" },
   { id: "glow", label: "Glow" },
   { id: "dots", label: "Dots" },
   { id: "plain", label: "Plain" },
+  { id: "image", label: "Your picture" },
 ];
+
+/** How much a picture behind the chats is darkened, in %. */
+export const WALLPAPER_DIM = { min: 0, max: 80, step: 5 };
 
 export type TextSize = "small" | "medium" | "large" | "xlarge";
 
@@ -175,6 +180,8 @@ export interface Settings {
   accent: Accent;
   bubbles: BubbleShape;
   wallpaper: Wallpaper;
+  /** How much the "image" wallpaper is darkened, in %. */
+  wallpaperDim: number;
   /** Size of the text in messages. */
   textSize: TextSize;
   zoom: number;
@@ -217,6 +224,7 @@ const DEFAULTS: Settings = {
   accent: "theme",
   bubbles: "classic",
   wallpaper: "theme",
+  wallpaperDim: 20,
   textSize: "medium",
   zoom: 1,
   activeAccount: "whatsapp",
@@ -282,6 +290,9 @@ function load(parsed: Stored): Settings {
     accent: pick(ACCENTS, parsed.accent, DEFAULTS.accent),
     bubbles: pick(BUBBLE_SHAPES, parsed.bubbles, DEFAULTS.bubbles),
     wallpaper: pick(WALLPAPERS, parsed.wallpaper, DEFAULTS.wallpaper),
+    wallpaperDim: Number.isFinite(parsed.wallpaperDim)
+      ? clamp(parsed.wallpaperDim as number, WALLPAPER_DIM.min, WALLPAPER_DIM.max)
+      : DEFAULTS.wallpaperDim,
     textSize: pick(TEXT_SIZES, parsed.textSize, DEFAULTS.textSize),
     zoom: ZOOM_STEPS.includes(parsed.zoom ?? NaN) ? (parsed.zoom as number) : DEFAULTS.zoom,
     activeAccount: ACCOUNT_IDS.includes(parsed.activeAccount as AccountId)
@@ -317,6 +328,11 @@ interface SettingsContextValue {
   setBubbles: (bubbles: BubbleShape) => void;
   setWallpaper: (wallpaper: Wallpaper) => void;
   setTextSize: (size: TextSize) => void;
+  setWallpaperDim: (dim: number) => void;
+  /** The picture chosen for behind the chats, as a URL, once loaded. */
+  wallpaperImage: string | null;
+  /** Keeps a new picture (scaled down) and shows it, or forgets it; throws when the file isn't a picture. */
+  setWallpaperImage: (file: File | null) => Promise<void>;
   /** Sets several appearance choices at once, as "Restore defaults" and its undo do. */
   setAppearance: (appearance: Appearance) => void;
   setZoom: (zoom: number) => void;
@@ -373,7 +389,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   // Appearance is all CSS keyed on these attributes, so changing it restyles
   // without re-rendering anything.
-  const { accent, bubbles, wallpaper, textSize } = settings;
+  const { accent, bubbles, wallpaper, wallpaperDim, textSize } = settings;
   useEffect(() => {
     const root = document.documentElement.dataset;
     root.theme = resolvedTheme;
@@ -382,7 +398,36 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     root.bubbles = bubbles;
     root.wallpaper = wallpaper;
     root.textSize = textSize;
-  }, [resolvedTheme, accent, bubbles, wallpaper, textSize]);
+    document.documentElement.style.setProperty("--wallpaper-dim", String(wallpaperDim / 100));
+  }, [resolvedTheme, accent, bubbles, wallpaper, wallpaperDim, textSize]);
+
+  const [wallpaperImage, setImageUrl] = useState<string | null>(null);
+  const showImage = useCallback((image: Blob | null) => {
+    setImageUrl((before) => {
+      if (before) URL.revokeObjectURL(before);
+      return image ? URL.createObjectURL(image) : null;
+    });
+  }, []);
+  useEffect(() => {
+    let alive = true;
+    void loadWallpaperImage().then((image) => alive && showImage(image));
+    return () => {
+      alive = false;
+    };
+  }, [showImage]);
+  useEffect(() => {
+    const style = document.documentElement.style;
+    if (wallpaperImage) style.setProperty("--wallpaper-image", `url("${wallpaperImage}")`);
+    else style.removeProperty("--wallpaper-image");
+  }, [wallpaperImage]);
+  const setWallpaperImage = useCallback(
+    async (file: File | null) => {
+      const image = file ? await prepareWallpaperImage(file) : null;
+      await saveWallpaperImage(image);
+      showImage(image);
+    },
+    [showImage],
+  );
 
   useEffect(() => {
     const id = window.setTimeout(() => {
@@ -413,6 +458,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       setBubbles: (bubbles) => setSettings((s) => ({ ...s, bubbles })),
       setWallpaper: (wallpaper) => setSettings((s) => ({ ...s, wallpaper })),
       setTextSize: (textSize) => setSettings((s) => ({ ...s, textSize })),
+      setWallpaperDim: (dim) =>
+        setSettings((s) => ({ ...s, wallpaperDim: clamp(dim, WALLPAPER_DIM.min, WALLPAPER_DIM.max) })),
+      wallpaperImage,
+      setWallpaperImage,
       setAppearance: (appearance) => setSettings((s) => ({ ...s, ...appearance })),
       setZoom,
       zoomIn: () => stepZoom(1),
@@ -437,7 +486,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       setSendTyping: (sendTyping) => setSettings((s) => ({ ...s, sendTyping })),
       setMicrophone: (microphone) => setSettings((s) => ({ ...s, microphone })),
     }),
-    [settings, resolvedTheme, setZoom, stepZoom],
+    [settings, resolvedTheme, setZoom, stepZoom, wallpaperImage, setWallpaperImage],
   );
 
   const width = useMemo<SidebarWidthContextValue>(

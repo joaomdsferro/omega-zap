@@ -54,6 +54,16 @@
     radial-gradient(ellipse 70% 55% at 95% 95%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 55%);
   background-size: cover;
 }
+/* A picture of the user's own, darkened by --wallpaper-dim. With none chosen
+ * yet, the theme's own shows. */
+:root[data-wallpaper="image"] .chat-wallpaper:not([data-wp]),
+.chat-wallpaper[data-wp="image"] {
+  background-image:
+    linear-gradient(rgb(0 0 0 / var(--wallpaper-dim, 0)), rgb(0 0 0 / var(--wallpaper-dim, 0))),
+    var(--wallpaper-image, var(--doodle));
+  background-size: cover;
+  background-position: center;
+}
 
 /*
  * Accent colour over the theme's own. Light themes get a darker shade for

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { modKey } from "../lib/platform";
 import {
   ACCENTS,
@@ -8,6 +8,7 @@ import {
   TEXT_SIZES,
   THEMES,
   WALLPAPERS,
+  WALLPAPER_DIM,
   ZOOM_STEPS,
   useSettings,
   useSidebarWidth,
@@ -16,7 +17,7 @@ import {
   type ResolvedTheme,
   type Wallpaper,
 } from "../settings/settings";
-import { CheckIcon, Ticks } from "./Icons";
+import { CheckIcon, PlusIcon, Ticks } from "./Icons";
 import { Tail } from "./MessageBubble";
 
 /** A heading and the choices under it. */
@@ -176,8 +177,34 @@ function StepButton({ label, onClick, disabled, children }: { label: string; onC
 }
 
 export function AppearanceSettings() {
-  const { settings, resolvedTheme, setTheme, setAccent, setBubbles, setWallpaper, setTextSize, setAppearance, zoomIn, zoomOut, resetZoom } =
-    useSettings();
+  const {
+    settings,
+    resolvedTheme,
+    setTheme,
+    setAccent,
+    setBubbles,
+    setWallpaper,
+    setWallpaperDim,
+    wallpaperImage,
+    setWallpaperImage,
+    setTextSize,
+    setAppearance,
+    zoomIn,
+    zoomOut,
+    resetZoom,
+  } = useSettings();
+  const picker = useRef<HTMLInputElement>(null);
+  const [pictureError, setPictureError] = useState<string | null>(null);
+
+  async function choosePicture(file: File) {
+    setPictureError(null);
+    try {
+      await setWallpaperImage(file);
+      setWallpaper("image");
+    } catch {
+      setPictureError(`“${file.name}” couldn't be opened as a picture. Try a JPEG, PNG or WebP.`);
+    }
+  }
   const { width: sidebarWidth, setWidth: setSidebarWidth } = useSidebarWidth();
   // What "Restore defaults" replaced, so it can be undone.
   const [restored, setRestored] = useState<Appearance | null>(null);
@@ -266,8 +293,8 @@ export function AppearanceSettings() {
       </Group>
 
       <Group title="Chat background" id="appearance-wallpaper">
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-2" role="radiogroup" aria-labelledby="appearance-wallpaper">
-          {WALLPAPERS.map((wallpaper) => (
+        <div className="grid grid-cols-5 gap-2" role="radiogroup" aria-labelledby="appearance-wallpaper">
+          {WALLPAPERS.filter((w) => w.id !== "image").map((wallpaper) => (
             <Option
               key={wallpaper.id}
               label={wallpaper.label}
@@ -277,7 +304,75 @@ export function AppearanceSettings() {
               <WallpaperThumb wallpaper={wallpaper.id} />
             </Option>
           ))}
+          <Option
+            label={wallpaperImage ? "Your picture" : "Choose a picture…"}
+            active={settings.wallpaper === "image" && Boolean(wallpaperImage)}
+            onClick={() => (wallpaperImage ? setWallpaper("image") : picker.current?.click())}
+          >
+            {wallpaperImage ? (
+              <WallpaperThumb wallpaper="image" />
+            ) : (
+              <span className="flex h-16 items-center justify-center rounded-[10px] border border-dashed border-(--text-secondary)/50 text-(--icon)">
+                <PlusIcon size={22} />
+              </span>
+            )}
+          </Option>
         </div>
+        <input
+          ref={picker}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) void choosePicture(file);
+          }}
+        />
+        {pictureError ? (
+          <p className="text-[13px] text-(--danger)" role="alert">
+            {pictureError}
+          </p>
+        ) : null}
+        {settings.wallpaper === "image" && wallpaperImage ? (
+          <div className="flex flex-col gap-3 rounded-xl bg-(--search-bg) px-4 py-3">
+            <label className="flex items-center gap-3 text-[14px] text-(--text-primary)" htmlFor="wallpaper-dim">
+              <span className="w-16 shrink-0">Darken</span>
+              <input
+                id="wallpaper-dim"
+                type="range"
+                min={WALLPAPER_DIM.min}
+                max={WALLPAPER_DIM.max}
+                step={WALLPAPER_DIM.step}
+                value={settings.wallpaperDim}
+                onChange={(event) => setWallpaperDim(Number(event.target.value))}
+                className="min-w-0 flex-1 accent-(--accent)"
+              />
+              <output htmlFor="wallpaper-dim" className="w-10 text-right tabular-nums text-(--text-secondary)">
+                {settings.wallpaperDim}%
+              </output>
+            </label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => picker.current?.click()}
+                className="h-8 rounded-full border border-(--divider) px-3 text-[13px] text-(--text-primary) hover:bg-(--hover-bg)"
+              >
+                Change picture
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setWallpaper("theme");
+                  void setWallpaperImage(null);
+                }}
+                className="h-8 rounded-full px-3 text-[13px] text-(--danger) hover:bg-(--hover-bg)"
+              >
+                Remove picture
+              </button>
+            </div>
+          </div>
+        ) : null}
       </Group>
 
       <Group title="Message text" id="appearance-text">
