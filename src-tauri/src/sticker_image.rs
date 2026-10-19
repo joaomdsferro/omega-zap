@@ -413,8 +413,24 @@ fn line_max(line: &[u8], r: usize) -> Vec<u8> {
 
 /// What Signal takes for one sticker in a pack.
 const SIGNAL_MAX: usize = 300 * 1024;
-/// The sides an animated sticker shrinks through until it fits.
-const SIGNAL_SIDES: [u32; 4] = [SIDE, 384, 320, 256];
+/// What an animated sticker gives up, in turn, until it fits: its size,
+/// then colours, then frames (keeping one in every so many). Smooth motion
+/// is kept longest, as a sticker shows small anyway.
+const SIGNAL_STEPS: [(u32, usize, usize); 10] = [
+    (SIDE, 255, 1),
+    (384, 255, 1),
+    (320, 255, 1),
+    (256, 255, 1),
+    (256, 128, 1),
+    (256, 64, 1),
+    (256, 128, 2),
+    (256, 64, 2),
+    (256, 64, 4),
+    (192, 64, 4),
+];
+/// A step is skipped when the last one's bytes, scaled to it, say it would
+/// come out this much over the limit.
+const SIGNAL_SKIP_OVER: f64 = 1.25;
 
 /// A sticker as Signal takes it.
 pub struct SignalSticker {
@@ -447,7 +463,7 @@ pub fn for_signal(bytes: &[u8]) -> Result<SignalSticker, String> {
         _ => Vec::new(),
     };
     if frames.len() > 1 {
-        if let Some(bytes) = SIGNAL_SIDES.iter().find_map(|&side| apng_within(&frames, side, SIGNAL_MAX)) {
+        if let Some(bytes) = apng_within(&frames, SIGNAL_MAX) {
             return Ok(SignalSticker { bytes, mime: "image/png" });
         }
         let still = encode_static(&frames[0].0)?;
@@ -457,24 +473,37 @@ pub fn for_signal(bytes: &[u8]) -> Result<SignalSticker, String> {
     Ok(SignalSticker { bytes: made.bytes, mime: "image/webp" })
 }
 
-/// The animation as a palette APNG at `side` pixels, when it fits in `max`
-/// bytes. Fewer frames are tried before giving up on the size.
-fn apng_within(frames: &[(RgbaImage, u32)], side: u32, max: usize) -> Option<Vec<u8>> {
-    let mut frames: Vec<(RgbaImage, u32)> = frames
-        .iter()
-        .map(|(f, ms)| (if side == SIDE { f.clone() } else { imageops::resize(f, side, side, FilterType::Triangle) }, *ms))
-        .collect();
-    loop {
-        let bytes = encode_apng(&frames).ok()?;
+/// The animation as a palette APNG within `max` bytes, at the first of
+/// [`SIGNAL_STEPS`] it fits at.
+fn apng_within(frames: &[(RgbaImage, u32)], max: usize) -> Option<Vec<u8>> {
+    // Bytes per pixel of every frame, for each palette size tried.
+    let mut rates: Vec<(usize, f64)> = Vec::new();
+    for (n, &(side, colors, every)) in SIGNAL_STEPS.iter().enumerate() {
+        let kept = frames.len().div_ceil(every);
+        let pixels = f64::from(side * side) * kept as f64;
+        // The nearest palette size measured stands in for this one; fewer
+        // colours save less than in proportion (64 of 255 is about ¾ the bytes).
+        let rate = rates.iter().min_by_key(|(c, _)| c.abs_diff(colors)).map(|&(c, r)| r * (colors as f64 / c as f64).powf(0.2));
+        let last = n == SIGNAL_STEPS.len() - 1;
+        if !last && rate.is_some_and(|r| r * pixels > max as f64 * SIGNAL_SKIP_OVER) {
+            continue;
+        }
+        let made: Vec<(RgbaImage, u32)> = frames
+            .chunks(every)
+            .map(|run| {
+                let frame = &run[0].0;
+                let frame = if side == SIDE { frame.clone() } else { imageops::resize(frame, side, side, FilterType::Triangle) };
+                (frame, run.iter().map(|(_, ms)| ms).sum())
+            })
+            .collect();
+        let bytes = encode_apng(&made, colors).ok()?;
         if bytes.len() <= max {
             return Some(bytes);
         }
-        // At the smallest side, half the frames before giving up.
-        if side != SIGNAL_SIDES[SIGNAL_SIDES.len() - 1] || frames.len() < 8 {
-            return None;
-        }
-        frames = halve(&frames);
+        rates.retain(|(c, _)| *c != colors);
+        rates.push((colors, bytes.len() as f64 / pixels));
     }
+    None
 }
 
 /// Alpha below this counts as transparent, so the palette isn't spent on
@@ -486,7 +515,7 @@ const CLEAR_INDEX: u8 = 255;
 /// The frames as one APNG on a shared 256-colour palette (one entry kept for
 /// transparency). Each frame after the first carries only the box that
 /// changed, drawn over the one before.
-fn encode_apng(frames: &[(RgbaImage, u32)]) -> Result<Vec<u8>, String> {
+fn encode_apng(frames: &[(RgbaImage, u32)], colors: usize) -> Result<Vec<u8>, String> {
     let fail = |e: png::EncodingError| format!("The animated sticker could not be made: {e}");
     let (w, h) = frames[0].0.dimensions();
     // Trained on every frame, a sample of each to keep it quick.
@@ -498,7 +527,7 @@ fn encode_apng(frames: &[(RgbaImage, u32)]) -> Result<Vec<u8>, String> {
     if sample.is_empty() {
         sample.extend([0, 0, 0, 255]);
     }
-    let quant = color_quant::NeuQuant::new(10, 255, &sample);
+    let quant = color_quant::NeuQuant::new(10, colors, &sample);
     let indexed: Vec<Vec<u8>> = frames
         .iter()
         .map(|(frame, _)| frame.pixels().map(|p| if p[3] < CLEAR { CLEAR_INDEX } else { quant.index_of(&p.0) as u8 }).collect())
@@ -506,7 +535,8 @@ fn encode_apng(frames: &[(RgbaImage, u32)]) -> Result<Vec<u8>, String> {
     let map = quant.color_map_rgba();
     let mut palette = Vec::with_capacity(256 * 3);
     let mut alpha = Vec::with_capacity(256);
-    for rgba in map.chunks(4).chain(std::iter::once(&[0u8, 0, 0, 0][..])) {
+    // Unused entries up to the one kept for transparency, so it stays last.
+    for rgba in map.chunks(4).chain(std::iter::repeat(&[0u8, 0, 0, 0][..]).take(usize::from(CLEAR_INDEX) - colors + 1)) {
         palette.extend_from_slice(&rgba[..3]);
         alpha.push(rgba[3]);
     }
@@ -537,6 +567,9 @@ fn encode_apng(frames: &[(RgbaImage, u32)]) -> Result<Vec<u8>, String> {
                 Some(before) => changed_box(before, current, w, h),
                 None => (0, 0, w, h),
             };
+            // Each is checked against the other's old value, so the box
+            // goes to the corner before it is resized and moved.
+            writer.set_frame_position(0, 0).map_err(fail)?;
             writer.set_frame_dimension(bw, bh).map_err(fail)?;
             writer.set_frame_position(x, y).map_err(fail)?;
             writer.set_dispose_op(png::DisposeOp::None).map_err(fail)?;
@@ -685,6 +718,17 @@ mod tests {
         assert_eq!(last.dimensions().0, last.dimensions().1);
         assert_eq!(last.get_pixel(0, 0)[3], 0);
         assert_eq!(last.get_pixel(last.width() / 2, last.height() / 2)[3], 255);
+    }
+
+    #[test]
+    fn a_frame_changing_more_than_the_one_before_is_encoded() {
+        // A small change in a corner, then the whole picture: the second box
+        // is bigger than what is left past the first one's place.
+        let blank = RgbaImage::from_pixel(64, 64, image::Rgba([0, 0, 0, 255]));
+        let mut corner = blank.clone();
+        corner.put_pixel(60, 60, image::Rgba([255, 255, 255, 255]));
+        let full = RgbaImage::from_pixel(64, 64, image::Rgba([255, 0, 0, 255]));
+        assert!(encode_apng(&[(blank, 100), (corner, 100), (full, 100)], 255).is_ok());
     }
 
     #[test]
