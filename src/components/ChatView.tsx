@@ -882,6 +882,17 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
               {pinLines(notes, day[day.length - 1], undefined, setJumpTo)}
             </section>
           ))}
+          {chat.typing ? (
+            // Inside the content, so the resize keeps the chat at the bottom when it shows.
+            <div role="status" className="animate-fade-rise mt-3 flex px-[5%]">
+              <span className="sr-only">{chat.typing}</span>
+              <span className="typing-bubble typing-bubble-chat" aria-hidden>
+                <i />
+                <i />
+                <i />
+              </span>
+            </div>
+          ) : null}
         </div>
       </div>
       {awayFrom !== null ? (

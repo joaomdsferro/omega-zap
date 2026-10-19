@@ -483,6 +483,21 @@ body {
   animation-delay: 0.4s;
 }
 
+/* The same dots at the foot of the open chat, in an incoming bubble. */
+.typing-bubble-chat {
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 7.5px;
+  background: var(--bubble-in);
+  box-shadow: var(--bubble-shadow);
+}
+
+.typing-bubble-chat > i {
+  width: 7px;
+  height: 7px;
+  background: var(--text-secondary);
+}
+
 @keyframes typing-dot {
   0%,
   60%,
