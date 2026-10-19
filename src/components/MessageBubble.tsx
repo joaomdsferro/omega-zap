@@ -561,7 +561,9 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
       ref={row}
       data-message-id={message.id}
       className={[
-        "group/message flex items-center gap-1 px-[5%]",
+        // Only the bubble and its buttons show the buttons, not the empty width
+        // beside them, so passing over the chat doesn't light up every row.
+        "group/message pointer-events-none flex items-center gap-1 px-[5%] [&>*]:pointer-events-auto",
         mine ? "flex-row-reverse" : "flex-row",
         tail ? "mt-3" : "mt-0.5",
         reactions.length > 0 ? "mb-5" : "",
@@ -828,7 +830,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
           aria-label="React"
           aria-expanded={picking}
           className={[
-            "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[rgba(11,20,26,.35)] text-white transition-opacity group-hover/message:opacity-100 focus-visible:opacity-100",
+            "relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[rgba(11,20,26,.35)] text-white group-hover/message:opacity-100 focus-visible:opacity-100 before:absolute before:inset-y-0 before:-inset-x-1 before:content-['']",
             picking ? "opacity-100" : "opacity-0",
           ].join(" ")}
         >
@@ -848,7 +850,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
           aria-haspopup="menu"
           aria-expanded={menu !== null}
           className={[
-            "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[rgba(11,20,26,.35)] text-white transition-opacity group-hover/message:opacity-100 focus-visible:opacity-100",
+            "relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[rgba(11,20,26,.35)] text-white group-hover/message:opacity-100 focus-visible:opacity-100 before:absolute before:inset-y-0 before:-inset-x-1 before:content-['']",
             picking || menu ? "opacity-100" : "opacity-0",
           ].join(" ")}
         >
@@ -868,7 +870,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
           aria-pressed={Boolean(message.starred)}
           title={message.starred ? "Unstar" : "Star"}
           className={[
-            "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[rgba(11,20,26,.35)] text-white transition-opacity group-hover/message:opacity-100 focus-visible:opacity-100",
+            "relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[rgba(11,20,26,.35)] text-white group-hover/message:opacity-100 focus-visible:opacity-100 before:absolute before:inset-y-0 before:-inset-x-1 before:content-['']",
             picking ? "opacity-100" : "opacity-0",
           ].join(" ")}
         >
