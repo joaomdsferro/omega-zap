@@ -29,7 +29,6 @@ import {
   SelectIcon,
   SmileIcon,
   StarIcon,
-  TimerIcon,
   Ticks,
   TrashIcon,
 } from "./Icons";
@@ -109,13 +108,42 @@ const STATUS_LABEL: Record<DeliveryStatus, string> = {
   read: "Read",
 };
 
+const RING_LENGTH = 2 * Math.PI * 6;
+
+/** A ring by the time that empties as the message's time runs out, as Signal's apps show it. Full until its countdown starts. */
+function TimerRing({ seconds, at }: { seconds: number; at?: number }) {
+  const left = at === undefined ? seconds * 1000 : Math.max(0, at - Date.now());
+  const label = at === undefined ? `Disappears ${timerLabel(seconds)} after it's seen` : `Disappears in ${timerLabel(Math.max(1, Math.round(left / 1000)))}`;
+  const gone = RING_LENGTH * (1 - left / (seconds * 1000));
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" role="img" aria-label={label} className="shrink-0">
+      <title>{label}</title>
+      <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="2" opacity="0.3" />
+      <circle
+        // Drawn again from where it is when the countdown starts or the bubble is redrawn.
+        key={at}
+        cx="8"
+        cy="8"
+        r="6"
+        fill="none"
+        stroke="var(--accent)"
+        strokeWidth="2"
+        strokeDasharray={RING_LENGTH}
+        transform="rotate(-90 8 8)"
+        className={at === undefined ? undefined : "timer-ring"}
+        style={{ strokeDashoffset: gone, "--ring-from": `${gone}px`, "--ring-to": `${RING_LENGTH}px`, animationDuration: `${left}ms` } as CSSProperties}
+      />
+    </svg>
+  );
+}
+
 function Meta({ message, account, pinned }: { message: Message; account: AccountId; pinned?: boolean }) {
   return (
     <span className="flex items-center gap-1 text-[11px] leading-3.75 whitespace-nowrap text-(--bubble-meta)">
       {pinned ? <PinIcon size={11} aria-label="Pinned" aria-hidden={false} role="img" /> : null}
       {message.edited ? <span>Edited</span> : null}
       {message.starred ? <StarIcon size={11} filled aria-label="Starred" aria-hidden={false} role="img" /> : null}
-      {message.expiresIn ? <TimerIcon size={11} aria-label={`Disappears ${timerLabel(message.expiresIn)} after it's seen`} aria-hidden={false} role="img" /> : null}
+      {message.expiresIn ? <TimerRing seconds={message.expiresIn} at={message.expiresAt} /> : null}
       <time dateTime={message.sentAt}>{formatMessageTime(message.sentAt)}</time>
       {message.fromMe && message.status ? (
         <>

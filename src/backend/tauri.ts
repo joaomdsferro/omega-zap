@@ -116,6 +116,7 @@ interface RawMessage {
   stickerPack?: SharedStickerPack;
   timer?: number;
   expiresIn?: number;
+  expiresAt?: number | null;
 }
 
 interface RawGroupRef {
@@ -270,6 +271,7 @@ function toMessage(raw: RawMessage): Message {
     stickerPack: raw.stickerPack,
     timer: raw.timer,
     expiresIn: raw.expiresIn,
+    expiresAt: raw.expiresAt ?? undefined,
   };
 }
 

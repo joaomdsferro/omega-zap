@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ACCOUNTS, ACCOUNT_IDS, isWhatsApp, type AccountId } from "./accounts/accounts";
-import { formatLastSeen } from "./lib/format";
+import { formatLastSeen, timerLabel } from "./lib/format";
 import { useAccount, type Account } from "./accounts/useAccount";
 import {
   MockBackend,
@@ -1244,15 +1244,17 @@ function Shell() {
     const phone = chat.id.match(/^([1-9]\d*)@s\.whatsapp\.net$/)?.[1];
     const detail = chat.typing
       ? chat.typing
-      : chat.isGroup
-        ? "Group"
-        : chat.online
-          ? "online"
-          : chat.lastSeen
-            ? formatLastSeen(chat.lastSeen)
-            : phone
-              ? `+${phone}`
-              : "";
+      : chat.disappearing
+        ? `Messages disappear after ${timerLabel(chat.disappearing)}`
+        : chat.isGroup
+          ? "Group"
+          : chat.online
+            ? "online"
+            : chat.lastSeen
+              ? formatLastSeen(chat.lastSeen)
+              : phone
+                ? `+${phone}`
+                : "";
     return [showAccount ? ACCOUNTS[chat.account].label : "", detail].filter(Boolean).join(" · ");
   }
 

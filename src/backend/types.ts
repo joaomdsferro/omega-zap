@@ -140,6 +140,8 @@ export interface Message {
   timer?: number;
   /** Seconds it lasts once seen, in a chat with disappearing messages. */
   expiresIn?: number;
+  /** When it goes, in ms since the epoch, once its countdown started. */
+  expiresAt?: number;
 }
 
 export interface Chat {

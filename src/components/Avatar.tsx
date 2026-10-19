@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { isLogo } from "../lib/logos";
-import { PersonSilhouette } from "./Icons";
+import { PersonSilhouette, TimerIcon } from "./Icons";
 
 interface AvatarProps {
   name: string;
@@ -10,9 +10,11 @@ interface AvatarProps {
   size: number;
   group?: boolean;
   online?: boolean;
+  /** Messages in the chat disappear: a timer badge, at the bottom right or, where another badge sits there, left. */
+  timer?: "right" | "left";
 }
 
-export function Avatar({ name, initials, hue, src, size, group, online }: AvatarProps) {
+export function Avatar({ name, initials, hue, src, size, group, online, timer }: AvatarProps) {
   // The placeholder stays underneath, so a picture that fails to load just disappears.
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   return (
@@ -53,7 +55,17 @@ export function Avatar({ name, initials, hue, src, size, group, online }: Avatar
           style={isLogo(src) ? { background: "color-mix(in oklab, var(--text-secondary) 16%, var(--panel-bg))" } : undefined}
         />
       ) : null}
-      {online ? (
+      {timer ? (
+        <span
+          className={[
+            "absolute -bottom-0.75 flex items-center justify-center rounded-full border-2 border-(--panel-bg) bg-(--accent) text-(--on-accent)",
+            timer === "left" ? "-left-0.75" : "-right-0.75",
+          ].join(" ")}
+          style={{ width: Math.round(size * 0.42), height: Math.round(size * 0.42) }}
+        >
+          <TimerIcon size={Math.round(size * 0.25)} strokeWidth={2.4} />
+        </span>
+      ) : online ? (
         <span
           className="absolute right-0 bottom-0 rounded-full border-2 border-(--panel-bg) bg-(--accent)"
           style={{ width: size * 0.26, height: size * 0.26 }}

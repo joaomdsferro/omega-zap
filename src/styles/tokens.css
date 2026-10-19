@@ -328,6 +328,23 @@ body {
   }
 }
 
+/* A disappearing message's ring empties over the time it has left, in CSS
+ * alone: no timer runs per message. */
+.timer-ring {
+  animation-name: timer-ring;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+@keyframes timer-ring {
+  from {
+    stroke-dashoffset: var(--ring-from);
+  }
+  to {
+    stroke-dashoffset: var(--ring-to);
+  }
+}
+
 @keyframes fade-in {
   from {
     opacity: 0;

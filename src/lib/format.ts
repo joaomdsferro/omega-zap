@@ -78,8 +78,3 @@ export function timerLabel(seconds: number): string {
   return `${n} ${unit}${n === 1 ? "" : "s"}`;
 }
 
-/** The same, as short as Signal puts it beside a chat's name: "1w", "8h". */
-export function timerShort(seconds: number): string {
-  const [n, , short] = timerUnit(seconds);
-  return `${n}${short}`;
-}

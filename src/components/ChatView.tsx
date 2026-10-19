@@ -3,7 +3,7 @@ import type { Chat, Contact, GroupInfo as Group, GroupMember, MemberChange, Ment
 import { ContactInfo } from "./ContactInfo";
 import { GroupInfo } from "./GroupInfo";
 import { listenForFileDrops } from "../lib/dropped";
-import { formatDayLabel, formatMessageTime, sameDay, timerLabel, timerShort } from "../lib/format";
+import { formatDayLabel, formatMessageTime, sameDay, timerLabel } from "../lib/format";
 import { DisappearingDialog } from "./DisappearingDialog";
 import { AccountBadge } from "./AccountBadge";
 import { Avatar } from "./Avatar";
@@ -714,19 +714,11 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
             src={chat.avatarUrl}
             size={40}
             group={chat.isGroup}
+            timer={chat.disappearing ? "right" : undefined}
           />
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-1.5">
               <h2 className="truncate text-[16px] leading-5.25 text-(--text-primary)">{chat.name}</h2>
-              {chat.disappearing ? (
-                <span
-                  className="flex shrink-0 items-center gap-0.5 text-[12px] text-(--text-secondary) tabular-nums"
-                  title={`Disappearing messages: ${timerLabel(chat.disappearing)}`}
-                >
-                  <TimerIcon size={14} />
-                  {timerShort(chat.disappearing)}
-                </span>
-              ) : null}
             </div>
             <p className="truncate text-[13px] leading-5 text-(--text-secondary)">{subtitle}</p>
           </div>

@@ -96,6 +96,7 @@ const ChatRow = memo(function ChatRow({
             size={49}
             group={chat.isGroup}
             online={showAccount ? undefined : chat.online}
+            timer={chat.disappearing ? (showAccount ? "left" : "right") : undefined}
           />
           {showAccount ? (
             <span className="absolute -right-0.5 -bottom-0.5 rounded-full border-2 border-(--panel-bg)">
