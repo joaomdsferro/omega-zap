@@ -425,7 +425,7 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
   useEffect(() => setMenuAt(null), [chatKey]);
   /** The chat whose disappearing-message timer is being picked. */
   const [timerFor, setTimerFor] = useState<string | null>(null);
-  const blockPerson = onBlock && !chat.isGroup ? (blocked: boolean) => void onBlock({ id: chat.id, name: chat.name }, blocked).catch(() => {}) : undefined;
+  const blockPerson = onBlock && !chat.isGroup && !chat.isMe ? (blocked: boolean) => void onBlock({ id: chat.id, name: chat.name }, blocked).catch(() => {}) : undefined;
   const menuItems: MenuEntry[] = [
     ...((chat.isGroup ? loadGroup : loadPerson)
       ? [{ label: chat.isGroup ? "Group info" : "Contact info", icon: <InfoIcon size={18} />, onSelect: () => (chat.isGroup ? setGroupOpen(chatKey) : setPersonId(chat.id)) }]

@@ -64,6 +64,7 @@ interface RawChat {
   cleared: boolean;
   request?: boolean;
   expireSecs?: number;
+  isMe?: boolean;
 }
 
 interface RawContact {
@@ -210,6 +211,7 @@ function toChat(raw: RawChat, account: AccountId): Chat {
     blocked: raw.blocked || undefined,
     request: raw.request || undefined,
     disappearing: raw.expireSecs || undefined,
+    isMe: raw.isMe || undefined,
     left: raw.left || undefined,
     cleared: raw.cleared || undefined,
   };

@@ -686,6 +686,8 @@ pub struct ChatSummary {
     pub request: bool,
     /// The disappearing-message timer, in seconds; 0 is off.
     pub expire_secs: u32,
+    /// Our own chat, the one with ourselves (Note to Self, Message yourself).
+    pub is_me: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -3173,6 +3175,7 @@ impl ChatStore {
                     id: id.clone(),
                     name: self.chat_name(id, chat),
                     last_message,
+                    is_me: self.own_ids.contains(id),
                     last_at: last.map_or(chat.last_ts_ms, |m| m.ts_ms),
                     last_from_me: last.is_some_and(|m| m.from_me),
                     last_status: last.and_then(|m| m.status),
@@ -3182,7 +3185,12 @@ impl ChatStore {
                     muted: chat.muted_until_ms.is_some_and(|until| until > now),
                     archived: chat.archived,
                     is_group: chat.is_group,
-                    avatar: chat.avatar_id.as_deref().map(|pic| avatar_file(id, pic)),
+                    // Our own chat has our picture, which is kept apart from the chats'.
+                    avatar: chat
+                        .avatar_id
+                        .as_deref()
+                        .map(|pic| avatar_file(id, pic))
+                        .or_else(|| self.own_ids.contains(id).then(|| self.own_avatar()).flatten()),
                     favorite: favorites.contains(id),
                     lists: lists
                         .iter()

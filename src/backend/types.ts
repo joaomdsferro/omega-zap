@@ -177,6 +177,8 @@ export interface Chat {
   request?: boolean;
   /** The disappearing-message timer, in seconds, when it is on. */
   disappearing?: number;
+  /** Our own chat, with ourselves: named "<our name> (You)". */
+  isMe?: boolean;
   /** A group we are no longer in. */
   left?: boolean;
   /** Its messages were cleared: none are coming from the phone. */

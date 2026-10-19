@@ -789,22 +789,28 @@ function Shell() {
   );
   // The same array until a list changes, so the sidebar's filters don't run
   // again over thousands of chats with every message or keystroke.
+  // Our name on each account, as one string so the list is redone only when one changes.
+  const ownNames = ACCOUNT_IDS.map((id) => accounts[id].status.me?.name ?? "").join("\n");
   const chats = useMemo(() => {
+    const names = ownNames.split("\n");
     const all = shown.flatMap((backend) => {
       const list = chatsBy.get(backend) ?? [];
-      if (!typing.size && !presence.size) return list;
+      const ownName = names[ACCOUNT_IDS.indexOf(backend.account)];
+      if (!typing.size && !presence.size && !ownName) return list;
       // Only the chats with something to add are new objects, so the other rows stay as drawn.
       return list.map((chat) => {
         const key = `${backend.account}:${chat.id}`;
         const typed = typing.get(key);
         const seen = presence.get(key);
-        if (!typed && !seen) return chat;
-        return { ...chat, typing: typed, online: seen?.online, lastSeen: seen?.lastSeen };
+        // Our own chat is named after us, as the phone does: "João (You)".
+        const named = chat.isMe && ownName ? { ...chat, name: `${ownName} (You)`, initials: initialsFor(ownName) } : chat;
+        if (!typed && !seen) return named;
+        return { ...named, typing: typed, online: seen?.online, lastSeen: seen?.lastSeen };
       });
     });
     if (shown.length > 1) all.sort(byRecency);
     return all;
-  }, [shown, chatsBy, typing, presence]);
+  }, [shown, chatsBy, typing, presence, ownNames]);
   const showAccount = unified && anyLinked;
 
   const searchMessages = useCallback(
