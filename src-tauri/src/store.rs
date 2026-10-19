@@ -1765,6 +1765,11 @@ impl ChatStore {
         out.into_iter().map(|(_, group)| group).collect()
     }
 
+    /// A chat's disappearing-message timer, in seconds; 0 is off.
+    pub fn expire_secs(&self, chat: &str) -> u32 {
+        self.chats.get(chat).map_or(0, |c| c.expire_secs)
+    }
+
     /// Names WhatsApp's own chat after the app the session belongs to, as
     /// the phone does: "WhatsApp", or "WhatsApp Business".
     pub fn set_official_name(&mut self, name: &'static str) {

@@ -1331,10 +1331,10 @@ impl SignalManager {
     /// Files a message we just sent, keyed by its timestamp, and returns it
     /// as the UI shows it.
     fn store_sent(&self, chat_id: &str, ts: i64, content: Content) -> Result<MessageDto, String> {
-        let is_group = lock(&self.store)
-            .list_chats()
-            .iter()
-            .any(|c| c.id == chat_id && c.is_group);
+        let (is_group, expire) = {
+            let store = lock(&self.store);
+            (store.list_chats().iter().any(|c| c.id == chat_id && c.is_group), store.expire_secs(chat_id))
+        };
         let incoming = Incoming {
             chat: chat_id.to_string(),
             is_group,
@@ -1354,7 +1354,7 @@ impl SignalManager {
                 starred: false,
                 deleted: None,
                 edited_ms: None,
-                expires_in: None,
+                expires_in: (expire > 0).then_some(expire),
                 expires_at_ms: None,
             },
         };
@@ -1416,6 +1416,7 @@ impl SignalManager {
             "quote": quote,
             "preview": preview,
             "ranges": ranges,
+            "expire": lock(&self.store).expire_secs(chat_id),
         });
         let sent = self.request(command, UPLOAD_TIMEOUT).await;
         if let Some(path) = picture {
@@ -1471,6 +1472,7 @@ impl SignalManager {
             "caption": file.caption(),
             "quote": quote,
             "ts": ts,
+            "expire": lock(&self.store).expire_secs(chat_id),
         });
         let answer = self.request(command, UPLOAD_TIMEOUT).await;
         let media = match answer {

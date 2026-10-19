@@ -94,6 +94,9 @@ enum Command {
         /// Formatting over `text`, which comes without markers.
         #[serde(default)]
         ranges: Vec<SendRange>,
+        /// The chat's disappearing-message timer, in seconds; 0 is off.
+        #[serde(default)]
+        expire: u32,
     },
     /// Uploads the file at `path` and sends it. Answered with `uploaded`.
     SendFile {
@@ -109,6 +112,8 @@ enum Command {
         caption: Option<String>,
         quote: Option<SendQuote>,
         ts: u64,
+        #[serde(default)]
+        expire: u32,
     },
     /// Takes back one of our messages for everyone.
     Delete { id: u64, chat: String, target_ts: u64, ts: u64 },
@@ -181,6 +186,8 @@ enum Command {
         mime: String,
         quote: Option<SendQuote>,
         ts: u64,
+        #[serde(default)]
+        expire: u32,
     },
 }
 
@@ -1130,8 +1137,38 @@ impl Receiver {
     }
 }
 
-async fn send(manager: &mut Signal, chat: &str, message: DataMessage, ts: u64) -> Result<(), String> {
+async fn send(manager: &mut Signal, chat: &str, mut message: DataMessage, ts: u64) -> Result<(), String> {
+    keep_timer(manager, chat, &mut message).await;
     send_as(manager, chat, message, ts, ContentBody::DataMessage).await
+}
+
+/// Each chat's disappearing-message timer as the app last said it, in seconds.
+static TIMERS: std::sync::LazyLock<std::sync::Mutex<HashMap<String, u32>>> = std::sync::LazyLock::new(Default::default);
+
+fn know_timer(chat: &str, secs: u32) {
+    TIMERS.lock().unwrap_or_else(|e| e.into_inner()).insert(chat.to_string(), secs);
+}
+
+/// Gives a message the chat's timer when presage doesn't know it. presage
+/// keeps a timer only for a chat with someone in its contacts, so Note to
+/// Self and people it hasn't stored yet would get messages that never go.
+/// A timer it does know it puts in itself, and giving it one counts its
+/// version up, so it is left to it then.
+async fn keep_timer(manager: &Signal, chat: &str, message: &mut DataMessage) {
+    let content = message.body.is_some() || !message.attachments.is_empty() || message.sticker.is_some();
+    if !content || message.flags.is_some() || message.expire_timer.is_some() {
+        return;
+    }
+    let Some(secs) = TIMERS.lock().unwrap_or_else(|e| e.into_inner()).get(chat).copied().filter(|s| *s > 0) else {
+        return;
+    };
+    let Some(thread) = thread_named(chat) else {
+        return;
+    };
+    let known = manager.store().expire_timer(&thread).await.ok().flatten().map(|(timer, _)| timer);
+    if known != Some(secs) {
+        message.expire_timer = Some(secs);
+    }
 }
 
 /// Sends `message` wrapped by `wrap`, as an edit wraps the message it
@@ -1464,7 +1501,8 @@ async fn session(
         tokio::select! {
             ended = &mut receiving => return ended.unwrap_or(Ok(())),
             command = commands.recv() => match command {
-                Some(Command::Send { id, chat, text, ts, quote, preview, ranges }) => {
+                Some(Command::Send { id, chat, text, ts, quote, preview, ranges, expire }) => {
+                    know_timer(&chat, expire);
                     let quote = quote.map(|q| QuoteProto {
                         id: Some(q.ts),
                         author_aci: Some(q.author),
@@ -1482,7 +1520,8 @@ async fn session(
                 }
                 // On its own task: an upload can take minutes, and the
                 // commands behind it should not wait for it.
-                Some(Command::SendFile { id, chat, path, mime, file_name, kind, width, height, caption, quote, ts }) => {
+                Some(Command::SendFile { id, chat, path, mime, file_name, kind, width, height, caption, quote, ts, expire }) => {
+                    know_timer(&chat, expire);
                     let mut manager = sender.clone();
                     tokio::task::spawn_local(async move {
                         let file = OutgoingFile { path, mime, file_name, kind, width, height, caption, quote };
@@ -1633,7 +1672,8 @@ async fn session(
                     let error = stickers::sync_pack(&mut sender, me, &pack_id, &pack_key, install, ts).await.err();
                     emit(Event::Done { id, error });
                 }
-                Some(Command::SendSticker { id, chat, pack_id, pack_key, sticker_id, emoji, path, mime, quote, ts }) => {
+                Some(Command::SendSticker { id, chat, pack_id, pack_key, sticker_id, emoji, path, mime, quote, ts, expire }) => {
+                    know_timer(&chat, expire);
                     let mut manager = sender.clone();
                     tokio::task::spawn_local(async move {
                         let sticker = stickers::OutgoingSticker { chat, pack_id, pack_key, sticker_id, emoji, path, mime, quote };

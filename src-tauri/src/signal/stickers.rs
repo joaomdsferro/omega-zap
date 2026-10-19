@@ -288,6 +288,7 @@ impl SignalManager {
         let ts = now_ms();
         let staged = crate::vault::handoff_path("signal-outbox").map_err(|e| e.to_string())?;
         fs::write(&staged, &made.bytes).map_err(|e| format!("could not hand the sticker over: {e}"))?;
+        let expire = lock(&self.store).expire_secs(chat_id);
         let command = match &pack {
             Some((pack_id, pack_key, sticker_id)) => serde_json::json!({
                 "cmd": "send_sticker",
@@ -300,6 +301,7 @@ impl SignalManager {
                 "mime": made.mime,
                 "quote": quote,
                 "ts": ts,
+                "expire": expire,
             }),
             None => serde_json::json!({
                 "cmd": "send_file",
@@ -313,6 +315,7 @@ impl SignalManager {
                 "caption": null,
                 "quote": quote,
                 "ts": ts,
+                "expire": expire,
             }),
         };
         let answer = self.request(command, UPLOAD_TIMEOUT).await;
