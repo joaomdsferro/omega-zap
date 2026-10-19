@@ -5,6 +5,7 @@
 @import "@fontsource/source-sans-3/500.css";
 @import "@fontsource/source-sans-3/600.css";
 @import "@fontsource/source-sans-3/700.css";
+@import "./appearance.css";
 
 @theme {
   --font-display: var(--font-brand);
@@ -207,6 +208,226 @@
   --menu-bg: #ffffff;
 }
 
+:root[data-theme="graphite"] {
+  color-scheme: dark;
+  --rail-bg: #161618;
+  --rail-active: #2e2e32;
+  --panel-bg: #1c1c1e;
+  --panel-header-bg: #1c1c1e;
+  --search-bg: #2a2a2d;
+  --hover-bg: #252528;
+  --selected-bg: #2f2f33;
+  --divider: #2a2a2d;
+  --text-primary: #f2f2f4;
+  --text-secondary: #9b9ba3;
+  --icon: #b8b8c0;
+  --accent: #30d158;
+  --accent-strong: #30d158;
+  --on-accent: #0b0b0c;
+  --badge-bg: #30d158;
+  --badge-text: #0b0b0c;
+  --chip-bg: #2a2a2d;
+  --chip-text: #b8b8c0;
+  --chip-active-bg: rgba(48, 209, 88, 0.16);
+  --chip-active-text: #30d158;
+  --chat-bg: #121214;
+  --doodle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' fill='none' stroke='%23fff' stroke-opacity='.04' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 30h26a6 6 0 0 1 6 6v14a6 6 0 0 1-6 6H34l-8 6v-6h-4a6 6 0 0 1-6-6V36a6 6 0 0 1 6-6z'/%3E%3Cpath d='M118 22l4 9 10 1-7 7 2 10-9-5-9 5 2-10-7-7 10-1z'/%3E%3Ccircle cx='150' cy='112' r='12'/%3E%3Cpath d='M78 92l-6 14h10l-6 14'/%3E%3Cpath d='M30 132c0-6 5-10 10-10s10 4 10 10c0 8-10 14-10 14s-10-6-10-14z'/%3E%3Crect x='96' y='140' width='24' height='18' rx='4'/%3E%3Ccircle cx='108' cy='149' r='4'/%3E%3Cpath d='M150 60c6 0 10 4 10 10'/%3E%3Cpath d='M70 20h8M74 16v8'/%3E%3C/svg%3E");
+  --bubble-in: #2a2a2d;
+  --bubble-out: #1d4d33;
+  --bubble-meta: rgba(242, 242, 244, 0.55);
+  --bubble-shadow: none;
+  --quote-bg: rgba(0, 0, 0, 0.22);
+  --day-chip-bg: #232326;
+  --day-chip-text: #9b9ba3;
+  --composer-bg: #1c1c1e;
+  --composer-input-bg: #2a2a2d;
+  --empty-bg: #1c1c1e;
+  --tick-read: #64d2ff;
+  --banner-bg: #252528;
+  --banner-text: #d4d4da;
+  --danger: #ff6961;
+  --scrollbar: rgba(255, 255, 255, 0.18);
+  --focus-ring: #30d158;
+  --overlay: rgba(10, 10, 12, 0.9);
+  --menu-bg: #2a2a2d;
+}
+
+:root[data-theme="midnight"] {
+  color-scheme: dark;
+  --rail-bg: #0c0e1a;
+  --rail-active: #252a52;
+  --panel-bg: #111426;
+  --panel-header-bg: #131730;
+  --search-bg: #1a1e38;
+  --hover-bg: #181c34;
+  --selected-bg: rgba(149, 133, 255, 0.16);
+  --divider: #21264a;
+  --text-primary: #eceefe;
+  --text-secondary: #949ac4;
+  --icon: #b9bee3;
+  --accent: #9585ff;
+  --accent-strong: #9585ff;
+  --on-accent: #0c0e1a;
+  --badge-bg: #9585ff;
+  --badge-text: #0c0e1a;
+  --chip-bg: #1a1e38;
+  --chip-text: #a9aed6;
+  --chip-active-bg: rgba(149, 133, 255, 0.18);
+  --chip-active-text: #b3a8ff;
+  --chat-bg: #0c0f1f;
+  --doodle: radial-gradient(ellipse 80% 60% at 15% 5%, rgba(149, 133, 255, 0.12), transparent 55%), radial-gradient(ellipse 70% 50% at 95% 90%, rgba(56, 189, 248, 0.07), transparent 50%);
+  --bubble-in: #1a1e38;
+  --bubble-out: #3b318a;
+  --bubble-meta: rgba(236, 238, 254, 0.6);
+  --bubble-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
+  --quote-bg: rgba(0, 0, 0, 0.22);
+  --day-chip-bg: #151935;
+  --day-chip-text: #a9aed6;
+  --composer-bg: #111426;
+  --composer-input-bg: #1a1e38;
+  --empty-bg: #111426;
+  --tick-read: #7dd3fc;
+  --banner-bg: #1a1e38;
+  --banner-text: #c9cdf0;
+  --danger: #ff7b8a;
+  --scrollbar: rgba(149, 154, 196, 0.35);
+  --focus-ring: #9585ff;
+  --overlay: rgba(8, 10, 20, 0.9);
+  --menu-bg: #1a1e38;
+}
+
+:root[data-theme="oled"] {
+  color-scheme: dark;
+  --rail-bg: #000000;
+  --rail-active: #1f1f1f;
+  --panel-bg: #000000;
+  --panel-header-bg: #000000;
+  --search-bg: #161616;
+  --hover-bg: #0f0f0f;
+  --selected-bg: #1a1a1a;
+  --divider: #1a1a1a;
+  --text-primary: #f5f5f5;
+  --text-secondary: #8e8e93;
+  --icon: #a8a8ad;
+  --accent: #00c896;
+  --accent-strong: #00c896;
+  --on-accent: #000000;
+  --badge-bg: #00c896;
+  --badge-text: #000000;
+  --chip-bg: #161616;
+  --chip-text: #a8a8ad;
+  --chip-active-bg: rgba(0, 200, 150, 0.16);
+  --chip-active-text: #00c896;
+  --chat-bg: #000000;
+  --doodle: none;
+  --bubble-in: #1a1a1a;
+  --bubble-out: #0c3b31;
+  --bubble-meta: rgba(245, 245, 245, 0.55);
+  --bubble-shadow: none;
+  --quote-bg: rgba(255, 255, 255, 0.06);
+  --day-chip-bg: #141414;
+  --day-chip-text: #8e8e93;
+  --composer-bg: #000000;
+  --composer-input-bg: #161616;
+  --empty-bg: #000000;
+  --tick-read: #53bdeb;
+  --banner-bg: #141414;
+  --banner-text: #c8c8cc;
+  --danger: #ff6961;
+  --scrollbar: rgba(255, 255, 255, 0.2);
+  --focus-ring: #00c896;
+  --overlay: rgba(0, 0, 0, 0.92);
+  --menu-bg: #1a1a1a;
+}
+
+:root[data-theme="paper"] {
+  color-scheme: light;
+  --rail-bg: #f2ece2;
+  --rail-active: #e6dccb;
+  --panel-bg: #fffdf8;
+  --panel-header-bg: #f8f3ea;
+  --search-bg: #f2ece2;
+  --hover-bg: #f8f3ea;
+  --selected-bg: #efe6d6;
+  --divider: #e9e1d2;
+  --text-primary: #2b241b;
+  --text-secondary: #73685a;
+  --icon: #5c5244;
+  --accent: #c0571a;
+  --accent-strong: #9c4512;
+  --on-accent: #ffffff;
+  --badge-bg: #c0571a;
+  --badge-text: #ffffff;
+  --chip-bg: #f2ece2;
+  --chip-text: #5c5244;
+  --chip-active-bg: #f8dfc8;
+  --chip-active-text: #9c4512;
+  --chat-bg: #f3ecdf;
+  --doodle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' fill='none' stroke='%235c4020' stroke-opacity='.07' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 30h26a6 6 0 0 1 6 6v14a6 6 0 0 1-6 6H34l-8 6v-6h-4a6 6 0 0 1-6-6V36a6 6 0 0 1 6-6z'/%3E%3Cpath d='M118 22l4 9 10 1-7 7 2 10-9-5-9 5 2-10-7-7 10-1z'/%3E%3Ccircle cx='150' cy='112' r='12'/%3E%3Cpath d='M78 92l-6 14h10l-6 14'/%3E%3Cpath d='M30 132c0-6 5-10 10-10s10 4 10 10c0 8-10 14-10 14s-10-6-10-14z'/%3E%3Crect x='96' y='140' width='24' height='18' rx='4'/%3E%3Ccircle cx='108' cy='149' r='4'/%3E%3Cpath d='M150 60c6 0 10 4 10 10'/%3E%3Cpath d='M70 20h8M74 16v8'/%3E%3C/svg%3E");
+  --bubble-in: #fffdf8;
+  --bubble-out: #fbe2c8;
+  --bubble-meta: #73685a;
+  --bubble-shadow: 0 1px 0.5px rgba(60, 40, 20, 0.14);
+  --quote-bg: rgba(60, 40, 20, 0.06);
+  --day-chip-bg: #fffdf8;
+  --day-chip-text: #5c5244;
+  --composer-bg: #f8f3ea;
+  --composer-input-bg: #fffdf8;
+  --empty-bg: #f8f3ea;
+  --tick-read: #1d72c9;
+  --banner-bg: #fbefc8;
+  --banner-text: #4a3f31;
+  --danger: #c62a3f;
+  --scrollbar: rgba(60, 40, 20, 0.22);
+  --focus-ring: #c0571a;
+  --overlay: rgba(43, 36, 27, 0.85);
+  --menu-bg: #fffdf8;
+}
+
+:root[data-theme="frost"] {
+  color-scheme: light;
+  --rail-bg: #edf1f7;
+  --rail-active: #d9e3f2;
+  --panel-bg: #ffffff;
+  --panel-header-bg: #f6f8fb;
+  --search-bg: #eef2f7;
+  --hover-bg: #f4f7fb;
+  --selected-bg: #e5edf9;
+  --divider: #e3e8f0;
+  --text-primary: #0f1724;
+  --text-secondary: #5a6578;
+  --icon: #465163;
+  --accent: #2f6fe4;
+  --accent-strong: #1f58c4;
+  --on-accent: #ffffff;
+  --badge-bg: #2f6fe4;
+  --badge-text: #ffffff;
+  --chip-bg: #eef2f7;
+  --chip-text: #465163;
+  --chip-active-bg: #dbe7fd;
+  --chip-active-text: #1f58c4;
+  --chat-bg: #e9eff7;
+  --doodle: radial-gradient(ellipse 80% 60% at 15% 0%, rgba(47, 111, 228, 0.1), transparent 55%), radial-gradient(ellipse 60% 50% at 100% 100%, rgba(125, 211, 252, 0.14), transparent 55%);
+  --bubble-in: #ffffff;
+  --bubble-out: #d6e5ff;
+  --bubble-meta: #5a6578;
+  --bubble-shadow: 0 1px 0.5px rgba(15, 23, 36, 0.1);
+  --quote-bg: rgba(15, 23, 36, 0.05);
+  --day-chip-bg: #ffffff;
+  --day-chip-text: #465163;
+  --composer-bg: #f6f8fb;
+  --composer-input-bg: #ffffff;
+  --empty-bg: #f6f8fb;
+  --tick-read: #1f8ae0;
+  --banner-bg: #fff4c2;
+  --banner-text: #3b4656;
+  --danger: #d4344a;
+  --scrollbar: rgba(15, 23, 36, 0.2);
+  --focus-ring: #2f6fe4;
+  --overlay: rgba(15, 23, 36, 0.85);
+  --menu-bg: #ffffff;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -286,7 +507,7 @@ body {
   background-size: 180px 180px;
 }
 
-:root[data-theme^="omegazap"] .chat-wallpaper {
+:root:is([data-theme^="omegazap"], [data-theme="midnight"], [data-theme="frost"]) .chat-wallpaper {
   background-size: cover;
 }
 
@@ -296,7 +517,7 @@ body {
   display: none;
 }
 
-:root[data-theme^="omegazap"] .avatar-silhouette {
+:root:not([data-theme^="whatsapp"]) .avatar-silhouette {
   display: none;
 }
 

@@ -14,7 +14,12 @@ export type ThemeId =
   | "whatsapp-light"
   | "whatsapp-dark"
   | "omegazap-dark"
-  | "omegazap-light";
+  | "omegazap-light"
+  | "graphite"
+  | "midnight"
+  | "oled"
+  | "paper"
+  | "frost";
 
 export type ResolvedTheme = Exclude<ThemeId, "whatsapp-system">;
 
@@ -23,6 +28,8 @@ export interface ThemeOption {
   label: string;
   description: string;
   swatch: [string, string, string];
+  /** Dark themes; "whatsapp-system" follows the desktop. */
+  dark?: boolean;
 }
 
 export const THEMES: ThemeOption[] = [
@@ -43,12 +50,14 @@ export const THEMES: ThemeOption[] = [
     label: "WhatsApp dark",
     description: "WhatsApp Web in dark mode",
     swatch: ["#0b141a", "#005c4b", "#00a884"],
+    dark: true,
   },
   {
     id: "omegazap-dark",
     label: "Omega Zap ink",
     description: "Near-black with teal accents",
     swatch: ["#0b1210", "#1a3d36", "#2dd4a8"],
+    dark: true,
   },
   {
     id: "omegazap-light",
@@ -56,6 +65,79 @@ export const THEMES: ThemeOption[] = [
     description: "Soft mint with teal accents",
     swatch: ["#eef5f1", "#c8ebe0", "#0f9f7a"],
   },
+  {
+    id: "graphite",
+    label: "Graphite",
+    description: "Neutral dark grey, like macOS",
+    swatch: ["#121214", "#1d4d33", "#30d158"],
+    dark: true,
+  },
+  {
+    id: "midnight",
+    label: "Midnight",
+    description: "Deep indigo with violet",
+    swatch: ["#0c0f1f", "#3b318a", "#9585ff"],
+    dark: true,
+  },
+  {
+    id: "oled",
+    label: "OLED black",
+    description: "Pure black, nothing lit that needn't be",
+    swatch: ["#000000", "#0c3b31", "#00c896"],
+    dark: true,
+  },
+  {
+    id: "paper",
+    label: "Paper",
+    description: "Warm cream with terracotta",
+    swatch: ["#f3ecdf", "#fbe2c8", "#c0571a"],
+  },
+  {
+    id: "frost",
+    label: "Frost",
+    description: "Cool light blue",
+    swatch: ["#e9eff7", "#d6e5ff", "#2f6fe4"],
+  },
+];
+
+export type Accent = "theme" | "green" | "teal" | "blue" | "violet" | "pink" | "orange" | "graphite";
+
+/** Colours laid over the theme's own; `color` is the swatch. Their shades are in appearance.css. */
+export const ACCENTS: { id: Accent; label: string; color: string }[] = [
+  { id: "theme", label: "Theme's own", color: "var(--accent)" },
+  { id: "green", label: "Green", color: "#00a884" },
+  { id: "teal", label: "Teal", color: "#0f9f7a" },
+  { id: "blue", label: "Blue", color: "#2f6fe4" },
+  { id: "violet", label: "Violet", color: "#7655ea" },
+  { id: "pink", label: "Pink", color: "#d6336c" },
+  { id: "orange", label: "Orange", color: "#d9620f" },
+  { id: "graphite", label: "Graphite", color: "#52525b" },
+];
+
+export type BubbleShape = "classic" | "rounded" | "sharp";
+
+export const BUBBLE_SHAPES: { id: BubbleShape; label: string }[] = [
+  { id: "classic", label: "Classic" },
+  { id: "rounded", label: "Rounded" },
+  { id: "sharp", label: "Sharp" },
+];
+
+export type Wallpaper = "theme" | "glow" | "dots" | "plain";
+
+export const WALLPAPERS: { id: Wallpaper; label: string }[] = [
+  { id: "theme", label: "Theme's own" },
+  { id: "glow", label: "Glow" },
+  { id: "dots", label: "Dots" },
+  { id: "plain", label: "Plain" },
+];
+
+export type TextSize = "small" | "medium" | "large" | "xlarge";
+
+export const TEXT_SIZES: { id: TextSize; label: string; px: number }[] = [
+  { id: "small", label: "Small", px: 13 },
+  { id: "medium", label: "Medium", px: 14.2 },
+  { id: "large", label: "Large", px: 16 },
+  { id: "xlarge", label: "Extra large", px: 18 },
 ];
 
 export type TrayBadge = "graphite" | "green" | "red" | "blue";
@@ -89,6 +171,12 @@ export const LONG_TEXT_LINES = { min: 4, max: 100, step: 2 };
 
 export interface Settings {
   theme: ThemeId;
+  /** Accent colour over the theme's own. */
+  accent: Accent;
+  bubbles: BubbleShape;
+  wallpaper: Wallpaper;
+  /** Size of the text in messages. */
+  textSize: TextSize;
   zoom: number;
   /** The account whose chats are shown while accounts are kept apart. */
   activeAccount: AccountId;
@@ -126,6 +214,10 @@ export interface Settings {
 
 const DEFAULTS: Settings = {
   theme: "whatsapp-system",
+  accent: "theme",
+  bubbles: "classic",
+  wallpaper: "theme",
+  textSize: "medium",
   zoom: 1,
   activeAccount: "whatsapp",
   unifiedInbox: false,
@@ -151,6 +243,11 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+/** `value` when it is one of `options`, else `fallback`. */
+function pick<T extends string>(options: { id: T }[], value: unknown, fallback: T): T {
+  return options.some((o) => o.id === value) ? (value as T) : fallback;
+}
+
 /** What was saved: the settings, and the chat list's width beside them. */
 type Stored = Partial<Settings> & { sidebarWidth?: unknown };
 
@@ -171,6 +268,10 @@ function loadSidebarWidth(parsed: Stored): number {
 function load(parsed: Stored): Settings {
   return {
     theme: THEMES.some((t) => t.id === parsed.theme) ? (parsed.theme as ThemeId) : DEFAULTS.theme,
+    accent: pick(ACCENTS, parsed.accent, DEFAULTS.accent),
+    bubbles: pick(BUBBLE_SHAPES, parsed.bubbles, DEFAULTS.bubbles),
+    wallpaper: pick(WALLPAPERS, parsed.wallpaper, DEFAULTS.wallpaper),
+    textSize: pick(TEXT_SIZES, parsed.textSize, DEFAULTS.textSize),
     zoom: ZOOM_STEPS.includes(parsed.zoom ?? NaN) ? (parsed.zoom as number) : DEFAULTS.zoom,
     activeAccount: ACCOUNT_IDS.includes(parsed.activeAccount as AccountId)
       ? (parsed.activeAccount as AccountId)
@@ -201,6 +302,10 @@ interface SettingsContextValue {
   settings: Settings;
   resolvedTheme: ResolvedTheme;
   setTheme: (theme: ThemeId) => void;
+  setAccent: (accent: Accent) => void;
+  setBubbles: (bubbles: BubbleShape) => void;
+  setWallpaper: (wallpaper: Wallpaper) => void;
+  setTextSize: (size: TextSize) => void;
   setZoom: (zoom: number) => void;
   zoomIn: () => void;
   zoomOut: () => void;
@@ -253,9 +358,18 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         : "whatsapp-light"
       : settings.theme;
 
+  // Appearance is all CSS keyed on these attributes, so changing it restyles
+  // without re-rendering anything.
+  const { accent, bubbles, wallpaper, textSize } = settings;
   useEffect(() => {
-    document.documentElement.dataset.theme = resolvedTheme;
-  }, [resolvedTheme]);
+    const root = document.documentElement.dataset;
+    root.theme = resolvedTheme;
+    root.scheme = THEMES.find((t) => t.id === resolvedTheme)?.dark ? "dark" : "light";
+    root.accent = accent;
+    root.bubbles = bubbles;
+    root.wallpaper = wallpaper;
+    root.textSize = textSize;
+  }, [resolvedTheme, accent, bubbles, wallpaper, textSize]);
 
   useEffect(() => {
     const id = window.setTimeout(() => {
@@ -282,6 +396,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       settings,
       resolvedTheme,
       setTheme: (theme) => setSettings((s) => ({ ...s, theme })),
+      setAccent: (accent) => setSettings((s) => ({ ...s, accent })),
+      setBubbles: (bubbles) => setSettings((s) => ({ ...s, bubbles })),
+      setWallpaper: (wallpaper) => setSettings((s) => ({ ...s, wallpaper })),
+      setTextSize: (textSize) => setSettings((s) => ({ ...s, textSize })),
       setZoom,
       zoomIn: () => stepZoom(1),
       zoomOut: () => stepZoom(-1),

@@ -94,6 +94,7 @@ function Tail({ mine }: { mine: boolean }) {
       width="8"
       height="13"
       aria-hidden
+      data-tail
       className={["absolute top-0", mine ? "-right-2" : "-left-2 -scale-x-100"].join(" ")}
       style={{ color: mine ? "var(--bubble-out)" : "var(--bubble-in)" }}
     >
@@ -574,6 +575,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
       <div
         ref={bubble}
         data-bubble
+        data-tail={tail ? (mine ? "out" : "in") : undefined}
         onPointerDown={startPress}
         onPointerMove={movePress}
         onPointerUp={cancelPress}

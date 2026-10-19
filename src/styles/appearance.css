@@ -1,0 +1,88 @@
+/*
+ * Appearance choices that sit on top of the theme: SettingsProvider puts
+ * them on <html> as data attributes, so changing one restyles in CSS alone
+ * and nothing re-renders.
+ */
+
+/* Bubbles: "classic" is WhatsApp's, with a tail on the first of a run. */
+:root[data-bubbles="rounded"] [data-bubble] {
+  border-radius: 18px;
+}
+:root[data-bubbles="rounded"] [data-bubble][data-tail="out"] {
+  border-top-right-radius: 5px;
+}
+:root[data-bubbles="rounded"] [data-bubble][data-tail="in"] {
+  border-top-left-radius: 5px;
+}
+:root[data-bubbles="sharp"] [data-bubble] {
+  border-radius: 3px;
+  box-shadow: none !important;
+}
+:root:is([data-bubbles="rounded"], [data-bubbles="sharp"]) [data-bubble] > [data-tail] {
+  display: none;
+}
+
+/* Message text size; "medium" is WhatsApp's 14.2px. */
+:root[data-text-size="small"] [data-bubble] {
+  font-size: 13px;
+  line-height: 17px;
+}
+:root[data-text-size="large"] [data-bubble] {
+  font-size: 16px;
+  line-height: 21px;
+}
+:root[data-text-size="xlarge"] [data-bubble] {
+  font-size: 18px;
+  line-height: 24px;
+}
+
+/* Chat background. "theme" keeps what the theme draws. */
+:root[data-wallpaper="plain"] .chat-wallpaper {
+  background-image: none;
+}
+:root[data-wallpaper="dots"] .chat-wallpaper {
+  background-image: radial-gradient(color-mix(in srgb, var(--text-secondary) 22%, transparent) 1px, transparent 1.5px);
+  background-size: 18px 18px;
+}
+:root[data-wallpaper="glow"] .chat-wallpaper {
+  background-image:
+    radial-gradient(ellipse 80% 60% at 15% 5%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%),
+    radial-gradient(ellipse 70% 55% at 95% 95%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 55%);
+  background-size: cover;
+}
+
+/*
+ * Accent colour over the theme's own. Light themes get a darker shade for
+ * text, so it keeps 4.5:1 on white; dark themes a brighter one.
+ */
+:root[data-accent="green"] { --acc-l: #00a884; --acc-ls: #008069; --acc-d: #00c896; }
+:root[data-accent="teal"] { --acc-l: #0f9f7a; --acc-ls: #0b7a5e; --acc-d: #2dd4a8; }
+:root[data-accent="blue"] { --acc-l: #2f6fe4; --acc-ls: #1f58c4; --acc-d: #5b9cff; }
+:root[data-accent="violet"] { --acc-l: #7655ea; --acc-ls: #5f3fd6; --acc-d: #9d8cff; }
+:root[data-accent="pink"] { --acc-l: #d6336c; --acc-ls: #b3245a; --acc-d: #f472b6; }
+:root[data-accent="orange"] { --acc-l: #d9620f; --acc-ls: #a84a0a; --acc-d: #fb923c; }
+:root[data-accent="graphite"] { --acc-l: #52525b; --acc-ls: #3f3f46; --acc-d: #d4d4d8; }
+
+:root[data-accent]:not([data-accent="theme"])[data-scheme="light"] {
+  --accent: var(--acc-l);
+  --accent-strong: var(--acc-ls);
+  --on-accent: #ffffff;
+  --badge-bg: var(--acc-l);
+  --badge-text: #ffffff;
+  --chip-active-bg: color-mix(in srgb, var(--acc-l) 15%, var(--panel-bg));
+  --chip-active-text: var(--acc-ls);
+  --bubble-out: color-mix(in srgb, var(--acc-l) 20%, #ffffff);
+  --focus-ring: var(--acc-l);
+}
+:root[data-accent]:not([data-accent="theme"])[data-scheme="dark"] {
+  --accent: var(--acc-d);
+  --accent-strong: var(--acc-d);
+  --on-accent: #0b0b0c;
+  --badge-bg: var(--acc-d);
+  --badge-text: #0b0b0c;
+  --chip-active-bg: color-mix(in srgb, var(--acc-d) 16%, transparent);
+  --chip-active-text: var(--acc-d);
+  --selected-bg: color-mix(in srgb, var(--acc-d) 12%, var(--panel-bg));
+  --bubble-out: color-mix(in srgb, var(--acc-d) 32%, var(--panel-bg));
+  --focus-ring: var(--acc-d);
+}
