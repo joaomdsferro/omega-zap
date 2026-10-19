@@ -110,10 +110,19 @@ const STATUS_LABEL: Record<DeliveryStatus, string> = {
 
 const RING_LENGTH = 2 * Math.PI * 6;
 
+/** When a message goes, to the second when it is soon: "at 12:15:32", "on 21 Oct at 09:00". */
+function expiryTime(at: number): string {
+  const when = new Date(at);
+  const soon = at - Date.now() < 60 * 60 * 1000;
+  const time = when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: soon ? "2-digit" : undefined });
+  if (when.toDateString() === new Date().toDateString()) return `at ${time}`;
+  return `on ${when.toLocaleDateString([], { day: "numeric", month: "short" })} at ${time}`;
+}
+
 /** A ring by the time that empties as the message's time runs out, as Signal's apps show it. Full until its countdown starts. */
 function TimerRing({ seconds, at }: { seconds: number; at?: number }) {
   const left = at === undefined ? seconds * 1000 : Math.max(0, at - Date.now());
-  const label = at === undefined ? `Disappears ${timerLabel(seconds)} after it's seen` : `Disappears in ${timerLabel(Math.max(1, Math.round(left / 1000)))}`;
+  const label = at === undefined ? `Disappears ${timerLabel(seconds)} after it's seen` : `Disappears ${expiryTime(at)}`;
   const gone = RING_LENGTH * (1 - left / (seconds * 1000));
   return (
     <svg width="12" height="12" viewBox="0 0 16 16" role="img" aria-label={label} className="shrink-0">
