@@ -1271,7 +1271,7 @@ impl WaManager {
             .await
             .map_err(|e| format!("The reaction was not sent: {e}"))?;
         let dto = lock(&self.store)
-            .set_reaction(chat_id, message_id, &me, (!remove).then_some(emoji))
+            .set_reaction(chat_id, message_id, &me, (!remove).then_some(emoji), Some(now_ms()))
             .ok_or("That message is gone.")?;
         self.mark_dirty();
         Ok(dto)
@@ -2408,7 +2408,7 @@ impl WaManager {
                             Some((target, emoji)) => {
                                 let chat = m.info.source.chat.to_non_ad_string();
                                 let sender = m.info.source.sender.to_non_ad_string();
-                                let Some(dto) = store.set_reaction(&chat, &target, &sender, emoji.as_deref()) else {
+                                let Some(dto) = store.set_reaction(&chat, &target, &sender, emoji.as_deref(), Some(m.info.timestamp.timestamp_millis())) else {
                                     continue;
                                 };
                                 if let Some(emoji) = &emoji {
@@ -2706,7 +2706,7 @@ impl WaManager {
                     for (author, emoji) in convert::history_reactions(&c.id, item) {
                         let author = author.or_else(|| store.own_id().map(str::to_string));
                         if let Some(author) = author {
-                            store.set_reaction(&c.id, &id, &author, Some(&emoji));
+                            store.set_reaction(&c.id, &id, &author, Some(&emoji), None);
                         }
                     }
                 }

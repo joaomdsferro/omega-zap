@@ -570,6 +570,18 @@ struct StoredChat {
     expire_secs: u32,
     /// When the timer was last set, so an older message doesn't undo it.
     expire_set_ms: i64,
+    /// The latest reaction in the chat, which the chat list shows in place
+    /// of the last message while nothing newer came, as WhatsApp does.
+    last_reaction: Option<LastReaction>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct LastReaction {
+    at_ms: i64,
+    author: String,
+    emoji: String,
+    /// The message reacted to.
+    target: String,
 }
 
 /// A message pinned in a chat for everyone in it, or unpinned.
@@ -686,6 +698,9 @@ pub struct ChatSummary {
     pub request: bool,
     /// The disappearing-message timer, in seconds; 0 is off.
     pub expire_secs: u32,
+    /// The latest reaction, as the list words it, when it came after the
+    /// last message: "Reacted ❤️ to “Hi”".
+    pub reaction_preview: Option<String>,
     /// Our own chat, the one with ourselves (Note to Self, Message yourself).
     pub is_me: bool,
 }
@@ -2288,6 +2303,21 @@ impl ChatStore {
         Some(self.chat_notice(&chat_id, stored, body))
     }
 
+    /// A reaction as the chat list words it: "You reacted 👍 to “Hi”",
+    /// "Reacted ❤️ to “Hi”", or with who in a group.
+    fn reaction_line(&self, chat: &StoredChat, reaction: &LastReaction) -> Option<String> {
+        let message = chat.messages.iter().find(|m| m.id == reaction.target && m.deleted.is_none())?;
+        let quote = shorten(&self.with_mentions(&message.content.preview()).0, NOTICE_QUOTE_CHARS);
+        let emoji = &reaction.emoji;
+        Some(if self.own_ids.contains(&reaction.author) {
+            format!("You reacted {emoji} to \u{201c}{quote}\u{201d}")
+        } else if chat.is_group {
+            format!("{} reacted {emoji} to \u{201c}{quote}\u{201d}", self.display_name(&reaction.author))
+        } else {
+            format!("Reacted {emoji} to \u{201c}{quote}\u{201d}")
+        })
+    }
+
     /// The chat a pin, mute or archive applies to. These can arrive before the
     /// chat has any message.
     fn chat_for_state(&mut self, jid: &str) -> Option<&mut StoredChat> {
@@ -2950,26 +2980,37 @@ impl ChatStore {
     }
 
     /// Sets or clears one person's reaction. Returns the message when it is known.
+    /// `at_ms`, when the reaction was made, puts it in the chat list; one
+    /// from history, without it, doesn't.
     pub fn set_reaction(
         &mut self,
         chat: &str,
         id: &str,
         author: &str,
         emoji: Option<&str>,
+        at_ms: Option<i64>,
     ) -> Option<MessageDto> {
         let chat_id = self.canonical(chat);
         let author = self.canonical(author);
-        let message = self
-            .chats
-            .get_mut(&chat_id)?
-            .messages
-            .iter_mut()
-            .find(|m| m.id == id)?;
+        let chat = self.chats.get_mut(&chat_id)?;
+        let message = chat.messages.iter_mut().find(|m| m.id == id)?;
         message.reactions.retain(|r| r.author != author);
         if let Some(emoji) = emoji {
-            message.reactions.push(Reaction { author, emoji: emoji.to_string() });
+            message.reactions.push(Reaction { author: author.clone(), emoji: emoji.to_string() });
         }
         let message = message.clone();
+        match (emoji, at_ms) {
+            (Some(emoji), Some(at_ms)) if chat.last_reaction.as_ref().is_none_or(|last| last.at_ms <= at_ms) => {
+                chat.last_reaction = Some(LastReaction { at_ms, author, emoji: emoji.to_string(), target: id.to_string() });
+            }
+            // Taken back: the list goes back to the last message.
+            (None, _) => {
+                if chat.last_reaction.as_ref().is_some_and(|last| last.author == author && last.target == id) {
+                    chat.last_reaction = None;
+                }
+            }
+            _ => {}
+        }
         Some(self.to_dto(&chat_id, &message))
     }
 
@@ -3176,7 +3217,13 @@ impl ChatStore {
                     },
                     _ => preview,
                 };
+                let reaction_preview = chat
+                    .last_reaction
+                    .as_ref()
+                    .filter(|r| r.at_ms >= last.map_or(chat.last_ts_ms, |m| m.ts_ms))
+                    .and_then(|r| self.reaction_line(chat, r));
                 ChatSummary {
+                    reaction_preview,
                     id: id.clone(),
                     name: self.chat_name(id, chat),
                     last_message,
@@ -3938,20 +3985,41 @@ mod tests {
     }
 
     #[test]
+    fn a_reaction_newer_than_the_last_message_shows_in_the_list() {
+        let mut store = ChatStore::default();
+        store.set_own_ids(["me".to_string()]);
+        store.ingest(incoming("maya", "a", 1, true), true);
+        let preview = |store: &ChatStore| store.list_chats()[0].reaction_preview.clone();
+        // From history: not shown.
+        store.set_reaction("maya", "a", "maya", Some("👍"), None);
+        assert_eq!(preview(&store), None);
+        store.set_reaction("maya", "a", "maya", Some("❤️"), Some(5));
+        assert!(preview(&store).is_some_and(|p| p.starts_with("Reacted ❤️ to")), "{:?}", preview(&store));
+        // Taken back: the last message again.
+        store.set_reaction("maya", "a", "maya", None, Some(6));
+        assert_eq!(preview(&store), None);
+        store.set_reaction("maya", "a", "me", Some("😂"), Some(7));
+        assert!(preview(&store).is_some_and(|p| p.starts_with("You reacted 😂 to")));
+        // A newer message takes its place.
+        store.ingest(incoming("maya", "b", 8, false), true);
+        assert_eq!(preview(&store), None);
+    }
+
+    #[test]
     fn reactions_replace_and_clear() {
         let mut store = ChatStore::default();
         store.set_own_ids(["me".to_string()]);
         store.ingest(incoming("maya", "a", 1, false), true);
-        store.set_reaction("maya", "a", "maya", Some("👍"));
-        store.set_reaction("maya", "a", "me", Some("👍"));
-        let dto = store.set_reaction("maya", "a", "maya", Some("❤️")).unwrap();
+        store.set_reaction("maya", "a", "maya", Some("👍"), None);
+        store.set_reaction("maya", "a", "me", Some("👍"), None);
+        let dto = store.set_reaction("maya", "a", "maya", Some("❤️"), None).unwrap();
         assert_eq!(dto.reactions.len(), 2);
         assert!(dto.reactions[0].mine && dto.reactions[0].count == 1);
         assert_eq!(store.reaction_target("maya", "a").unwrap().mine.as_deref(), Some("👍"));
 
-        let dto = store.set_reaction("maya", "a", "me", None).unwrap();
+        let dto = store.set_reaction("maya", "a", "me", None, None).unwrap();
         assert_eq!(dto.reactions.len(), 1);
-        assert!(store.set_reaction("maya", "missing", "me", Some("👍")).is_none());
+        assert!(store.set_reaction("maya", "missing", "me", Some("👍"), None).is_none());
     }
 
     #[test]

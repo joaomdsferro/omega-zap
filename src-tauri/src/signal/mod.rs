@@ -1156,7 +1156,7 @@ impl SignalManager {
             .await
             .map_err(|e| format!("The reaction was not sent: {e}"))?;
         let dto = lock(&self.store)
-            .set_reaction(chat_id, message_id, &me, (!remove).then_some(emoji))
+            .set_reaction(chat_id, message_id, &me, (!remove).then_some(emoji), Some(now_ms()))
             .ok_or("That message is gone.")?;
         self.mark_dirty();
         Ok(dto)
@@ -1698,7 +1698,8 @@ impl SignalManager {
                 self.recall(&chat, &id);
                 let (changed, notice) = {
                     let mut store = lock(&self.store);
-                    let changed = store.set_reaction(&chat, &id, &sender, (!remove).then_some(&emoji));
+                    // The bridge doesn't say when a live reaction was made; it is now, near enough.
+                    let changed = store.set_reaction(&chat, &id, &sender, (!remove).then_some(&emoji), (!history).then(now_ms));
                     let notice = (changed.is_some() && !remove && !history)
                         .then(|| store.reaction_notice(&chat, &id, &sender, &emoji))
                         .flatten();

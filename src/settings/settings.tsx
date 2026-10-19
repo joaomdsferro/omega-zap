@@ -98,6 +98,8 @@ export interface Settings {
   largeLinkPreviews: boolean;
   /** Play TikTok, Instagram, YouTube Shorts and X video links inside the chat. */
   inlineVideos: boolean;
+  /** The chat list shows a reaction newer than the last message in its place, as WhatsApp does. */
+  reactionsInList: boolean;
   /** Make a card for a link that came without one, from the page itself. */
   fetchLinkPreviews: boolean;
   /** GIFs at the size they were sent and smaller stickers, instead of WhatsApp's sizes. */
@@ -129,6 +131,7 @@ const DEFAULTS: Settings = {
   unifiedInbox: false,
   largeLinkPreviews: true,
   inlineVideos: true,
+  reactionsInList: true,
   fetchLinkPreviews: true,
   compactMedia: false,
   shortenLongTexts: true,
@@ -175,6 +178,7 @@ function load(parsed: Stored): Settings {
     unifiedInbox: parsed.unifiedInbox === true,
     largeLinkPreviews: parsed.largeLinkPreviews !== false,
     inlineVideos: parsed.inlineVideos !== false,
+    reactionsInList: parsed.reactionsInList !== false,
     fetchLinkPreviews: parsed.fetchLinkPreviews !== false,
     compactMedia: parsed.compactMedia === true,
     shortenLongTexts: parsed.shortenLongTexts !== false,
@@ -205,6 +209,7 @@ interface SettingsContextValue {
   setUnifiedInbox: (unified: boolean) => void;
   setLargeLinkPreviews: (large: boolean) => void;
   setInlineVideos: (inline: boolean) => void;
+  setReactionsInList: (on: boolean) => void;
   setCompactMedia: (compact: boolean) => void;
   setFetchLinkPreviews: (on: boolean) => void;
   setShortenLongTexts: (on: boolean) => void;
@@ -285,6 +290,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       setUnifiedInbox: (unifiedInbox) => setSettings((s) => ({ ...s, unifiedInbox })),
       setLargeLinkPreviews: (largeLinkPreviews) => setSettings((s) => ({ ...s, largeLinkPreviews })),
       setInlineVideos: (inlineVideos) => setSettings((s) => ({ ...s, inlineVideos })),
+      setReactionsInList: (reactionsInList) => setSettings((s) => ({ ...s, reactionsInList })),
       setFetchLinkPreviews: (fetchLinkPreviews) => setSettings((s) => ({ ...s, fetchLinkPreviews })),
       setCompactMedia: (compactMedia) => setSettings((s) => ({ ...s, compactMedia })),
       setShortenLongTexts: (shortenLongTexts) => setSettings((s) => ({ ...s, shortenLongTexts })),

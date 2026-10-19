@@ -394,6 +394,7 @@ export function SettingsPanel({ accounts, onBack, onLink, privacy, microphones }
     setLargeLinkPreviews,
     setFetchLinkPreviews,
     setInlineVideos,
+    setReactionsInList,
     setCompactMedia,
     setShortenLongTexts,
     setLongTextChars,
@@ -658,6 +659,14 @@ export function SettingsPanel({ accounts, onBack, onLink, privacy, microphones }
           <p className="mt-2 text-[13px] text-(--text-secondary)">
             Drag the edge of the chat list to resize it. Double-click the edge to reset.
           </p>
+          <div className="mt-4">
+            <Switch
+              checked={settings.reactionsInList}
+              onChange={setReactionsInList}
+              label="Show reactions"
+              description="A reaction newer than a chat's last message shows in its place, such as “Reacted ❤️ to “See you there””."
+            />
+          </div>
         </Section>
 
         <Section title="About">

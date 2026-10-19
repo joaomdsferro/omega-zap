@@ -179,6 +179,8 @@ export interface Chat {
   disappearing?: number;
   /** Our own chat, with ourselves: named "<our name> (You)". */
   isMe?: boolean;
+  /** The latest reaction, when it came after the last message: "Reacted ❤️ to “Hi”". */
+  reactionPreview?: string;
   /** A group we are no longer in. */
   left?: boolean;
   /** Its messages were cleared: none are coming from the phone. */

@@ -6,6 +6,7 @@ import { AccountBadge } from "./AccountBadge";
 import { Avatar } from "./Avatar";
 import { FormattedLine } from "../lib/markup";
 import { useVirtualRows } from "../lib/useVirtualRows";
+import { useSettings } from "../settings/settings";
 import { ChevronDownIcon, MuteIcon, PinIcon, Ticks } from "./Icons";
 
 interface ChatListProps {
@@ -33,6 +34,8 @@ interface ChatRowProps {
   highlighted: boolean;
   fading: boolean;
   showAccount?: boolean;
+  /** A reaction newer than the last message shows in its place. */
+  showReactions: boolean;
   onSelect: (chat: Chat) => void;
   onPeek?: (chat: Chat) => void;
   onMenu?: (chat: Chat, x: number, y: number) => void;
@@ -45,11 +48,13 @@ const ChatRow = memo(function ChatRow({
   highlighted,
   fading,
   showAccount,
+  showReactions,
   onSelect,
   onPeek,
   onMenu,
 }: ChatRowProps) {
   const unread = chat.unread > 0 || !!chat.markedUnread;
+  const reaction = showReactions ? chat.reactionPreview : undefined;
   const row = useRef<HTMLLIElement>(null);
   useEffect(() => {
     if (highlighted) row.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -125,6 +130,8 @@ const ChatRow = memo(function ChatRow({
                 </span>
                 <p className="min-w-0 flex-1 truncate text-[14px] leading-5 font-semibold text-(--accent)">{chat.typing}</p>
               </>
+            ) : reaction ? (
+              <p className="min-w-0 flex-1 truncate text-[14px] leading-5"><FormattedLine text={reaction} emojiSize={18} /></p>
             ) : (
               <>
                 {chat.lastFromMe ? (
@@ -185,6 +192,7 @@ export function ChatList({
   showAccount,
   onMenu,
 }: ChatListProps) {
+  const { settings } = useSettings();
   // Only the rows in or near view exist, so thousands of chats cost what a
   // screenful does and switching accounts or filters stays instant.
   const list = useRef<HTMLUListElement>(null);
@@ -219,6 +227,7 @@ export function ChatList({
           highlighted={highlighted === `${chat.account}:${chat.id}`}
           fading={highlighted === `${chat.account}:${chat.id}` && Boolean(highlightFading)}
           showAccount={showAccount}
+          showReactions={settings.reactionsInList}
           onSelect={select}
           onPeek={onPeek ? peek : undefined}
           onMenu={onMenu ? menu : undefined}
