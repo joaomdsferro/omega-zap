@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { LinkPreview } from "../backend";
-import { embedUrl, videoLink, xVideo, type XVideo } from "../lib/links";
+import { embedUrl, videoLink, xVideo, type VideoSite, type XVideo } from "../lib/links";
 import { isTauri } from "../lib/platform";
 import { useSettings } from "../settings/settings";
-import { CloseIcon, MuteIcon, PlayIcon, VolumeIcon } from "./Icons";
+import { CloseIcon, CopyIcon, InfoIcon, MuteIcon, PlayIcon, VolumeIcon } from "./Icons";
 import { VideoPlayer } from "./VideoPlayer";
 
 /** Opens a page in the system browser, or a new tab in a plain browser. */
@@ -68,7 +69,8 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
   const localVolume = useRef(volume);
   localVolume.current = volume;
   const [starting, setStarting] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
+  // Why the video can't play in the chat, shown in its place with ways to open it elsewhere.
+  const [blocked, setBlocked] = useState<Blocked | null>(null);
   const linked = settings.inlineVideos ? videoLink(preview.url) : null;
   // A post on X is only a video once X says it has one.
   const [xClip, setXClip] = useState<XVideo | null>(null);
@@ -113,7 +115,7 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
   // A card that will get the full-size picture is laid out for it from the
   // start, in a box of fixed shape, so the picture arriving changes nothing
   // around it.
-  const playing = Boolean(player || clip);
+  const playing = Boolean(player || clip || blocked);
   const large = wantLarge && !playing;
   const stacked = playing || large || (wide && Boolean(picture));
 
@@ -123,8 +125,7 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
     const onMessage = (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow || !event.data?.omegaZapUnplayable) return;
       setPlayer(null);
-      setNote("This video only plays on its own site. It was opened in your browser.");
-      openExternal(preview.url);
+      setBlocked("music");
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -144,12 +145,11 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
   async function play() {
     if (xClip) return setClip(xClip);
     setStarting(true);
-    setNote(null);
+    setBlocked(null);
     try {
       setPlayer(await embedUrl(preview.url));
     } catch {
-      setNote("This video only plays on its own site. It was opened in your browser.");
-      openExternal(preview.url);
+      setBlocked("site");
     } finally {
       setStarting(false);
     }
@@ -169,6 +169,7 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
             onClick={() => {
               setPlayer(null);
               setClip(null);
+              setBlocked(null);
             }}
             className="flex h-8 items-center gap-1.5 px-2.5 text-[12.5px] text-(--text-secondary) hover:text-(--text-primary)"
           >
@@ -177,14 +178,15 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
           </button>
         </div>
       ) : null}
-      {clip ? (
+      {blocked ? (
+        <BlockedVideo site={video?.site} why={blocked} url={preview.url} />
+      ) : clip ? (
         <VideoPlayer
           src={clip.url}
           poster={clip.poster ?? undefined}
           onError={() => {
             setClip(null);
-            setNote("This video only plays on its own site. It was opened in your browser.");
-            openExternal(preview.url);
+            setBlocked("site");
           }}
           className="w-full"
           videoClassName="max-h-110 w-full object-contain"
@@ -297,8 +299,109 @@ export function LinkCard({ preview, loadLarge }: LinkCardProps) {
           <p className="line-clamp-2 text-[12.5px] text-(--text-secondary)">{preview.description}</p>
         ) : null}
         <p className="truncate text-[12px] text-(--text-secondary)">{host}</p>
-        {note ? <p className="mt-0.5 text-[12px] text-(--text-secondary)">{note}</p> : null}
       </a>
+    </div>
+  );
+}
+
+/** Why a video can't play here: Instagram keeps some reels to its site, often over their music, or the site's player wouldn't load. */
+type Blocked = "music" | "site";
+
+const SITE_NAMES: Record<VideoSite, string> = { tiktok: "TikTok", instagram: "Instagram", youtube: "YouTube", x: "X" };
+
+interface Browser {
+  id: string;
+  name: string;
+  default: boolean;
+}
+
+/** In place of a video that won't play in the chat: why, and where it can be watched. */
+function BlockedVideo({ site, why, url }: { site?: VideoSite; why: Blocked; url: string }) {
+  const name = site ? SITE_NAMES[site] : "This site";
+  const [browsers, setBrowsers] = useState<Browser[] | null>(isTauri ? null : []);
+  const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  // The play button it replaces had the focus; it moves here, so the reason is read out.
+  const panel = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  useEffect(() => panel.current?.focus({ preventScroll: true }), []);
+  useEffect(() => {
+    if (!isTauri) return;
+    let alive = true;
+    invoke<Browser[]>("browsers")
+      .catch(() => [])
+      .then((found) => alive && setBrowsers(found));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const main = browsers?.find((browser) => browser.default) ?? browsers?.[0];
+  const others = browsers?.filter((browser) => browser !== main) ?? [];
+
+  function open(browser?: Browser) {
+    setFailed(null);
+    if (!browser) return openExternal(url);
+    invoke("open_in_browser", { id: browser.id, url }).catch(() => setFailed(`${browser.name} didn't open. Try another way below.`));
+  }
+
+  function copy() {
+    void navigator.clipboard.writeText(url).then(
+      () => setCopied(true),
+      () => setFailed("The link couldn't be copied."),
+    );
+  }
+
+  const button = "flex h-9 items-center justify-center gap-1.5 rounded-full px-4 text-[13.5px] font-medium";
+  return (
+    <div ref={panel} tabIndex={-1} role="group" aria-labelledby={titleId} className="flex flex-col gap-3 px-3.5 pt-1 pb-3.5 outline-none">
+      <div className="flex gap-2.5">
+        <span className="mt-0.5 shrink-0 text-(--accent)">
+          <InfoIcon size={20} />
+        </span>
+        <div className="min-w-0">
+          <p id={titleId} className="text-[14px] font-medium">
+            {why === "music" ? `${name} won't play this video in other apps` : "This video can't play here"}
+          </p>
+          <p className="mt-0.5 text-[12.5px] leading-4.5 text-(--text-secondary)">
+            {why === "music"
+              ? `${name} keeps some videos to its own site, often because of their music. Watch it in a browser instead.`
+              : `${name} only plays it on its own site. Watch it in a browser instead.`}
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-col gap-2">
+        <button
+          type="button"
+          onClick={() => open(main)}
+          disabled={browsers === null}
+          className={`${button} bg-(--accent) text-(--on-accent) hover:brightness-110 disabled:opacity-50`}
+        >
+          {main ? `Open in ${main.name}` : "Open in your browser"}
+        </button>
+        {others.length ? (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[12.5px] text-(--text-secondary)">Or in</span>
+            {others.map((browser) => (
+              <button
+                key={browser.id}
+                type="button"
+                onClick={() => open(browser)}
+                className="h-8 rounded-full border border-(--divider) px-3 text-[12.5px] hover:bg-(--hover-bg)"
+              >
+                {browser.name}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <button type="button" onClick={copy} className={`${button} border border-(--divider) hover:bg-(--hover-bg)`}>
+          <CopyIcon size={16} />
+          {copied ? "Link copied" : "Copy link"}
+        </button>
+      </div>
+      <p role="status" className="text-[12px] text-(--danger) empty:hidden">
+        {failed}
+      </p>
     </div>
   );
 }

@@ -158,3 +158,60 @@ mod tests {
         assert_eq!((video.width, video.height), (1920, 1080));
     }
 }
+
+/// A web browser on this computer, for a video that only plays on its own site.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Browser {
+    /// Its desktop entry, as `open_in_browser` takes it.
+    pub id: String,
+    pub name: String,
+    /// The one links open in.
+    pub default: bool,
+}
+
+/// The browsers that open web links, the default first.
+#[tauri::command]
+pub fn browsers() -> Vec<Browser> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::gio::prelude::{AppInfoExt, Cast};
+        let default = gtk::gio::AppInfo::default_for_type("x-scheme-handler/https", false).and_then(|app| app.id());
+        // Other apps take web links too (a chat app's own window), so only true browsers.
+        let browser = |app: &gtk::gio::AppInfo| {
+            app.downcast_ref::<gtk::gio::DesktopAppInfo>()
+                .and_then(|desktop| desktop.categories())
+                .is_some_and(|categories| categories.split(';').any(|c| c == "WebBrowser"))
+        };
+        let mut list: Vec<Browser> = gtk::gio::AppInfo::all()
+            .into_iter()
+            .filter(|app| app.should_show() && (browser(app) || app.id() == default))
+            .filter_map(|app| {
+                let id = app.id()?.to_string();
+                Some(Browser { default: default.as_deref() == Some(id.as_str()), name: app.display_name().to_string(), id })
+            })
+            .collect();
+        list.sort_by(|a, b| b.default.cmp(&a.default).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+        list.dedup_by(|a, b| a.id == b.id);
+        list
+    }
+    #[cfg(not(target_os = "linux"))]
+    Vec::new()
+}
+
+/// Opens a web page in one browser: `id` as `browsers` named it.
+#[tauri::command]
+pub fn open_in_browser(id: String, url: String) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err(format!("Not a web page: {url}"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::gio::prelude::AppInfoExt;
+        let app = gtk::gio::DesktopAppInfo::new(&id).ok_or_else(|| format!("No browser called {id}"))?;
+        app.launch_uris(&[url.as_str()], None::<&gtk::gio::AppLaunchContext>)
+            .map_err(|e| format!("Could not open {}: {e}", app.display_name()))
+    }
+    #[cfg(not(target_os = "linux"))]
+    Err(format!("Can't pick the browser here: {id}"))
+}

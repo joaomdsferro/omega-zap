@@ -453,6 +453,8 @@ pub fn run() {
             tray::set_tray_badge,
             tray::take_pending_open,
             links::resolve_short_link,
+            links::browsers,
+            links::open_in_browser,
             link_preview::link_preview,
             links::x_video,
             signal::commands::signal_status,
