@@ -25,7 +25,7 @@ import { PopupMenu, type MenuEntry } from "./PopupMenu";
 import { ChatSearch, searchChat } from "./ChatSearch";
 import { searchWords } from "../lib/search";
 import { isReadOnlyChat } from "../lib/logos";
-import { SearchIcon } from "./Icons";
+import { OfficialBadge, SearchIcon } from "./Icons";
 
 /** Messages drawn when a chat opens; more are drawn, this many at a time, on scrolling up. */
 const PAGE = 60;
@@ -142,6 +142,8 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
   );
   // Signal pictures who wrote each group message beside it.
   const [members, setMembers] = useState<Map<string, GroupMember> | null>(null);
+  /** Signal's Note to Self, shown as Signal shows it. */
+  const notes = Boolean(chat.isMe) && chat.account === "signal";
   const strangers = useRef(new Map<string, GroupMember>());
   const pictured = chat.account === "signal" && Boolean(chat.isGroup) && Boolean(loadGroup);
   useEffect(() => {
@@ -746,11 +748,13 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
             src={chat.avatarUrl}
             size={40}
             group={chat.isGroup}
+            note={notes}
             timer={chat.disappearing ? "right" : undefined}
           />
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-1.5">
               <h2 className="truncate text-[16px] leading-5.25 text-(--text-primary)">{chat.name}</h2>
+              {notes ? <OfficialBadge size={16} /> : null}
             </div>
             <p className="truncate text-[13px] leading-5 text-(--text-secondary)">{subtitle}</p>
           </div>
@@ -798,7 +802,8 @@ export function ChatView({ chat, messages, subtitle, showAccount, canSend, canno
         onScroll={onScroll}
         className="chat-wallpaper min-h-0 flex-1 overflow-y-auto pt-2 pb-4"
       >
-        {messages.length === 0 && !chat.lastMessage && !chat.cleared ? (
+        {notes && (messages.length === 0 || !onLoadOlder || olderDone === chatKey) ? <NotesIntro /> : null}
+        {messages.length === 0 && !chat.lastMessage && !chat.cleared && !notes ? (
           <div className="flex h-full items-center justify-center px-6">
             <p
               className="max-w-90 rounded-[7.5px] bg-(--day-chip-bg) px-4 py-2 text-center text-[13px] text-(--day-chip-text)"
@@ -1377,6 +1382,23 @@ function TimerLine({ message, name }: { message: Message; name?: string }) {
           {formatMessageTime(message.sentAt)}
         </time>
       </span>
+    </div>
+  );
+}
+
+/** What Signal shows at the start of Note to Self. */
+function NotesIntro() {
+  return (
+    <div className="mx-auto my-6 flex max-w-90 flex-col items-center px-6 text-center">
+      <Avatar name="Note to Self" initials="" hue={0} size={80} note />
+      <h3 className="mt-3 flex items-center gap-1.5 text-[18px] font-semibold text-(--text-primary)">
+        Note to Self
+        <OfficialBadge size={18} />
+      </h3>
+      <span className="mt-2 rounded-full bg-(--day-chip-bg) px-2.5 py-0.5 text-[12.5px] text-(--day-chip-text)">Official chat</span>
+      <p className="mt-3 text-[13.5px] leading-5 text-(--text-secondary)">
+        You can add notes for yourself in this chat. If your account has any linked devices, new notes will be synced.
+      </p>
     </div>
   );
 }

@@ -802,14 +802,22 @@ function Shell() {
     const all = shown.flatMap((backend) => {
       const list = chatsBy.get(backend) ?? [];
       const ownName = names[ACCOUNT_IDS.indexOf(backend.account)];
-      if (!typing.size && !presence.size && !ownName) return list;
+      const notes = backend.account === "signal";
+      if (!typing.size && !presence.size && !ownName && !notes) return list;
       // Only the chats with something to add are new objects, so the other rows stay as drawn.
       return list.map((chat) => {
         const key = `${backend.account}:${chat.id}`;
         const typed = typing.get(key);
         const seen = presence.get(key);
-        // Our own chat is named after us, as the phone does: "João (You)".
-        const named = chat.isMe && ownName ? { ...chat, name: `${ownName} (You)`, initials: initialsFor(ownName) } : chat;
+        // Our own chat is named after us, as the phone does: "João (You)";
+        // Signal calls it Note to Self.
+        const named = !chat.isMe
+          ? chat
+          : notes
+            ? { ...chat, name: "Note to Self" }
+            : ownName
+              ? { ...chat, name: `${ownName} (You)`, initials: initialsFor(ownName) }
+              : chat;
         if (!typed && !seen) return named;
         return { ...named, typing: typed?.label, typingWho: typed?.who, online: seen?.online, lastSeen: seen?.lastSeen };
       });

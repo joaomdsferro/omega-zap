@@ -95,6 +95,7 @@ const ChatRow = memo(function ChatRow({
             src={chat.avatarUrl}
             size={49}
             group={chat.isGroup}
+            note={chat.isMe && chat.account === "signal"}
             online={showAccount ? undefined : chat.online}
             timer={chat.disappearing ? (showAccount ? "left" : "right") : undefined}
           />

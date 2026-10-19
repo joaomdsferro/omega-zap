@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { isLogo } from "../lib/logos";
-import { PersonSilhouette, TimerIcon } from "./Icons";
+import { NoteIcon, PersonSilhouette, TimerIcon } from "./Icons";
 
 interface AvatarProps {
   name: string;
@@ -10,11 +10,13 @@ interface AvatarProps {
   size: number;
   group?: boolean;
   online?: boolean;
+  /** Signal's Note to Self, pictured as a notepad. */
+  note?: boolean;
   /** Messages in the chat disappear: a timer badge, at the bottom right or, where another badge sits there, left. */
   timer?: "right" | "left";
 }
 
-export function Avatar({ name, initials, hue, src, size, group, online, timer }: AvatarProps) {
+export function Avatar({ name, initials, hue, src, size, group, online, note, timer }: AvatarProps) {
   // The placeholder stays underneath, so a picture that fails to load just disappears.
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   return (
@@ -42,7 +44,14 @@ export function Avatar({ name, initials, hue, src, size, group, online, timer }:
       >
         {initials}
       </div>
-      {src && src !== failedSrc ? (
+      {note ? (
+        <div
+          className="absolute inset-0 flex items-center justify-center rounded-full"
+          style={{ background: "color-mix(in oklab, #2c6bed 22%, var(--panel-bg))", color: "color-mix(in oklab, #2c6bed 80%, var(--text-primary))" }}
+        >
+          <NoteIcon size={size * 0.5} />
+        </div>
+      ) : src && src !== failedSrc ? (
         <img
           src={src}
           alt=""

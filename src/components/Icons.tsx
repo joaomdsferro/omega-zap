@@ -498,3 +498,24 @@ export const ClockIcon = (p: IconProps) => (
     <path d="M12 7v5l3 2" />
   </Svg>
 );
+
+/** Signal's Note to Self: a notepad. */
+export const NoteIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="5" y="3.5" width="14" height="17" rx="2.5" />
+    <path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4" />
+  </Svg>
+);
+
+/** The badge Signal gives its official chats: a white tick on a blue rosette. */
+export function OfficialBadge({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden className="shrink-0">
+      <path
+        fill="#2c6bed"
+        d="M12 1.5l2.4 1.8 3-.2 1 2.8 2.6 1.6-.7 2.9 1.2 2.7-2.2 2 .1 3-2.9.8-1.5 2.6-2.9-.9-2.6 1.4-2-2.2-3-.3-.6-2.9-2.4-1.8 1.1-2.8L2.6 9.5l2.2-2 .3-3 2.9-.6 1.6-2.5 2.6 1.1z"
+      />
+      <path d="M8 12.2l2.6 2.6L16 9.4" fill="none" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
