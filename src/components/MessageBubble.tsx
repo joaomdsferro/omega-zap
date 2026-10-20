@@ -100,7 +100,7 @@ export function Tail({ mine }: { mine: boolean }) {
       height="13"
       aria-hidden
       data-tail
-      className={["absolute top-0", mine ? "-right-2" : "-left-2 -scale-x-100"].join(" ")}
+      className={["pointer-events-none absolute top-0", mine ? "-right-2" : "-left-2 -scale-x-100"].join(" ")}
       style={{ color: mine ? "var(--bubble-out)" : "var(--bubble-in)" }}
     >
       <path fill="currentColor" d="M5.2 1H0v11.2L6.9 3.3C8 1.9 7.2 1 5.2 1z" />
@@ -593,7 +593,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
           openMenu(event.clientX, event.clientY);
         }}
         className={[
-          "relative max-w-[min(65%,560px)] min-w-22 rounded-[7.5px] px-1.75 pt-1.5 pb-2 text-[14.2px] leading-4.75 text-(--text-primary)",
+          "group/bubble relative max-w-[min(65%,560px)] min-w-22 rounded-[7.5px] px-1.75 pt-1.5 pb-2 text-[14.2px] leading-4.75 text-(--text-primary)",
           tail ? (mine ? "rounded-tr-none" : "rounded-tl-none") : "",
         ].join(" ")}
         style={{
@@ -627,7 +627,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
             aria-haspopup="menu"
             aria-expanded={menu !== null}
             className={[
-              "absolute top-0.5 right-0.5 z-[1] flex h-6 w-9 items-start justify-end rounded-tr-[7.5px] pt-0.5 pr-1 text-(--bubble-meta) transition-opacity group-hover/message:opacity-100 focus-visible:opacity-100",
+              "absolute top-0.5 right-0.5 z-[1] flex h-6 w-9 items-start justify-end rounded-tr-[7.5px] pt-0.5 pr-1 text-(--bubble-meta) transition-opacity group-hover/bubble:opacity-100 focus-visible:opacity-100",
               menu ? "opacity-100" : "opacity-0",
             ].join(" ")}
             style={{
@@ -839,7 +839,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
           aria-expanded={picking}
           className={[
             "relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[rgba(11,20,26,.35)] text-white group-hover/message:opacity-100 focus-visible:opacity-100 before:absolute before:inset-y-0 before:-inset-x-1 before:content-['']",
-            picking ? "opacity-100" : "opacity-0",
+            picking ? "opacity-100" : "invisible opacity-0 group-hover/message:visible focus-visible:visible",
           ].join(" ")}
         >
           <SmileIcon size={18} />
@@ -859,7 +859,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
           aria-expanded={menu !== null}
           className={[
             "relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[rgba(11,20,26,.35)] text-white group-hover/message:opacity-100 focus-visible:opacity-100 before:absolute before:inset-y-0 before:-inset-x-1 before:content-['']",
-            picking || menu ? "opacity-100" : "opacity-0",
+            picking || menu ? "opacity-100" : "invisible opacity-0 group-hover/message:visible focus-visible:visible",
           ].join(" ")}
         >
           <MoreIcon size={18} />
@@ -879,7 +879,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
           title={message.starred ? "Unstar" : "Star"}
           className={[
             "relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[rgba(11,20,26,.35)] text-white group-hover/message:opacity-100 focus-visible:opacity-100 before:absolute before:inset-y-0 before:-inset-x-1 before:content-['']",
-            picking ? "opacity-100" : "opacity-0",
+            picking ? "opacity-100" : "invisible opacity-0 group-hover/message:visible focus-visible:visible",
           ].join(" ")}
         >
           <StarIcon size={16} filled={message.starred} />
