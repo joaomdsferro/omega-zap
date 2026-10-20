@@ -839,7 +839,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
           aria-expanded={picking}
           className={[
             "relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[rgba(11,20,26,.35)] text-white group-hover/message:opacity-100 focus-visible:opacity-100 before:absolute before:inset-y-0 before:-inset-x-1 before:content-['']",
-            picking ? "opacity-100" : "invisible opacity-0 group-hover/message:visible focus-visible:visible",
+            picking ? "opacity-100" : "invisible opacity-0 group-hover/message:visible group-focus-within/message:visible",
           ].join(" ")}
         >
           <SmileIcon size={18} />
@@ -859,7 +859,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
           aria-expanded={menu !== null}
           className={[
             "relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[rgba(11,20,26,.35)] text-white group-hover/message:opacity-100 focus-visible:opacity-100 before:absolute before:inset-y-0 before:-inset-x-1 before:content-['']",
-            picking || menu ? "opacity-100" : "invisible opacity-0 group-hover/message:visible focus-visible:visible",
+            picking || menu ? "opacity-100" : "invisible opacity-0 group-hover/message:visible group-focus-within/message:visible",
           ].join(" ")}
         >
           <MoreIcon size={18} />
@@ -879,7 +879,7 @@ export const MessageBubble = memo(function MessageBubble({ message, account, sho
           title={message.starred ? "Unstar" : "Star"}
           className={[
             "relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[rgba(11,20,26,.35)] text-white group-hover/message:opacity-100 focus-visible:opacity-100 before:absolute before:inset-y-0 before:-inset-x-1 before:content-['']",
-            picking ? "opacity-100" : "invisible opacity-0 group-hover/message:visible focus-visible:visible",
+            picking ? "opacity-100" : "invisible opacity-0 group-hover/message:visible group-focus-within/message:visible",
           ].join(" ")}
         >
           <StarIcon size={16} filled={message.starred} />
