@@ -97,15 +97,70 @@ function Spinner({ size }: { size: number }) {
   );
 }
 
+/** Whether a file is a picture, even when the paste didn't say what it is. */
+function isPicture(file: File) {
+  return !file.type || file.type.startsWith("image/");
+}
+
+/** The little square a picture is shown at: twice its size, for sharp screens. */
+const PREVIEW_SIZE = 128;
+
+/**
+ * The previews already made. A full-size picture is decoded again on every
+ * repaint, and WebKitGTK paints the composer again on each keystroke, so a
+ * pasted screenshot blinks while one types. A small square, made once and
+ * kept by the file, is cheap enough to be drawn every time.
+ */
+const previews = new WeakMap<File, string>();
+
+/** Makes the square preview of `file`, cropping it to fill, or null if it isn't a picture. */
+function makePreview(file: File): Promise<string | null> {
+  const kept = previews.get(file);
+  if (kept) return Promise.resolve(kept);
+  if (!isPicture(file)) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    const done = (preview: string | null) => {
+      URL.revokeObjectURL(url);
+      if (preview) previews.set(file, preview);
+      resolve(preview);
+    };
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = PREVIEW_SIZE;
+      const context = canvas.getContext("2d");
+      if (!context || !image.naturalWidth || !image.naturalHeight) return done(null);
+      const scale = Math.max(PREVIEW_SIZE / image.naturalWidth, PREVIEW_SIZE / image.naturalHeight);
+      const width = image.naturalWidth * scale;
+      const height = image.naturalHeight * scale;
+      context.drawImage(image, (PREVIEW_SIZE - width) / 2, (PREVIEW_SIZE - height) / 2, width, height);
+      done(canvas.toDataURL("image/png"));
+    };
+    image.onerror = () => done(null);
+    image.src = url;
+  });
+}
+
 /** A file waiting to be sent: its picture when it is one, otherwise its name. */
 function PendingFile({ file, state, onRemove }: { file: File; state?: "sending" | "waiting"; onRemove?: () => void }) {
-  const [preview, setPreview] = useState<string | null>(null);
+  // An already-made preview shows from the first paint, so a redraw of the
+  // tray never swaps the picture for the file icon.
+  const [preview, setPreview] = useState<string | null>(() => previews.get(file) ?? null);
+  const [broken, setBroken] = useState(false);
+  const picture = isPicture(file);
   useEffect(() => {
-    if (!file.type.startsWith("image/")) return;
-    const url = URL.createObjectURL(file);
-    setPreview(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+    if (preview) return;
+    let alive = true;
+    void makePreview(file).then((made) => {
+      if (!alive) return;
+      if (made) setPreview(made);
+      else setBroken(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [file, preview]);
   return (
     <li
       aria-busy={state === "sending"}
@@ -114,8 +169,18 @@ function PendingFile({ file, state, onRemove }: { file: File; state?: "sending" 
         state === "waiting" ? "opacity-50" : "",
       ].join(" ")}
     >
-      {preview ? (
-        <img src={preview} alt="" className="h-16 w-16 shrink-0 object-cover" />
+      {preview && !broken ? (
+        <img
+          src={preview}
+          alt=""
+          width={64}
+          height={64}
+          draggable={false}
+          onError={() => setBroken(true)}
+          className="h-16 w-16 shrink-0"
+        />
+      ) : picture && !broken ? (
+        <span aria-hidden className="h-16 w-16 shrink-0" />
       ) : (
         <FileIcon size={26} className="ml-3 shrink-0 text-(--icon)" />
       )}
