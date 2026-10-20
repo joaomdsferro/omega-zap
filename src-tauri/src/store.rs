@@ -1406,12 +1406,15 @@ impl ChatStore {
         if jid == OFFICIAL_CHAT {
             return self.official_name().into();
         }
-        self.contact_names
-            .get(&jid)
-            .or_else(|| self.push_names.get(&jid))
-            .cloned()
-            .or_else(|| format_phone(&jid))
-            .unwrap_or_else(|| "Unknown contact".into())
+        if let Some(name) = self.contact_names.get(&jid) {
+            return name.clone();
+        }
+        // Not in the address book: their own name is marked with "~", as on
+        // the phone, so it is plain that they are not saved.
+        if let Some(name) = self.push_names.get(&jid) {
+            return format!("~{name}");
+        }
+        format_phone(&jid).unwrap_or_else(|| "Unknown contact".into())
     }
 
     /// `text` with each mention swapped for "@Name", and the names swapped
@@ -1459,8 +1462,11 @@ impl ChatStore {
             if self.own_ids.contains(&jid) {
                 return Some(("You".into(), jid));
             }
-            if let Some(name) = self.contact_names.get(&jid).or_else(|| self.push_names.get(&jid)) {
+            if let Some(name) = self.contact_names.get(&jid) {
                 return Some((name.clone(), jid));
+            }
+            if let Some(name) = self.push_names.get(&jid) {
+                return Some((format!("~{name}"), jid));
             }
         }
         None
@@ -1805,11 +1811,16 @@ impl ChatStore {
         if id == OFFICIAL_CHAT {
             return self.official_name().into();
         }
-        self.contact_names
-            .get(id)
-            .or(chat.name.as_ref())
-            .or_else(|| self.push_names.get(id))
-            .cloned()
+        if let Some(name) = self.contact_names.get(id) {
+            return name.clone();
+        }
+        // A chat with someone not in the address book shows the name they
+        // chose, marked with "~" as on the phone.
+        if let Some(name) = self.push_names.get(id) {
+            return format!("~{name}");
+        }
+        chat.name
+            .clone()
             .or_else(|| format_phone(id))
             .unwrap_or_else(|| "Unknown contact".into())
     }
@@ -3561,14 +3572,30 @@ mod tests {
         store.set_own_ids(["351922222222@s.whatsapp.net".to_string()]);
         let (text, names) =
             store.with_mentions("@68689445540020 e @351911111111, @351922222222 @99999999 mail@351911111111");
-        assert_eq!(text, "@Rui Silva e @Maya, @You @99999999 mail@351911111111");
+        assert_eq!(text, "@Rui Silva e @~Maya, @You @99999999 mail@351911111111");
         let names: Vec<_> = names.iter().map(|m| m.text.as_str()).collect();
-        assert_eq!(names, ["@Rui Silva", "@Maya", "@You"]);
+        assert_eq!(names, ["@Rui Silva", "@~Maya", "@You"]);
 
         let aci = "0a1b2c3d-0000-4000-8000-00000000abcd";
         store.set_contact_name(aci, "Inês");
         let (text, _) = store.with_mentions(&format!("olá @{aci}!"));
         assert_eq!(text, "olá @Inês!");
+    }
+
+    #[test]
+    fn unsaved_people_are_marked_with_a_tilde() {
+        let mut store = ChatStore::default();
+        store.set_contact_name("351900000000@s.whatsapp.net", "Rui Silva");
+        store.set_push_name("351911111111@s.whatsapp.net", "Maya");
+
+        assert_eq!(store.display_name("351900000000@s.whatsapp.net"), "Rui Silva");
+        assert_eq!(store.display_name("351911111111@s.whatsapp.net"), "~Maya");
+        assert_eq!(store.display_name("351933333333@s.whatsapp.net"), "+351933333333");
+
+        store.ingest(incoming("351911111111@s.whatsapp.net", "a", 1, false), false);
+        assert_eq!(store.list_chats()[0].name, "~Maya");
+        let person = store.person("351911111111@s.whatsapp.net");
+        assert_eq!((person.name.as_str(), person.saved), ("~Maya", false));
     }
 
     #[test]
